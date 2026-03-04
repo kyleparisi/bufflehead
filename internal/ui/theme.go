@@ -1,0 +1,147 @@
+package ui
+
+import (
+	"graphics.gd/classdb/Control"
+	"graphics.gd/classdb/StyleBoxEmpty"
+	"graphics.gd/classdb/StyleBoxFlat"
+	"graphics.gd/variant/Color"
+)
+
+// Dark theme palette (TablePlus-inspired)
+var (
+	colorBg         = Color.RGBA{R: 0.10, G: 0.10, B: 0.10, A: 1} // #1a1a1a
+	colorBgSidebar  = Color.RGBA{R: 0.11, G: 0.11, B: 0.11, A: 1} // #1c1c1c
+	colorBgPanel    = Color.RGBA{R: 0.13, G: 0.13, B: 0.13, A: 1} // #222222
+	colorBgInput    = Color.RGBA{R: 0.16, G: 0.16, B: 0.16, A: 1} // #2a2a2a
+	colorBgHeader   = Color.RGBA{R: 0.15, G: 0.15, B: 0.15, A: 1} // #252525
+	colorRowOdd     = Color.RGBA{R: 0.10, G: 0.10, B: 0.10, A: 1} // #1a1a1a
+	colorRowEven    = Color.RGBA{R: 0.12, G: 0.12, B: 0.12, A: 1} // #1f1f1f
+	colorBorder     = Color.RGBA{R: 0.20, G: 0.20, B: 0.20, A: 1} // #333333
+	colorBorderDim  = Color.RGBA{R: 0.17, G: 0.17, B: 0.17, A: 1} // #2a2a2a
+	colorText       = Color.RGBA{R: 0.78, G: 0.78, B: 0.78, A: 1} // #c8c8c8
+	colorTextBright = Color.RGBA{R: 0.88, G: 0.88, B: 0.88, A: 1} // #e0e0e0
+	colorTextDim    = Color.RGBA{R: 0.40, G: 0.40, B: 0.40, A: 1} // #666666
+	colorTextMuted  = Color.RGBA{R: 0.53, G: 0.53, B: 0.53, A: 1} // #888888
+	colorAccent     = Color.RGBA{R: 0.18, G: 0.35, B: 0.56, A: 1} // #2d5a8e
+	colorSelected   = Color.RGBA{R: 0.12, G: 0.23, B: 0.37, A: 1} // #1e3a5f
+	colorBtnNormal  = Color.RGBA{R: 0.16, G: 0.16, B: 0.16, A: 1} // #2a2a2a
+	colorBtnHover   = Color.RGBA{R: 0.20, G: 0.20, B: 0.20, A: 1} // #333333
+)
+
+func makeStyleBox(bg Color.RGBA, radius int, border int, borderColor Color.RGBA) StyleBoxFlat.Instance {
+	sb := StyleBoxFlat.New()
+	sb.SetBgColor(bg)
+	sb.SetCornerRadiusAll(radius)
+	if border > 0 {
+		sb.SetBorderWidthAll(border)
+		sb.SetBorderColor(borderColor)
+	}
+	return sb
+}
+
+func makeStyleBoxPadded(bg Color.RGBA, radius int, border int, borderColor Color.RGBA, pad float32) StyleBoxFlat.Instance {
+	sb := makeStyleBox(bg, radius, border, borderColor)
+	sb.AsStyleBox().SetContentMarginAll(pad)
+	return sb
+}
+
+func applyButtonTheme(c Control.Instance) {
+	normal := makeStyleBoxPadded(colorAccent, 3, 0, colorBorder, 4)
+	hover := makeStyleBoxPadded(Color.RGBA{R: 0.22, G: 0.40, B: 0.62, A: 1}, 3, 0, colorBorder, 4)
+	pressed := makeStyleBoxPadded(Color.RGBA{R: 0.14, G: 0.28, B: 0.46, A: 1}, 3, 0, colorBorder, 4)
+	c.AddThemeStyleboxOverride("normal", normal.AsStyleBox())
+	c.AddThemeStyleboxOverride("hover", hover.AsStyleBox())
+	c.AddThemeStyleboxOverride("pressed", pressed.AsStyleBox())
+	c.AddThemeColorOverride("font_color", colorTextBright)
+	c.AddThemeColorOverride("font_hover_color", colorTextBright)
+	c.AddThemeFontSizeOverride("font_size", 12)
+}
+
+func applySecondaryButtonTheme(c Control.Instance) {
+	normal := makeStyleBoxPadded(colorBtnNormal, 3, 1, colorBorder, 4)
+	hover := makeStyleBoxPadded(colorBtnHover, 3, 1, colorBorder, 4)
+	c.AddThemeStyleboxOverride("normal", normal.AsStyleBox())
+	c.AddThemeStyleboxOverride("hover", hover.AsStyleBox())
+	c.AddThemeStyleboxOverride("pressed", hover.AsStyleBox())
+	c.AddThemeColorOverride("font_color", colorTextMuted)
+	c.AddThemeColorOverride("font_hover_color", colorText)
+	c.AddThemeFontSizeOverride("font_size", 11)
+}
+
+func applyInputTheme(c Control.Instance) {
+	normal := makeStyleBoxPadded(colorBgInput, 3, 1, colorBorder, 4)
+	focus := makeStyleBoxPadded(colorBgInput, 3, 1, colorAccent, 4)
+	c.AddThemeStyleboxOverride("normal", normal.AsStyleBox())
+	c.AddThemeStyleboxOverride("focus", focus.AsStyleBox())
+	c.AddThemeStyleboxOverride("read_only", normal.AsStyleBox())
+	c.AddThemeColorOverride("font_color", colorText)
+	c.AddThemeColorOverride("font_placeholder_color", colorTextDim)
+	c.AddThemeFontSizeOverride("font_size", 12)
+}
+
+func applyTreeTheme(c Control.Instance) {
+	panel := makeStyleBox(colorBg, 0, 0, colorBg)
+	c.AddThemeStyleboxOverride("panel", panel.AsStyleBox())
+
+	selected := makeStyleBox(colorSelected, 0, 0, colorBorder)
+	selected.AsStyleBox().SetContentMarginAll(2)
+	c.AddThemeStyleboxOverride("selected", selected.AsStyleBox())
+	c.AddThemeStyleboxOverride("selected_focus", selected.AsStyleBox())
+
+	// Title button (column headers)
+	titleBtn := makeStyleBoxPadded(colorBgHeader, 0, 0, colorBorder, 3)
+	titleBtn.SetBorderWidthBottom(1)
+	titleBtn.SetBorderColor(colorBorder)
+	c.AddThemeStyleboxOverride("title_button_normal", titleBtn.AsStyleBox())
+	c.AddThemeStyleboxOverride("title_button_hover", titleBtn.AsStyleBox())
+	c.AddThemeStyleboxOverride("title_button_pressed", titleBtn.AsStyleBox())
+
+	c.AddThemeColorOverride("font_color", colorText)
+	c.AddThemeColorOverride("title_button_color", colorTextMuted)
+	c.AddThemeFontSizeOverride("font_size", 11)
+
+	// Minimal scrollbar
+	empty := StyleBoxEmpty.New()
+	c.AddThemeStyleboxOverride("scroll_focus", empty.AsStyleBox())
+}
+
+func applySidebarTreeTheme(c Control.Instance) {
+	panel := makeStyleBox(colorBgSidebar, 0, 0, colorBgSidebar)
+	c.AddThemeStyleboxOverride("panel", panel.AsStyleBox())
+
+	selected := makeStyleBox(colorSelected, 2, 0, colorBorder)
+	selected.AsStyleBox().SetContentMarginAll(1)
+	c.AddThemeStyleboxOverride("selected", selected.AsStyleBox())
+	c.AddThemeStyleboxOverride("selected_focus", selected.AsStyleBox())
+
+	c.AddThemeColorOverride("font_color", colorText)
+	c.AddThemeFontSizeOverride("font_size", 11)
+}
+
+func applyTextEditTheme(c Control.Instance) {
+	normal := makeStyleBoxPadded(colorBgInput, 3, 1, colorBorder, 6)
+	focus := makeStyleBoxPadded(colorBgInput, 3, 1, colorAccent, 6)
+	c.AddThemeStyleboxOverride("normal", normal.AsStyleBox())
+	c.AddThemeStyleboxOverride("focus", focus.AsStyleBox())
+	c.AddThemeColorOverride("font_color", colorText)
+	c.AddThemeFontSizeOverride("font_size", 12)
+}
+
+func applyLabelTheme(c Control.Instance, dim bool) {
+	if dim {
+		c.AddThemeColorOverride("font_color", colorTextMuted)
+	} else {
+		c.AddThemeColorOverride("font_color", colorText)
+	}
+	c.AddThemeFontSizeOverride("font_size", 11)
+}
+
+func applyStatusBarTheme(c Control.Instance) {
+	c.AddThemeColorOverride("font_color", colorTextMuted)
+	c.AddThemeFontSizeOverride("font_size", 10)
+}
+
+func applyPanelBg(c Control.Instance, bg Color.RGBA) {
+	sb := makeStyleBox(bg, 0, 0, bg)
+	c.AddThemeStyleboxOverride("panel", sb.AsStyleBox())
+}

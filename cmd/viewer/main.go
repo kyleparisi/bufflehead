@@ -1,0 +1,38 @@
+package main
+
+import (
+	"log"
+
+	"parquet-viewer/internal/db"
+	"parquet-viewer/internal/models"
+	"parquet-viewer/internal/ui"
+
+	"graphics.gd/classdb/DisplayServer"
+	"graphics.gd/classdb/SceneTree"
+	"graphics.gd/startup"
+	"graphics.gd/variant/Vector2i"
+)
+
+func main() {
+	startup.LoadingScene()
+
+	// Register all custom classes before building the scene.
+	ui.RegisterAll()
+
+	// Set window size now that the engine is initialized.
+	DisplayServer.WindowSetSize(Vector2i.New(1024, 640), 0)
+	DisplayServer.WindowSetMinSize(Vector2i.New(640, 400), 0)
+
+	duck, err := db.New()
+	if err != nil {
+		log.Fatalf("duckdb init: %v", err)
+	}
+	defer duck.Close()
+
+	app := new(ui.App)
+	app.Duck = duck
+	app.State = models.NewAppState()
+	SceneTree.Add(app.AsNode())
+
+	startup.Scene()
+}
