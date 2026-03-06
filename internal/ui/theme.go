@@ -226,10 +226,14 @@ func applyTabBarTheme(c Control.Instance) {
 	c.AddThemeIconOverride("close", closeIcon.AsTexture2D())
 }
 
-const closeSVG = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="rgba(217,217,217,0.80)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>`
+const closeSVG = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#d9d9d9" stroke-opacity="0.8" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>`
 
 func makeCloseIconSVG() ImageTexture.Instance {
 	img := Image.New()
-	img.LoadSvgFromString(closeSVG) // loads at native 24x24
+	if err := img.LoadSvgFromString(closeSVG); err != nil {
+		// Fallback: simple 12x12 image
+		img = Image.Create(12, 12, false, Image.FormatRgba8)
+		img.Fill(Color.RGBA{R: 0.85, G: 0.85, B: 0.85, A: 0.8})
+	}
 	return ImageTexture.CreateFromImage(img)
 }
