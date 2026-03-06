@@ -44,7 +44,9 @@ import (
 type TitleBar struct {
 	PanelContainer.Extension[TitleBar] `gd:"ParquetTitleBar"`
 
-	infoLabel Label.Instance
+	infoLabel  Label.Instance
+	NavBackBtn Button.Instance
+	NavFwdBtn  Button.Instance
 }
 
 func (t *TitleBar) GuiInput(event InputEvent.Instance) {
@@ -68,9 +70,26 @@ func (t *TitleBar) Ready() {
 	margin.AsControl().AddThemeConstantOverride("margin_bottom", 6)
 
 	row := HBoxContainer.New()
-	row.AsControl().AddThemeConstantOverride("separation", 0)
+	row.AsControl().AddThemeConstantOverride("separation", 6)
 
-	// Left spacer (25%)
+	// Nav buttons
+	t.NavBackBtn = Button.New()
+	t.NavBackBtn.SetText("◀")
+	t.NavBackBtn.AsControl().AddThemeFontSizeOverride("font_size", 11)
+	t.NavBackBtn.AsControl().SetCustomMinimumSize(Vector2.New(24, 0))
+	applySecondaryButtonTheme(t.NavBackBtn.AsControl())
+	t.NavBackBtn.AsBaseButton().SetDisabled(true)
+	t.NavBackBtn.AsControl().SetMouseFilter(Control.MouseFilterStop)
+
+	t.NavFwdBtn = Button.New()
+	t.NavFwdBtn.SetText("▶")
+	t.NavFwdBtn.AsControl().AddThemeFontSizeOverride("font_size", 11)
+	t.NavFwdBtn.AsControl().SetCustomMinimumSize(Vector2.New(24, 0))
+	applySecondaryButtonTheme(t.NavFwdBtn.AsControl())
+	t.NavFwdBtn.AsBaseButton().SetDisabled(true)
+	t.NavFwdBtn.AsControl().SetMouseFilter(Control.MouseFilterStop)
+
+	// Spacer after nav buttons
 	leftSpacer := Control.New()
 	leftSpacer.SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	leftSpacer.AsControl().SetSizeFlagsStretchRatio(1)
@@ -100,6 +119,8 @@ func (t *TitleBar) Ready() {
 	t.infoLabel.AsControl().SetMouseFilter(Control.MouseFilterPass)
 	rightSpacer.SetMouseFilter(Control.MouseFilterPass)
 
+	row.AsNode().AddChild(t.NavBackBtn.AsNode())
+	row.AsNode().AddChild(t.NavFwdBtn.AsNode())
 	row.AsNode().AddChild(leftSpacer.AsNode())
 	row.AsNode().AddChild(pill.AsNode())
 	row.AsNode().AddChild(rightSpacer.AsNode())

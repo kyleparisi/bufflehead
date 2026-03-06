@@ -45,8 +45,6 @@ type AppWindow struct {
 	statusBar  *StatusBar
 	tabBar     TabBar.Instance
 	tabBarWrap MarginContainer.Instance
-	navBackBtn Button.Instance
-	navFwdBtn  Button.Instance
 	split        HSplitContainer.Instance
 	sidebarCol   VBoxContainer.Instance // left side of split, holds per-tab sidebars
 	contentCol   VBoxContainer.Instance // right side of split, holds tabbar + per-tab content
@@ -60,6 +58,8 @@ type AppWindow struct {
 
 	tabs      []*tabState
 	activeTab int
+
+	navWired bool
 
 	// Callbacks
 	onNewWindow func()
@@ -92,25 +92,6 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 	w.tabBarWrap.AsControl().AddThemeConstantOverride("margin_top", 0)
 	w.tabBarWrap.AsControl().AddThemeConstantOverride("margin_bottom", 0)
 
-	tabRow := HBoxContainer.New()
-	tabRow.AsControl().AddThemeConstantOverride("separation", 4)
-
-	w.navBackBtn = Button.New()
-	w.navBackBtn.SetText("◀")
-	w.navBackBtn.AsControl().AddThemeFontSizeOverride("font_size", 11)
-	w.navBackBtn.AsControl().SetCustomMinimumSize(Vector2.New(24, 0))
-	applySecondaryButtonTheme(w.navBackBtn.AsControl())
-	w.navBackBtn.AsBaseButton().SetDisabled(true)
-	w.navBackBtn.AsBaseButton().OnPressed(func() { w.navBack() })
-
-	w.navFwdBtn = Button.New()
-	w.navFwdBtn.SetText("▶")
-	w.navFwdBtn.AsControl().AddThemeFontSizeOverride("font_size", 11)
-	w.navFwdBtn.AsControl().SetCustomMinimumSize(Vector2.New(24, 0))
-	applySecondaryButtonTheme(w.navFwdBtn.AsControl())
-	w.navFwdBtn.AsBaseButton().SetDisabled(true)
-	w.navFwdBtn.AsBaseButton().OnPressed(func() { w.navForward() })
-
 	w.tabBar = TabBar.New()
 	w.tabBar.SetTabCloseDisplayPolicy(TabBar.CloseButtonShowActiveOnly)
 	w.tabBar.SetClipTabs(true)
@@ -120,11 +101,7 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 
 	w.tabBar.OnTabChanged(func(tab int) { w.switchTab(tab) })
 	w.tabBar.OnTabClosePressed(func(tab int) { w.closeTab(tab) })
-
-	tabRow.AsNode().AddChild(w.navBackBtn.AsNode())
-	tabRow.AsNode().AddChild(w.navFwdBtn.AsNode())
-	tabRow.AsNode().AddChild(w.tabBar.AsNode())
-	w.tabBarWrap.AsNode().AddChild(tabRow.AsNode())
+	w.tabBarWrap.AsNode().AddChild(w.tabBar.AsNode())
 
 	// Split
 	w.split = HSplitContainer.New()
@@ -272,6 +249,11 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 
 	bg.AsNode().AddChild(outerVBox.AsNode())
 
+	// Wire nav buttons (buttons created in TitleBar.Ready, wired here)
+	// These will be connected after the node enters the scene tree,
+	// so we defer the connection to the first addNewTab call via a flag.
+	w.navWired = false
+
 	// Don't create tabs here — caller must call addNewTab() after adding bg to tree
 	return bg
 }
@@ -291,6 +273,13 @@ func (w *AppWindow) currentState() *models.AppState {
 }
 
 func (w *AppWindow) addNewTab() {
+	// Wire nav buttons on first tab creation (after TitleBar.Ready has run)
+	if !w.navWired {
+		w.titleBar.NavBackBtn.AsBaseButton().OnPressed(func() { w.navBack() })
+		w.titleBar.NavFwdBtn.AsBaseButton().OnPressed(func() { w.navForward() })
+		w.navWired = true
+	}
+
 	ts := &tabState{State: models.NewAppState(), connIdx: -1}
 
 	// Sidebar
@@ -820,12 +809,12 @@ func (w *AppWindow) execQuery() error {
 func (w *AppWindow) updateNavButtons() {
 	ts := w.currentTab()
 	if ts == nil {
-		w.navBackBtn.AsBaseButton().SetDisabled(true)
-		w.navFwdBtn.AsBaseButton().SetDisabled(true)
+		w.titleBar.NavBackBtn.AsBaseButton().SetDisabled(true)
+		w.titleBar.NavFwdBtn.AsBaseButton().SetDisabled(true)
 		return
 	}
-	w.navBackBtn.AsBaseButton().SetDisabled(!ts.State.CanNavBack())
-	w.navFwdBtn.AsBaseButton().SetDisabled(!ts.State.CanNavForward())
+	w.titleBar.NavBackBtn.AsBaseButton().SetDisabled(!ts.State.CanNavBack())
+	w.titleBar.NavFwdBtn.AsBaseButton().SetDisabled(!ts.State.CanNavForward())
 }
 
 func (w *AppWindow) navBack() {
