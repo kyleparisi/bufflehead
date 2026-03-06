@@ -221,35 +221,15 @@ func applyTabBarTheme(c Control.Instance) {
 	c.AddThemeConstantOverride("h_separation", 4)
 
 	// Small close icon (8x8 X at 80% opacity)
-	// Small close icon at 80% opacity
-	closeIcon := makeCloseIcon(12, Color.RGBA{R: 0.85, G: 0.85, B: 0.85, A: 0.80})
+	// Close icon from SVG (Lucide "x" icon) at 80% opacity
+	closeIcon := makeCloseIconSVG()
 	c.AddThemeIconOverride("close", closeIcon.AsTexture2D())
 }
 
-func makeCloseIcon(size int, col Color.RGBA) ImageTexture.Instance {
-	img := Image.Create(size, size, false, Image.FormatRgba8)
-	img.Fill(Color.RGBA{R: 0, G: 0, B: 0, A: 0}) // transparent
+const closeSVG = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="rgba(217,217,217,0.80)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>`
 
-	// Draw X with 2px thick lines + anti-alias fringe
-	half := Color.RGBA{R: col.R, G: col.G, B: col.B, A: col.A * 0.4}
-	pad := size / 4 // inset from edges
-	span := size - 2*pad
-	for i := 0; i < span; i++ {
-		x := pad + i
-		y := pad + i
-		ry := pad + span - 1 - i
-		// Main pixels
-		img.SetPixel(x, y, col)
-		img.SetPixel(x, ry, col)
-		// Thickness (offset by 1)
-		if x+1 < size {
-			img.SetPixel(x+1, y, half)
-			img.SetPixel(x+1, ry, half)
-		}
-		if x > 0 {
-			img.SetPixel(x-1, y, half)
-			img.SetPixel(x-1, ry, half)
-		}
-	}
+func makeCloseIconSVG() ImageTexture.Instance {
+	img := Image.New()
+	img.LoadSvgFromString(closeSVG) // loads at native 24x24
 	return ImageTexture.CreateFromImage(img)
 }
