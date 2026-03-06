@@ -107,7 +107,7 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 	w.split = HSplitContainer.New()
 	w.split.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	w.split.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
-	w.split.AsSplitContainer().SetSplitOffset(140)
+	w.split.AsSplitContainer().SetSplitOffset(220)
 	w.split.AsControl().AddThemeConstantOverride("separation", 1)
 	w.split.AsControl().SetClipContents(true)
 

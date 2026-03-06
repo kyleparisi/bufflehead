@@ -13,6 +13,7 @@ import (
 	"graphics.gd/classdb"
 	"graphics.gd/classdb/BoxContainer"
 	"graphics.gd/classdb/Button"
+	"graphics.gd/classdb/CheckBox"
 	"graphics.gd/classdb/CodeEdit"
 	"graphics.gd/classdb/Control"
 	"graphics.gd/classdb/DisplayServer"
@@ -221,7 +222,8 @@ type SchemaPanel struct {
 	OnColumnsChanged func(selected []string)
 	allCols          []db.Column
 	allTables        []db.TableInfo
-	checkMode        bool // true when showing parquet columns with checkboxes
+	checkMode        bool
+	checkBoxes       []CheckBox.Instance
 }
 
 func (s *SchemaPanel) Ready() {
@@ -256,13 +258,6 @@ func (s *SchemaPanel) Ready() {
 		}
 	})
 
-	s.tree.OnItemEdited(func() {
-		if !s.checkMode || s.OnColumnsChanged == nil {
-			return
-		}
-		s.OnColumnsChanged(s.getCheckedColumns())
-	})
-
 	s.AsNode().AddChild(s.searchBox.AsNode())
 	s.AsNode().AddChild(s.tree.AsNode())
 }
@@ -272,6 +267,7 @@ func (s *SchemaPanel) SetSchema(cols []db.Column) {
 	s.allTables = nil
 	s.checkMode = true
 	s.searchBox.SetText("")
+	s.tree.AsCanvasItem().SetVisible(false)
 	s.filterCols("")
 }
 
@@ -284,60 +280,53 @@ func (s *SchemaPanel) SetCheckedColumns(selected []string) {
 	for _, c := range selected {
 		selSet[c] = true
 	}
-	root := s.tree.GetRoot()
-	if root == (TreeItem.Instance{}) {
-		return
-	}
-	child := root.GetFirstChild()
-	for child != (TreeItem.Instance{}) {
-		name, _ := child.GetMetadata(0).(string)
-		if len(selected) == 0 {
-			child.SetChecked(0, true)
-		} else {
-			child.SetChecked(0, selSet[name])
-		}
-		child = child.GetNext()
+	for _, cb := range s.checkBoxes {
+		name := cb.AsControl().GetTooltip()
+		checked := len(selected) == 0 || selSet[name]
+		cb.AsBaseButton().SetButtonPressed(checked)
 	}
 }
 
 func (s *SchemaPanel) getCheckedColumns() []string {
 	var cols []string
-	root := s.tree.GetRoot()
-	if root == (TreeItem.Instance{}) {
-		return cols
-	}
-	child := root.GetFirstChild()
-	for child != (TreeItem.Instance{}) {
-		if child.IsChecked(0) {
-			if name, ok := child.GetMetadata(0).(string); ok {
-				cols = append(cols, name)
-			}
+	for _, cb := range s.checkBoxes {
+		if cb.AsBaseButton().ButtonPressed() {
+			cols = append(cols, cb.AsControl().GetTooltip())
 		}
-		child = child.GetNext()
 	}
 	return cols
 }
 
 func (s *SchemaPanel) filterCols(query string) {
 	q := strings.ToLower(query)
-	s.tree.Clear()
-	s.tree.SetColumns(2)
-	root := s.tree.CreateItem()
+	// Clear existing checkboxes
+	for _, cb := range s.checkBoxes {
+		s.Super().AsNode().RemoveChild(cb.AsNode())
+		cb.AsNode().QueueFree()
+	}
+	s.checkBoxes = nil
+
 	for _, col := range s.allCols {
 		if q != "" && !strings.Contains(strings.ToLower(col.Name), q) {
 			continue
 		}
-		item := s.tree.MoreArgs().CreateItem(root, -1)
 		typeSuffix := col.DataType
 		if col.Nullable {
 			typeSuffix += "?"
 		}
-		item.SetCellMode(0, TreeItem.CellModeCheck)
-		item.SetChecked(0, true)
-		item.SetEditable(0, true)
-		item.SetText(0, "  "+col.Name)
-		item.SetMetadata(0, col.Name)
-		item.SetText(1, typeSuffix)
+		cb := CheckBox.New()
+		cb.AsButton().SetText(col.Name + "  " + typeSuffix)
+		cb.AsBaseButton().SetButtonPressed(true)
+		cb.AsControl().AddThemeFontSizeOverride("font_size", 12)
+		cb.AsControl().AddThemeColorOverride("font_color", colorText)
+		cb.AsControl().SetTooltipText(col.Name)
+		cb.AsBaseButton().OnToggled(func(pressed bool) {
+			if s.OnColumnsChanged != nil {
+				s.OnColumnsChanged(s.getCheckedColumns())
+			}
+		})
+		s.Super().AsNode().AddChild(cb.AsNode())
+		s.checkBoxes = append(s.checkBoxes, cb)
 	}
 }
 
@@ -346,6 +335,13 @@ func (s *SchemaPanel) SetTables(tables []db.TableInfo) {
 	s.allCols = nil
 	s.checkMode = false
 	s.searchBox.SetText("")
+	// Clear checkboxes
+	for _, cb := range s.checkBoxes {
+		s.Super().AsNode().RemoveChild(cb.AsNode())
+		cb.AsNode().QueueFree()
+	}
+	s.checkBoxes = nil
+	s.tree.AsCanvasItem().SetVisible(true)
 	s.filterTables("")
 }
 
