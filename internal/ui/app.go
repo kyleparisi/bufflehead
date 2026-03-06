@@ -9,6 +9,7 @@ import (
 	"parquet-viewer/internal/models"
 
 	"graphics.gd/classdb"
+	"graphics.gd/classdb/BoxContainer"
 	"graphics.gd/classdb/Button"
 	"graphics.gd/classdb/CodeEdit"
 	"graphics.gd/classdb/Control"
@@ -418,7 +419,9 @@ type App struct {
 	activeTab int         `gd:"-"`
 
 	// The split container holds tab content
-	split HSplitContainer.Instance
+	split     HSplitContainer.Instance
+	emptyView VBoxContainer.Instance
+	tabBarWrap MarginContainer.Instance
 }
 
 func (a *App) Ready() {
@@ -449,11 +452,11 @@ func (a *App) Ready() {
 	toolbarWrap.AsNode().AddChild(a.toolbar.AsNode())
 
 	// ── Tab bar ──────────────────────────────────────────────────────
-	tabBarWrap := MarginContainer.New()
-	tabBarWrap.AsControl().AddThemeConstantOverride("margin_left", 8)
-	tabBarWrap.AsControl().AddThemeConstantOverride("margin_right", 8)
-	tabBarWrap.AsControl().AddThemeConstantOverride("margin_top", 0)
-	tabBarWrap.AsControl().AddThemeConstantOverride("margin_bottom", 0)
+	a.tabBarWrap = MarginContainer.New()
+	a.tabBarWrap.AsControl().AddThemeConstantOverride("margin_left", 8)
+	a.tabBarWrap.AsControl().AddThemeConstantOverride("margin_right", 8)
+	a.tabBarWrap.AsControl().AddThemeConstantOverride("margin_top", 0)
+	a.tabBarWrap.AsControl().AddThemeConstantOverride("margin_bottom", 0)
 
 	a.tabBar = TabBar.New()
 	a.tabBar.SetTabCloseDisplayPolicy(TabBar.CloseButtonShowActiveOnly)
@@ -468,7 +471,7 @@ func (a *App) Ready() {
 	a.tabBar.OnTabClosePressed(func(tab int) {
 		a.closeTab(tab)
 	})
-	tabBarWrap.AsNode().AddChild(a.tabBar.AsNode())
+	a.tabBarWrap.AsNode().AddChild(a.tabBar.AsNode())
 
 	// ── Main split container ─────────────────────────────────────────
 	a.split = HSplitContainer.New()
@@ -502,17 +505,53 @@ func (a *App) Ready() {
 	statusMargin.AsNode().AddChild(a.statusBar.AsNode())
 	statusWrap.AsNode().AddChild(statusMargin.AsNode())
 
+	// ── Empty state view ─────────────────────────────────────────────
+	a.emptyView = VBoxContainer.New()
+	a.emptyView.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	a.emptyView.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
+	a.emptyView.AsBoxContainer().SetAlignment(BoxContainer.AlignmentCenter)
+
+	emptyCenter := VBoxContainer.New()
+	emptyCenter.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	emptyCenter.AsControl().SetSizeFlagsVertical(Control.SizeShrinkCenter)
+	emptyCenter.AsControl().AddThemeConstantOverride("separation", 16)
+	emptyCenter.AsBoxContainer().SetAlignment(BoxContainer.AlignmentCenter)
+
+	emptyIcon := Label.New()
+	emptyIcon.SetText("⬡")
+	emptyIcon.AsControl().AddThemeFontSizeOverride("font_size", 48)
+	emptyIcon.AsControl().AddThemeColorOverride("font_color", colorTextDim)
+	emptyIcon.SetHorizontalAlignment(1) // center
+
+	emptyTitle := Label.New()
+	emptyTitle.SetText("Parquet Viewer")
+	emptyTitle.AsControl().AddThemeFontSizeOverride("font_size", 18)
+	emptyTitle.AsControl().AddThemeColorOverride("font_color", colorText)
+	emptyTitle.SetHorizontalAlignment(1)
+
+	emptyHint := Label.New()
+	emptyHint.SetText("⌘T  New Tab   ·   ⌘O  Open File   ·   Drop .parquet here")
+	emptyHint.AsControl().AddThemeFontSizeOverride("font_size", 12)
+	emptyHint.AsControl().AddThemeColorOverride("font_color", colorTextDim)
+	emptyHint.SetHorizontalAlignment(1)
+
+	emptyCenter.AsNode().AddChild(emptyIcon.AsNode())
+	emptyCenter.AsNode().AddChild(emptyTitle.AsNode())
+	emptyCenter.AsNode().AddChild(emptyHint.AsNode())
+	a.emptyView.AsNode().AddChild(emptyCenter.AsNode())
+
 	// ── Assemble ─────────────────────────────────────────────────────
 	outerVBox.AsNode().AddChild(a.titleBar.AsNode())
 	outerVBox.AsNode().AddChild(toolbarWrap.AsNode())
-	outerVBox.AsNode().AddChild(tabBarWrap.AsNode())
+	outerVBox.AsNode().AddChild(a.tabBarWrap.AsNode())
 	outerVBox.AsNode().AddChild(a.split.AsNode())
+	outerVBox.AsNode().AddChild(a.emptyView.AsNode())
 	outerVBox.AsNode().AddChild(statusWrap.AsNode())
 
 	bg.AsNode().AddChild(outerVBox.AsNode())
 	a.AsNode().AddChild(bg.AsNode())
 
-	// Create initial tab
+	// Create first tab (visible)
 	a.addNewTab()
 
 	// Setup file drag & drop
@@ -570,29 +609,31 @@ func (a *App) Ready() {
 	if a.ControlServer != nil {
 		a.ControlServer.SetStateProvider(func() (json.RawMessage, error) {
 			state := map[string]any{
-				"filePath":   a.State.FilePath,
-				"userSQL":    a.State.UserSQL,
-				"sortColumn": a.State.SortColumn,
-				"sortDir":    int(a.State.SortDir),
-				"pageOffset": a.State.PageOffset,
-				"pageSize":   a.State.PageSize,
-				"rowCount":   0,
-				"columns":    []string{},
-				"tabCount":   len(a.tabs),
-				"activeTab":  a.activeTab,
+				"tabCount":  len(a.tabs),
+				"activeTab": a.activeTab,
 			}
-			if a.State.Result != nil {
-				state["rowCount"] = a.State.Result.Total
-				state["columns"] = a.State.Result.Columns
-			}
-			if a.State.Schema != nil {
-				schema := make([]map[string]any, len(a.State.Schema))
-				for i, c := range a.State.Schema {
-					schema[i] = map[string]any{
-						"name": c.Name, "type": c.DataType, "nullable": c.Nullable,
-					}
+			if a.State != nil {
+				state["filePath"] = a.State.FilePath
+				state["userSQL"] = a.State.UserSQL
+				state["sortColumn"] = a.State.SortColumn
+				state["sortDir"] = int(a.State.SortDir)
+				state["pageOffset"] = a.State.PageOffset
+				state["pageSize"] = a.State.PageSize
+				state["rowCount"] = 0
+				state["columns"] = []string{}
+				if a.State.Result != nil {
+					state["rowCount"] = a.State.Result.Total
+					state["columns"] = a.State.Result.Columns
 				}
-				state["schema"] = schema
+				if a.State.Schema != nil {
+					schema := make([]map[string]any, len(a.State.Schema))
+					for i, c := range a.State.Schema {
+						schema[i] = map[string]any{
+							"name": c.Name, "type": c.DataType, "nullable": c.Nullable,
+						}
+					}
+					state["schema"] = schema
+				}
 			}
 			return json.Marshal(state)
 		})
@@ -682,6 +723,9 @@ func (a *App) addNewTab() {
 	a.split.AsNode().AddChild(ts.sidebarWrap.AsNode())
 	a.split.AsNode().AddChild(ts.rightPanel.AsNode())
 
+	// Show tab view (in case we were in empty state)
+	a.showTabView()
+
 	// Add tab bar entry
 	idx := len(a.tabs)
 	a.tabs = append(a.tabs, ts)
@@ -735,14 +779,21 @@ func (a *App) switchTab(idx int) {
 }
 
 func (a *App) closeTab(idx int) {
-	if len(a.tabs) <= 1 {
-		return // keep at least one tab
-	}
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Println("closeTab recovered:", r)
+		}
+	}()
+
 	if idx < 0 || idx >= len(a.tabs) {
 		return
 	}
 
 	ts := a.tabs[idx]
+
+	// Hide first, then remove
+	ts.sidebarWrap.AsCanvasItem().SetVisible(false)
+	ts.rightPanel.AsCanvasItem().SetVisible(false)
 
 	// Remove nodes from split
 	a.split.AsNode().RemoveChild(ts.sidebarWrap.AsNode())
@@ -754,12 +805,36 @@ func (a *App) closeTab(idx int) {
 	a.tabs = append(a.tabs[:idx], a.tabs[idx+1:]...)
 	a.tabBar.RemoveTab(idx)
 
+	if len(a.tabs) == 0 {
+		// No tabs left — show empty view
+		a.activeTab = -1
+		a.State = nil
+		a.showEmptyView()
+		return
+	}
+
 	// Adjust active tab
 	if a.activeTab >= len(a.tabs) {
 		a.activeTab = len(a.tabs) - 1
 	}
 	a.tabBar.SetCurrentTab(a.activeTab)
 	a.switchTab(a.activeTab)
+}
+
+func (a *App) showEmptyView() {
+	a.split.AsCanvasItem().SetVisible(false)
+	a.tabBarWrap.AsCanvasItem().SetVisible(false)
+	a.emptyView.AsCanvasItem().SetVisible(true)
+	a.toolbar.fileLabel.SetText("")
+	a.titleBar.SetFileInfo("")
+	a.statusBar.SetStatus("No tabs open")
+	a.statusBar.SetPage(0, 0)
+}
+
+func (a *App) showTabView() {
+	a.emptyView.AsCanvasItem().SetVisible(false)
+	a.split.AsCanvasItem().SetVisible(true)
+	a.tabBarWrap.AsCanvasItem().SetVisible(true)
 }
 
 func (a *App) updateTabTitle(idx int) {
@@ -872,10 +947,20 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 		cmd.Respond(control.Result{OK: true})
 
 	case "reset_sort":
-		a.State.SortColumn = ""
-		a.State.SortDir = models.SortNone
-		a.State.PageOffset = 0
-		a.execQuery()
+		if a.State != nil {
+			a.State.SortColumn = ""
+			a.State.SortDir = models.SortNone
+			a.State.PageOffset = 0
+			a.execQuery()
+		}
+		cmd.Respond(control.Result{OK: true})
+
+	case "new_tab":
+		a.addNewTab()
+		cmd.Respond(control.Result{OK: true})
+
+	case "close_tab":
+		a.closeTab(a.activeTab)
 		cmd.Respond(control.Result{OK: true})
 
 	case "screenshot":
@@ -898,6 +983,10 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 // ── File + query logic ─────────────────────────────────────────────────────
 
 func (a *App) onFileSelected(path string) {
+	if len(a.tabs) == 0 {
+		// Re-create a tab from empty state
+		a.addNewTab()
+	}
 	ts := a.currentTab()
 	if ts == nil {
 		return
