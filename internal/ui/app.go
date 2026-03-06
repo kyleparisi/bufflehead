@@ -224,6 +224,7 @@ type SchemaPanel struct {
 	allTables        []db.TableInfo
 	checkMode        bool
 	selectAllRow     HBoxContainer.Instance
+	selectAllDivider PanelContainer.Instance
 	selectAllCb      CheckBox.Instance
 	checkBoxes       []CheckBox.Instance
 	checkRows        []HBoxContainer.Instance
@@ -272,16 +273,21 @@ func (s *SchemaPanel) SetSchema(cols []db.Column) {
 	s.searchBox.SetText("")
 	s.tree.AsCanvasItem().SetVisible(false)
 
-	// Remove old select-all row if exists
+	// Remove old select-all row + divider if exists
 	if s.selectAllRow != (HBoxContainer.Instance{}) {
 		s.Super().AsNode().RemoveChild(s.selectAllRow.AsNode())
 		s.selectAllRow.AsNode().QueueFree()
+	}
+	if s.selectAllDivider != (PanelContainer.Instance{}) {
+		s.Super().AsNode().RemoveChild(s.selectAllDivider.AsNode())
+		s.selectAllDivider.AsNode().QueueFree()
 	}
 
 	// Select-all header row
 	s.selectAllRow = HBoxContainer.New()
 	s.selectAllRow.AsControl().AddThemeConstantOverride("separation", 4)
 	s.selectAllRow.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	s.selectAllRow.AsControl().SetCustomMinimumSize(Vector2.New(0, 24))
 
 	s.selectAllCb = CheckBox.New()
 	s.selectAllCb.AsBaseButton().SetButtonPressed(true)
@@ -303,9 +309,16 @@ func (s *SchemaPanel) SetSchema(cols []db.Column) {
 	s.selectAllRow.AsNode().AddChild(s.selectAllCb.AsNode())
 	s.selectAllRow.AsNode().AddChild(allLabel.AsNode())
 
-	// Insert after search box (index 1, since search is 0, tree is 1)
+	// Divider below header
+	s.selectAllDivider = PanelContainer.New()
+	s.selectAllDivider.AsControl().SetCustomMinimumSize(Vector2.New(0, 1))
+	applyPanelBg(s.selectAllDivider.AsControl(), colorBorder)
+
+	// Insert after search box
 	s.Super().AsNode().AddChild(s.selectAllRow.AsNode())
 	s.Super().AsNode().MoveChild(s.selectAllRow.AsNode(), 1)
+	s.Super().AsNode().AddChild(s.selectAllDivider.AsNode())
+	s.Super().AsNode().MoveChild(s.selectAllDivider.AsNode(), 2)
 
 	s.filterCols("")
 }
@@ -453,6 +466,11 @@ func (s *SchemaPanel) SetTables(tables []db.TableInfo) {
 		s.Super().AsNode().RemoveChild(s.selectAllRow.AsNode())
 		s.selectAllRow.AsNode().QueueFree()
 		s.selectAllRow = HBoxContainer.Instance{}
+	}
+	if s.selectAllDivider != (PanelContainer.Instance{}) {
+		s.Super().AsNode().RemoveChild(s.selectAllDivider.AsNode())
+		s.selectAllDivider.AsNode().QueueFree()
+		s.selectAllDivider = PanelContainer.Instance{}
 	}
 	for _, row := range s.checkRows {
 		s.Super().AsNode().RemoveChild(row.AsNode())
