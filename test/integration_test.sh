@@ -5,7 +5,8 @@ set -e
 
 GODOT="/Users/openclaw/gd/bin/Godot.app/Contents/MacOS/Godot"
 PROJECT_DIR="$(cd "$(dirname "$0")/../graphics" && pwd)"
-SAMPLE="$(cd "$(dirname "$0")/../testdata" && pwd)/sample.parquet"
+TESTDATA="$(cd "$(dirname "$0")/../testdata" && pwd)"
+SAMPLE="$TESTDATA/sample.parquet"
 PORT=9900
 URL="http://127.0.0.1:$PORT"
 PASS=0
@@ -112,7 +113,7 @@ assert_eq "offset 100" "100" "$(echo "$STATE" | json_get '["pageOffset"]')"
 assert_eq "still 500 total" "500" "$(echo "$STATE" | json_get '["rowCount"]')"
 
 # ── Test: Open replaces current tab ──────────────────────────────────────
-CITIES="$(dirname "$SAMPLE")/cities.parquet"
+CITIES="$TESTDATA/cities.parquet"
 # Reset: close all tabs, start fresh
 echo "Test: Open second file opens new tab"
 while [ "$(curl -s "$URL/state" | json_get '["tabCount"]')" != "0" ]; do
@@ -179,3 +180,29 @@ curl -s -X POST "$URL/select-row" -d '{"row":0}' >/dev/null
 sleep 0.3
 RESULT=$(curl -s -X POST "$URL/search-detail" -d '{"query":"tags"}')
 assert_eq "search detail ok" "True" "$(echo "$RESULT" | json_get '["ok"]')"
+
+# ── Test: CSV file ───────────────────────────────────────────────────────
+CSV="$TESTDATA/sales.csv"
+echo "Test: Open CSV file"
+# Reset: close all, open fresh tab
+while [ "$(curl -s "$URL/state" | json_get '["tabCount"]')" != "0" ]; do
+    curl -s -X POST "$URL/close-tab" >/dev/null; sleep 0.1
+done
+curl -s -X POST "$URL/new-tab" >/dev/null
+sleep 0.3
+curl -s -X POST "$URL/query" -d "{\"sql\":\"SELECT * FROM '$CSV'\"}" >/dev/null
+sleep 0.5
+STATE=$(curl -s "$URL/state")
+assert_eq "csv 5 rows" "5" "$(echo "$STATE" | json_get '["rowCount"]')"
+assert_eq "csv 4 cols" "4" "$(echo "$STATE" | python3 -c "import sys,json; print(len(json.load(sys.stdin)['columns']))")"
+assert_eq "csv cols" "['product', 'region', 'quantity', 'price']" "$(echo "$STATE" | json_get '["columns"]')"
+
+# ── Test: JSON file ──────────────────────────────────────────────────────
+JSONF="$TESTDATA/events.json"
+echo "Test: Open JSON file"
+curl -s -X POST "$URL/query" -d "{\"sql\":\"SELECT * FROM '$JSONF'\"}" >/dev/null
+sleep 0.5
+STATE=$(curl -s "$URL/state")
+assert_eq "json 4 rows" "4" "$(echo "$STATE" | json_get '["rowCount"]')"
+assert_eq "json has event col" "True" "$(echo "$STATE" | python3 -c "import sys,json; print('event' in json.load(sys.stdin)['columns'])")"
+assert_eq "json has user col" "True" "$(echo "$STATE" | python3 -c "import sys,json; print('user' in json.load(sys.stdin)['columns'])")"

@@ -1,0 +1,4 @@
+{"event": "login", "user": "alice", "ts": "2024-01-15T08:30:00Z"}
+{"event": "purchase", "user": "bob", "ts": "2024-01-15T09:15:00Z", "amount": 42.5}
+{"event": "login", "user": "charlie", "ts": "2024-01-15T10:00:00Z"}
+{"event": "logout", "user": "alice", "ts": "2024-01-15T11:30:00Z"}
