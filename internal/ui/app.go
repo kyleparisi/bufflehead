@@ -849,6 +849,21 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 		ts.detailWrap.AsCanvasItem().SetVisible(true)
 		cmd.Respond(control.Result{OK: true})
 
+	case "search_detail":
+		var d struct{ Query string `json:"query"` }
+		if err := json.Unmarshal(cmd.Data, &d); err != nil {
+			cmd.Respond(control.Result{Error: err.Error()})
+			return
+		}
+		ts := w.currentTab()
+		if ts == nil || ts.detailPanel == nil {
+			cmd.Respond(control.Result{Error: "no active tab"})
+			return
+		}
+		ts.detailPanel.searchBox.SetText(d.Query)
+		ts.detailPanel.filterFields(d.Query)
+		cmd.Respond(control.Result{OK: true})
+
 	case "new_window":
 		a.newWindow()
 		cmd.Respond(control.Result{OK: true})

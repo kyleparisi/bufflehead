@@ -136,6 +136,10 @@ func (s *Server) Start() {
 		s.handleCommand(w, r, "select_row")
 	})
 
+	mux.HandleFunc("POST /search-detail", func(w http.ResponseWriter, r *http.Request) {
+		s.handleCommand(w, r, "search_detail")
+	})
+
 	mux.HandleFunc("GET /screenshot", func(w http.ResponseWriter, r *http.Request) {
 		cmd := &Command{
 			Action: "screenshot",
