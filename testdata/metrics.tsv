@@ -1,0 +1,5 @@
+host	metric	value	epoch
+web-01	cpu_pct	72.5	1704067200
+web-02	cpu_pct	45.1	1704067200
+db-01	mem_gb	28.3	1704067200
+web-01	disk_pct	89.0	1704067260

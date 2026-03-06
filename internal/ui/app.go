@@ -366,6 +366,18 @@ func (d *DataGrid) UpdateColumnTitles(columns []string, sortCol string, sortDir 
 	}
 }
 
+func (d *DataGrid) ShowError(msg string) {
+	d.columns = nil
+	d.rows = nil
+	t := d.Super()
+	t.Clear()
+	t.SetColumns(1)
+	t.SetColumnTitle(0, "Error")
+	root := t.CreateItem()
+	item := t.MoreArgs().CreateItem(root, -1)
+	item.SetText(0, msg)
+}
+
 func (d *DataGrid) SetResult(r *db.QueryResult) {
 	if r == nil {
 		return
@@ -864,8 +876,11 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 			ts.State.SortDir = models.SortNone
 			ts.sqlPanel.SetSQL(d.SQL)
 		}
-		w.execQuery()
-		cmd.Respond(control.Result{OK: true})
+		if err := w.execQuery(); err != nil {
+			cmd.Respond(control.Result{Error: err.Error()})
+		} else {
+			cmd.Respond(control.Result{OK: true})
+		}
 
 	case "page":
 		var d control.PageData

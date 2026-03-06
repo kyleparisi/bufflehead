@@ -487,6 +487,7 @@ func (w *AppWindow) onFileSelected(path string) {
 	cols, err := w.duck.Schema(path)
 	if err != nil {
 		w.statusBar.SetStatus("Error: " + err.Error())
+		ts.dataGrid.ShowError(err.Error())
 		return
 	}
 	ts.State.Schema = cols
@@ -497,17 +498,18 @@ func (w *AppWindow) onFileSelected(path string) {
 	w.execQuery()
 }
 
-func (w *AppWindow) execQuery() {
+func (w *AppWindow) execQuery() error {
 	ts := w.currentTab()
 	if ts == nil {
-		return
+		return fmt.Errorf("no active tab")
 	}
 	w.statusBar.SetStatus("Running…")
 	queryStart := time.Now()
 	result, err := w.duck.Query(ts.State.VirtualSQL(), ts.State.PageOffset, ts.State.PageSize)
 	if err != nil {
 		w.statusBar.SetStatus("Error: " + err.Error())
-		return
+		ts.dataGrid.ShowError(err.Error())
+		return err
 	}
 	elapsed := time.Since(queryStart)
 	ts.State.Result = result
@@ -530,6 +532,7 @@ func (w *AppWindow) execQuery() {
 	page := (ts.State.PageOffset / ts.State.PageSize) + 1
 	totalPages := (int(result.Total) + ts.State.PageSize - 1) / ts.State.PageSize
 	w.statusBar.SetPage(page, totalPages)
+	return nil
 }
 
 // createSecondaryWindow creates a new OS-level window with full UI.

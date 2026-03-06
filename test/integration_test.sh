@@ -18,6 +18,7 @@ ROOT="$(pwd)"
 PATH="$PATH:/Users/openclaw/go/bin"
 echo "Building dylib..."
 go build -buildmode=c-shared -o "$ROOT/graphics/darwin_amd64.dylib" ./cmd/viewer
+cp "$ROOT/graphics/darwin_amd64.dylib" "$ROOT/graphics/darwin_universal.dylib"
 echo "Build OK"
 
 # Start headless
@@ -206,3 +207,24 @@ STATE=$(curl -s "$URL/state")
 assert_eq "json 4 rows" "4" "$(echo "$STATE" | json_get '["rowCount"]')"
 assert_eq "json has event col" "True" "$(echo "$STATE" | python3 -c "import sys,json; print('event' in json.load(sys.stdin)['columns'])")"
 assert_eq "json has user col" "True" "$(echo "$STATE" | python3 -c "import sys,json; print('user' in json.load(sys.stdin)['columns'])")"
+
+# ── Test: TSV file ───────────────────────────────────────────────────────
+TSV="$TESTDATA/metrics.tsv"
+echo "Test: Open TSV file"
+curl -s -X POST "$URL/query" -d "{\"sql\":\"SELECT * FROM read_csv('$TSV', delim='\\\\t', header=true)\"}" >/dev/null
+sleep 0.5
+STATE=$(curl -s "$URL/state")
+assert_eq "tsv 4 rows" "4" "$(echo "$STATE" | json_get '["rowCount"]')"
+assert_eq "tsv has host col" "True" "$(echo "$STATE" | python3 -c "import sys,json; print('host' in json.load(sys.stdin)['columns'])")"
+assert_eq "tsv has metric col" "True" "$(echo "$STATE" | python3 -c "import sys,json; print('metric' in json.load(sys.stdin)['columns'])")"
+
+# ── Test: Corrupted parquet ──────────────────────────────────────────────
+CORRUPT="$TESTDATA/corrupted.parquet"
+echo "Test: Corrupted parquet shows error"
+RESULT=$(curl -s -X POST "$URL/query" -d "{\"sql\":\"SELECT * FROM '$CORRUPT'\"}")
+assert_eq "corrupted returns error" "False" "$(echo "$RESULT" | json_get '.get("ok", False)')"
+
+# ── Test: Invalid SQL ────────────────────────────────────────────────────
+echo "Test: Invalid SQL shows error"
+RESULT=$(curl -s -X POST "$URL/query" -d '{"sql":"SELEKT * FORM nowhere"}')
+assert_eq "bad sql returns error" "False" "$(echo "$RESULT" | json_get '.get("ok", False)')"
