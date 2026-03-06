@@ -39,7 +39,7 @@ type AppWindow struct {
 	history   *models.QueryHistory
 
 	titleBar   *TitleBar
-	toolbar    *Toolbar
+	// toolbar removed
 	statusBar  *StatusBar
 	tabBar     TabBar.Instance
 	tabBarWrap MarginContainer.Instance
@@ -77,16 +77,7 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 	// Title bar
 	w.titleBar = new(TitleBar)
 
-	// Toolbar
-	toolbarWrap := MarginContainer.New()
-	toolbarWrap.AsControl().AddThemeConstantOverride("margin_top", 6)
-	toolbarWrap.AsControl().AddThemeConstantOverride("margin_left", 8)
-	toolbarWrap.AsControl().AddThemeConstantOverride("margin_right", 8)
-	toolbarWrap.AsControl().AddThemeConstantOverride("margin_bottom", 4)
-
-	w.toolbar = new(Toolbar)
-	w.toolbar.OnFileOpened = w.onFileSelected
-	toolbarWrap.AsNode().AddChild(w.toolbar.AsNode())
+	// (toolbar removed)
 
 	// Tab bar
 	w.tabBarWrap = MarginContainer.New()
@@ -210,7 +201,6 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 
 	// Assemble
 	outerVBox.AsNode().AddChild(w.titleBar.AsNode())
-	outerVBox.AsNode().AddChild(toolbarWrap.AsNode())
 	outerVBox.AsNode().AddChild(w.tabBarWrap.AsNode())
 	outerVBox.AsNode().AddChild(contentHBox.AsNode())
 	outerVBox.AsNode().AddChild(statusWrap.AsNode())
@@ -419,10 +409,8 @@ func (w *AppWindow) switchTab(idx int) {
 	ts.outerWrap.AsCanvasItem().SetVisible(true)
 
 	if ts.State.FilePath != "" {
-		w.toolbar.fileLabel.SetText(ts.State.FilePath)
 		w.titleBar.SetFileInfo(ts.State.FilePath)
 	} else {
-		w.toolbar.fileLabel.SetText("")
 		w.titleBar.SetFileInfo("")
 	}
 
@@ -497,7 +485,6 @@ func (w *AppWindow) showEmptyView() {
 	w.split.AsCanvasItem().SetVisible(false)
 	w.tabBarWrap.AsCanvasItem().SetVisible(false)
 	w.emptyView.AsCanvasItem().SetVisible(true)
-	w.toolbar.fileLabel.SetText("")
 	w.titleBar.SetFileInfo("")
 	w.statusBar.SetStatus("No tabs open")
 	w.statusBar.SetPage(0, 0)
@@ -541,7 +528,6 @@ func (w *AppWindow) onFileSelected(path string) {
 	ts.sqlPanel.SetSQL(ts.State.UserSQL)
 	w.titleBar.SetFileInfo(path)
 	w.updateTabTitle(w.activeTab)
-	w.toolbar.fileLabel.SetText(path)
 
 	cols, err := w.duck.Schema(path)
 	if err != nil {
@@ -667,7 +653,6 @@ func (w *AppWindow) selectConnection(idx int) {
 	ts.connIdx = idx
 	w.titleBar.SetFileInfo(conn.Path)
 	w.updateTabTitle(w.activeTab)
-	w.toolbar.fileLabel.SetText(conn.Path)
 
 	ts.schema.SetTables(conn.Tables)
 
