@@ -106,10 +106,7 @@ func (d *DB) TableSchema(tableName string) ([]Column, error) {
 
 // Schema returns column info for a parquet file.
 func (d *DB) Schema(path string) ([]Column, error) {
-	q := fmt.Sprintf(`
-		SELECT name, type, repetition_type
-		FROM parquet_schema('%s')
-		WHERE num_children IS NULL`, path)
+	q := fmt.Sprintf(`DESCRIBE SELECT * FROM '%s'`, path)
 
 	rows, err := d.conn.Query(q)
 	if err != nil {
@@ -120,11 +117,13 @@ func (d *DB) Schema(path string) ([]Column, error) {
 	var cols []Column
 	for rows.Next() {
 		var c Column
-		var repType string
-		if err := rows.Scan(&c.Name, &c.DataType, &repType); err != nil {
+		var colType, isNull string
+		var key, def, extra sql.NullString
+		if err := rows.Scan(&c.Name, &colType, &isNull, &key, &def, &extra); err != nil {
 			return nil, err
 		}
-		c.Nullable = repType == "OPTIONAL"
+		c.DataType = colType
+		c.Nullable = isNull == "YES"
 		cols = append(cols, c)
 	}
 	return cols, rows.Err()
