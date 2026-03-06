@@ -33,12 +33,12 @@ func (m *AppMenu) Setup() {
 	// Create File menu
 	m.fileMenu = NativeMenu.CreateMenu()
 
-	// New Tab (Cmd+N)
+	// New Tab (Cmd+T)
 	NativeMenu.AddItem(m.fileMenu, "New Tab", func(tag any) {
 		if m.OnNewTab != nil {
 			m.OnNewTab()
 		}
-	}, nil, nil, Input.Key(Input.KeyMaskMeta)|Input.KeyN)
+	}, nil, nil, Input.Key(Input.KeyMaskMeta)|Input.KeyT)
 
 	// Open… (Cmd+O)
 	NativeMenu.AddItem(m.fileMenu, "Open…", func(tag any) {
