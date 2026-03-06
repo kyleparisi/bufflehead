@@ -538,6 +538,8 @@ func (a *App) newWindow() {
 		pos := aw.window.Position()
 		offset := int32(len(a.secondWins) * 30)
 		aw.window.SetPosition(Vector2i.New(int(pos.X+offset), int(pos.Y+offset)))
+		aw.window.GrabFocus()
+		aw.window.MoveToForeground()
 		aw.addNewTab()
 	}
 }
