@@ -50,12 +50,13 @@ type TitleBar struct {
 	infoLabel  Label.Instance
 	NavBackBtn Button.Instance
 	NavFwdBtn  Button.Instance
+	WindowID   int
 }
 
 func (t *TitleBar) GuiInput(event InputEvent.Instance) {
 	if mb, ok := Object.As[InputEventMouseButton.Instance](event); ok {
 		if mb.ButtonIndex() == Input.MouseButtonLeft && mb.AsInputEvent().IsPressed() {
-			DisplayServer.WindowStartDrag(0)
+			DisplayServer.WindowStartDrag(DisplayServer.Window(t.WindowID))
 		}
 	}
 }
@@ -1332,8 +1333,10 @@ func (a *App) newWindow() {
 		pos := aw.window.Position()
 		offset := int32(len(a.secondWins) * 30)
 		aw.window.SetPosition(Vector2i.New(int(pos.X+offset), int(pos.Y+offset)))
+		aw.titleBar.WindowID = aw.window.GetWindowId()
 		aw.window.GrabFocus()
 		aw.window.MoveToForeground()
+		aw.window.RequestAttention()
 		aw.addNewTab()
 	}
 }
