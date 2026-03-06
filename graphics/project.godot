@@ -19,6 +19,8 @@ window/size/viewport_height=640
 window/size/window_width_override=1024
 window/size/window_height_override=640
 window/size/resizable=true
+window/size/extend_to_title=true
 
 [rendering]
+renderer/rendering_method="gl_compatibility"
 textures/vram_compression/import_etc2_astc=true

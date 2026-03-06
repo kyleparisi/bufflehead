@@ -9,8 +9,12 @@ import (
 	"graphics.gd/classdb"
 	"graphics.gd/classdb/Button"
 	"graphics.gd/classdb/Control"
-	"graphics.gd/classdb/FileDialog"
+	"graphics.gd/classdb/DisplayServer"
 	"graphics.gd/classdb/HBoxContainer"
+	"graphics.gd/classdb/Input"
+	"graphics.gd/classdb/InputEvent"
+	"graphics.gd/classdb/InputEventMouseButton"
+	"graphics.gd/variant/Object"
 	"graphics.gd/classdb/HSplitContainer"
 	"graphics.gd/classdb/Label"
 	"graphics.gd/classdb/LineEdit"
@@ -24,13 +28,73 @@ import (
 
 )
 
+// ── Title bar ──────────────────────────────────────────────────────────────
+
+type TitleBar struct {
+	PanelContainer.Extension[TitleBar] `gd:"ParquetTitleBar"`
+
+	infoLabel Label.Instance
+}
+
+func (t *TitleBar) GuiInput(event InputEvent.Instance) {
+	if mb, ok := Object.As[InputEventMouseButton.Instance](event); ok {
+		if mb.ButtonIndex() == Input.MouseButtonLeft && mb.AsInputEvent().IsPressed() {
+			DisplayServer.WindowStartDrag(0)
+		}
+	}
+}
+
+func (t *TitleBar) Ready() {
+	applyTitleBarTheme(t.AsControl())
+	t.AsControl().SetMouseFilter(Control.MouseFilterStop)
+
+	margin := MarginContainer.New()
+	margin.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	margin.AsControl().AddThemeConstantOverride("margin_top", 6)
+	margin.AsControl().AddThemeConstantOverride("margin_left", 78) // clear macOS traffic lights
+	margin.AsControl().AddThemeConstantOverride("margin_right", 8)
+	margin.AsControl().AddThemeConstantOverride("margin_bottom", 6)
+
+	row := HBoxContainer.New()
+	row.AsControl().AddThemeConstantOverride("separation", 10)
+
+	// App name
+	appName := Label.New()
+	appName.SetText("Parquet Viewer")
+	appName.AsControl().AddThemeColorOverride("font_color", colorTextBright)
+	appName.AsControl().AddThemeFontSizeOverride("font_size", 13)
+
+	// Spacer
+	spacer := Control.New()
+	spacer.SetSizeFlagsHorizontal(Control.SizeExpandFill)
+
+	// Connection info pill
+	pill := PanelContainer.New()
+	applyPillTheme(pill.AsControl())
+	t.infoLabel = Label.New()
+	t.infoLabel.SetText("DuckDB  ·  In-Memory  ·  No file loaded")
+	t.infoLabel.AsControl().AddThemeColorOverride("font_color", colorText)
+	t.infoLabel.AsControl().AddThemeFontSizeOverride("font_size", 13)
+	pill.AsNode().AddChild(t.infoLabel.AsNode())
+
+	row.AsNode().AddChild(appName.AsNode())
+	row.AsNode().AddChild(spacer.AsNode())
+	row.AsNode().AddChild(pill.AsNode())
+
+	margin.AsNode().AddChild(row.AsNode())
+	t.AsNode().AddChild(margin.AsNode())
+}
+
+func (t *TitleBar) SetFileInfo(path string) {
+	t.infoLabel.SetText("DuckDB  ·  In-Memory  ·  " + path)
+}
+
 // ── Toolbar ────────────────────────────────────────────────────────────────
 
 type Toolbar struct {
 	HBoxContainer.Extension[Toolbar] `gd:"ParquetToolbar"`
 
-	fileLabel  LineEdit.Instance
-	fileDialog FileDialog.Instance
+	fileLabel LineEdit.Instance
 
 	OnFileOpened func(path string)
 }
@@ -42,7 +106,24 @@ func (t *Toolbar) Ready() {
 	openBtn.SetText("Open…")
 	applyButtonTheme(openBtn.AsControl())
 	openBtn.AsBaseButton().OnPressed(func() {
-		t.fileDialog.PopupFileDialog()
+		DisplayServer.FileDialogShow(
+			"Open Parquet File",
+			"",
+			"",
+			false,
+			DisplayServer.FileDialogModeOpenFile,
+			[]string{"*.parquet ; Parquet Files"},
+			func(status bool, selectedPaths []string, selectedFilterIndex int) {
+				if status && len(selectedPaths) > 0 {
+					path := selectedPaths[0]
+					t.fileLabel.SetText(path)
+					if t.OnFileOpened != nil {
+						t.OnFileOpened(path)
+					}
+				}
+			},
+			0,
+		)
 	})
 
 	t.fileLabel = LineEdit.New()
@@ -53,17 +134,6 @@ func (t *Toolbar) Ready() {
 
 	t.AsNode().AddChild(openBtn.AsNode())
 	t.AsNode().AddChild(t.fileLabel.AsNode())
-
-	t.fileDialog = FileDialog.New()
-	t.fileDialog.SetFileMode(FileDialog.FileModeOpenFile)
-	t.fileDialog.AddFilter("*.parquet")
-	t.fileDialog.OnFileSelected(func(path string) {
-		t.fileLabel.SetText(path)
-		if t.OnFileOpened != nil {
-			t.OnFileOpened(path)
-		}
-	})
-	t.AsNode().AddChild(t.fileDialog.AsNode())
 }
 
 // ── Schema sidebar ─────────────────────────────────────────────────────────
@@ -198,7 +268,7 @@ func (s *StatusBar) Ready() {
 	dataTab := Label.New()
 	dataTab.SetText("Data")
 	dataTab.AsControl().AddThemeColorOverride("font_color", colorTextBright)
-	dataTab.AsControl().AddThemeFontSizeOverride("font_size", 10)
+	dataTab.AsControl().AddThemeFontSizeOverride("font_size", 13)
 
 	structTab := Label.New()
 	structTab.SetText("Structure")
@@ -231,6 +301,7 @@ type App struct {
 	Duck  *db.DB           `gd:"-"`
 	State *models.AppState `gd:"-"`
 
+	titleBar  *TitleBar
 	toolbar   *Toolbar
 	schema    *SchemaPanel
 	sqlPanel  *SQLPanel
@@ -252,6 +323,9 @@ func (a *App) Ready() {
 	outerVBox.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	outerVBox.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
 	outerVBox.AsControl().AddThemeConstantOverride("separation", 0)
+
+	// ── Title bar ────────────────────────────────────────────────────
+	a.titleBar = new(TitleBar)
 
 	// ── Toolbar strip ────────────────────────────────────────────────
 	toolbarWrap := MarginContainer.New()
@@ -329,6 +403,7 @@ func (a *App) Ready() {
 	statusWrap.AsNode().AddChild(statusMargin.AsNode())
 
 	// ── Assemble ─────────────────────────────────────────────────────
+	outerVBox.AsNode().AddChild(a.titleBar.AsNode())
 	outerVBox.AsNode().AddChild(toolbarWrap.AsNode())
 	outerVBox.AsNode().AddChild(split.AsNode())
 	outerVBox.AsNode().AddChild(statusWrap.AsNode())
@@ -341,6 +416,7 @@ func (a *App) onFileSelected(path string) {
 	a.State.FilePath = path
 	a.State.CurrentSQL = db.DefaultQuery(path)
 	a.sqlPanel.SetSQL(a.State.CurrentSQL)
+	a.titleBar.SetFileInfo(path)
 
 	cols, err := a.Duck.Schema(path)
 	if err != nil {
@@ -370,6 +446,7 @@ func (a *App) execQuery() {
 
 // RegisterAll registers all custom classes with the engine.
 func RegisterAll() {
+	classdb.Register[TitleBar]()
 	classdb.Register[Toolbar]()
 	classdb.Register[SchemaPanel]()
 	classdb.Register[SQLPanel]()

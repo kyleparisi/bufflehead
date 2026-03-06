@@ -46,37 +46,37 @@ func makeStyleBoxPadded(bg Color.RGBA, radius int, border int, borderColor Color
 }
 
 func applyButtonTheme(c Control.Instance) {
-	normal := makeStyleBoxPadded(colorAccent, 3, 0, colorBorder, 4)
-	hover := makeStyleBoxPadded(Color.RGBA{R: 0.22, G: 0.40, B: 0.62, A: 1}, 3, 0, colorBorder, 4)
-	pressed := makeStyleBoxPadded(Color.RGBA{R: 0.14, G: 0.28, B: 0.46, A: 1}, 3, 0, colorBorder, 4)
+	normal := makeStyleBoxPadded(colorAccent, 3, 0, colorBorder, 5)
+	hover := makeStyleBoxPadded(Color.RGBA{R: 0.22, G: 0.40, B: 0.62, A: 1}, 3, 0, colorBorder, 5)
+	pressed := makeStyleBoxPadded(Color.RGBA{R: 0.14, G: 0.28, B: 0.46, A: 1}, 3, 0, colorBorder, 5)
 	c.AddThemeStyleboxOverride("normal", normal.AsStyleBox())
 	c.AddThemeStyleboxOverride("hover", hover.AsStyleBox())
 	c.AddThemeStyleboxOverride("pressed", pressed.AsStyleBox())
 	c.AddThemeColorOverride("font_color", colorTextBright)
 	c.AddThemeColorOverride("font_hover_color", colorTextBright)
-	c.AddThemeFontSizeOverride("font_size", 12)
+	c.AddThemeFontSizeOverride("font_size", 13)
 }
 
 func applySecondaryButtonTheme(c Control.Instance) {
-	normal := makeStyleBoxPadded(colorBtnNormal, 3, 1, colorBorder, 4)
-	hover := makeStyleBoxPadded(colorBtnHover, 3, 1, colorBorder, 4)
+	normal := makeStyleBoxPadded(colorBtnNormal, 3, 1, colorBorder, 5)
+	hover := makeStyleBoxPadded(colorBtnHover, 3, 1, colorBorder, 5)
 	c.AddThemeStyleboxOverride("normal", normal.AsStyleBox())
 	c.AddThemeStyleboxOverride("hover", hover.AsStyleBox())
 	c.AddThemeStyleboxOverride("pressed", hover.AsStyleBox())
 	c.AddThemeColorOverride("font_color", colorTextMuted)
 	c.AddThemeColorOverride("font_hover_color", colorText)
-	c.AddThemeFontSizeOverride("font_size", 11)
+	c.AddThemeFontSizeOverride("font_size", 13)
 }
 
 func applyInputTheme(c Control.Instance) {
-	normal := makeStyleBoxPadded(colorBgInput, 3, 1, colorBorder, 4)
-	focus := makeStyleBoxPadded(colorBgInput, 3, 1, colorAccent, 4)
+	normal := makeStyleBoxPadded(colorBgInput, 3, 1, colorBorder, 5)
+	focus := makeStyleBoxPadded(colorBgInput, 3, 1, colorAccent, 5)
 	c.AddThemeStyleboxOverride("normal", normal.AsStyleBox())
 	c.AddThemeStyleboxOverride("focus", focus.AsStyleBox())
 	c.AddThemeStyleboxOverride("read_only", normal.AsStyleBox())
 	c.AddThemeColorOverride("font_color", colorText)
 	c.AddThemeColorOverride("font_placeholder_color", colorTextDim)
-	c.AddThemeFontSizeOverride("font_size", 12)
+	c.AddThemeFontSizeOverride("font_size", 13)
 }
 
 func applyTreeTheme(c Control.Instance) {
@@ -98,7 +98,7 @@ func applyTreeTheme(c Control.Instance) {
 
 	c.AddThemeColorOverride("font_color", colorText)
 	c.AddThemeColorOverride("title_button_color", colorTextMuted)
-	c.AddThemeFontSizeOverride("font_size", 11)
+	c.AddThemeFontSizeOverride("font_size", 13)
 
 	// Minimal scrollbar
 	empty := StyleBoxEmpty.New()
@@ -115,7 +115,7 @@ func applySidebarTreeTheme(c Control.Instance) {
 	c.AddThemeStyleboxOverride("selected_focus", selected.AsStyleBox())
 
 	c.AddThemeColorOverride("font_color", colorText)
-	c.AddThemeFontSizeOverride("font_size", 11)
+	c.AddThemeFontSizeOverride("font_size", 13)
 }
 
 func applyTextEditTheme(c Control.Instance) {
@@ -124,7 +124,7 @@ func applyTextEditTheme(c Control.Instance) {
 	c.AddThemeStyleboxOverride("normal", normal.AsStyleBox())
 	c.AddThemeStyleboxOverride("focus", focus.AsStyleBox())
 	c.AddThemeColorOverride("font_color", colorText)
-	c.AddThemeFontSizeOverride("font_size", 12)
+	c.AddThemeFontSizeOverride("font_size", 13)
 }
 
 func applyLabelTheme(c Control.Instance, dim bool) {
@@ -133,12 +133,27 @@ func applyLabelTheme(c Control.Instance, dim bool) {
 	} else {
 		c.AddThemeColorOverride("font_color", colorText)
 	}
-	c.AddThemeFontSizeOverride("font_size", 11)
+	c.AddThemeFontSizeOverride("font_size", 13)
 }
 
 func applyStatusBarTheme(c Control.Instance) {
 	c.AddThemeColorOverride("font_color", colorTextMuted)
-	c.AddThemeFontSizeOverride("font_size", 10)
+	c.AddThemeFontSizeOverride("font_size", 13)
+}
+
+// Title bar colors
+var (
+	colorTitleBar  = Color.RGBA{R: 0.11, G: 0.11, B: 0.12, A: 1} // #1c1c1e
+	colorTitlePill = Color.RGBA{R: 0.23, G: 0.23, B: 0.24, A: 1} // #3a3a3c
+)
+
+func applyTitleBarTheme(c Control.Instance) {
+	applyPanelBg(c, colorTitleBar)
+}
+
+func applyPillTheme(c Control.Instance) {
+	pill := makeStyleBoxPadded(colorTitlePill, 6, 0, colorBorder, 6)
+	c.AddThemeStyleboxOverride("panel", pill.AsStyleBox())
 }
 
 func applyPanelBg(c Control.Instance, bg Color.RGBA) {
