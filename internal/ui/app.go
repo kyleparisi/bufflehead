@@ -224,6 +224,7 @@ type SchemaPanel struct {
 	allTables        []db.TableInfo
 	checkMode        bool
 	checkBoxes       []CheckBox.Instance
+	checkRows        []HBoxContainer.Instance
 }
 
 func (s *SchemaPanel) Ready() {
@@ -299,12 +300,13 @@ func (s *SchemaPanel) getCheckedColumns() []string {
 
 func (s *SchemaPanel) filterCols(query string) {
 	q := strings.ToLower(query)
-	// Clear existing checkboxes
-	for _, cb := range s.checkBoxes {
-		s.Super().AsNode().RemoveChild(cb.AsNode())
-		cb.AsNode().QueueFree()
+	// Clear existing rows
+	for _, row := range s.checkRows {
+		s.Super().AsNode().RemoveChild(row.AsNode())
+		row.AsNode().QueueFree()
 	}
 	s.checkBoxes = nil
+	s.checkRows = nil
 
 	for _, col := range s.allCols {
 		if q != "" && !strings.Contains(strings.ToLower(col.Name), q) {
@@ -314,19 +316,35 @@ func (s *SchemaPanel) filterCols(query string) {
 		if col.Nullable {
 			typeSuffix += "?"
 		}
+		row := HBoxContainer.New()
+		row.AsControl().AddThemeConstantOverride("separation", 4)
+
 		cb := CheckBox.New()
-		cb.AsButton().SetText(col.Name + "  " + typeSuffix)
 		cb.AsBaseButton().SetButtonPressed(true)
 		cb.AsControl().AddThemeFontSizeOverride("font_size", 12)
-		cb.AsControl().AddThemeColorOverride("font_color", colorText)
 		cb.AsControl().SetTooltipText(col.Name)
 		cb.AsBaseButton().OnToggled(func(pressed bool) {
 			if s.OnColumnsChanged != nil {
 				s.OnColumnsChanged(s.getCheckedColumns())
 			}
 		})
-		s.Super().AsNode().AddChild(cb.AsNode())
+
+		nameLabel := Label.New()
+		nameLabel.SetText(col.Name)
+		nameLabel.AsControl().AddThemeFontSizeOverride("font_size", 12)
+		nameLabel.AsControl().AddThemeColorOverride("font_color", colorText)
+
+		typeLabel := Label.New()
+		typeLabel.SetText(typeSuffix)
+		typeLabel.AsControl().AddThemeFontSizeOverride("font_size", 10)
+		typeLabel.AsControl().AddThemeColorOverride("font_color", colorTextDim)
+
+		row.AsNode().AddChild(cb.AsNode())
+		row.AsNode().AddChild(nameLabel.AsNode())
+		row.AsNode().AddChild(typeLabel.AsNode())
+		s.Super().AsNode().AddChild(row.AsNode())
 		s.checkBoxes = append(s.checkBoxes, cb)
+		s.checkRows = append(s.checkRows, row)
 	}
 }
 
@@ -335,12 +353,13 @@ func (s *SchemaPanel) SetTables(tables []db.TableInfo) {
 	s.allCols = nil
 	s.checkMode = false
 	s.searchBox.SetText("")
-	// Clear checkboxes
-	for _, cb := range s.checkBoxes {
-		s.Super().AsNode().RemoveChild(cb.AsNode())
-		cb.AsNode().QueueFree()
+	// Clear checkbox rows
+	for _, row := range s.checkRows {
+		s.Super().AsNode().RemoveChild(row.AsNode())
+		row.AsNode().QueueFree()
 	}
 	s.checkBoxes = nil
+	s.checkRows = nil
 	s.tree.AsCanvasItem().SetVisible(true)
 	s.filterTables("")
 }
