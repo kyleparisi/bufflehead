@@ -2,6 +2,7 @@ package ui
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -36,6 +37,7 @@ func (m *AppMenu) Setup() {
 
 	// New Window (Cmd+N)
 	NativeMenu.AddItem(m.fileMenu, "New Window", func(tag any) {
+		fmt.Println("[menu] New Window triggered")
 		if m.OnNewWindow != nil {
 			m.OnNewWindow()
 		}

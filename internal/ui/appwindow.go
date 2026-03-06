@@ -427,6 +427,7 @@ func createSecondaryWindow(duck *db.DB, onNewWindow func()) *AppWindow {
 	win.SetTitle("Parquet Viewer")
 	win.SetSize(Vector2i.New(1440, 900))
 	win.SetContentScaleFactor(2.0)
+	win.SetExtendToTitle(true)
 
 	aw := &AppWindow{
 		window:      win,
