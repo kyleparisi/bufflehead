@@ -457,6 +457,8 @@ func (a *App) Ready() {
 
 	a.tabBar = TabBar.New()
 	a.tabBar.SetTabCloseDisplayPolicy(TabBar.CloseButtonShowActiveOnly)
+	a.tabBar.SetClipTabs(true)
+	a.tabBar.SetMaxTabWidth(200)
 	a.tabBar.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	applyTabBarTheme(a.tabBar.AsControl())
 

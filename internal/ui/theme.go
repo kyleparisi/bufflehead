@@ -4,6 +4,7 @@ import (
 	"graphics.gd/classdb/Control"
 	"graphics.gd/classdb/StyleBoxEmpty"
 	"graphics.gd/classdb/StyleBoxFlat"
+	"graphics.gd/classdb/SystemFont"
 	"graphics.gd/variant/Color"
 )
 
@@ -176,20 +177,45 @@ func applyPanelBg(c Control.Instance, bg Color.RGBA) {
 }
 
 func applyTabBarTheme(c Control.Instance) {
-	c.AddThemeFontSizeOverride("font_size", 13)
+	c.AddThemeFontSizeOverride("font_size", 12)
 	c.AddThemeColorOverride("font_selected_color", colorTextBright)
 	c.AddThemeColorOverride("font_unselected_color", colorTextDim)
 	c.AddThemeColorOverride("font_hovered_color", colorText)
 
-	// Active tab style
-	active := makeStyleBoxPadded(colorBgSidebar, 4, 2, colorBorder, 0)
+	// Mono system font
+	mono := SystemFont.New()
+	mono.SetFontNames([]string{"SF Mono", "Menlo", "monospace"})
+	c.AddThemeFontOverride("font", mono.AsFont())
+
+	// Tighter tab padding
+	active := StyleBoxFlat.New()
+	active.SetBgColor(colorBgSidebar)
+	active.SetCornerRadiusAll(3)
+	active.AsStyleBox().SetContentMarginLeft(6)
+	active.AsStyleBox().SetContentMarginTop(2)
+	active.AsStyleBox().SetContentMarginRight(6)
+	active.AsStyleBox().SetContentMarginBottom(2)
 	c.AddThemeStyleboxOverride("tab_selected", active.AsStyleBox())
 
-	// Inactive tab
-	inactive := makeStyleBoxPadded(colorBg, 4, 2, colorBg, 0)
+	inactive := StyleBoxFlat.New()
+	inactive.SetBgColor(colorBg)
+	inactive.SetCornerRadiusAll(3)
+	inactive.AsStyleBox().SetContentMarginLeft(6)
+	inactive.AsStyleBox().SetContentMarginTop(2)
+	inactive.AsStyleBox().SetContentMarginRight(6)
+	inactive.AsStyleBox().SetContentMarginBottom(2)
 	c.AddThemeStyleboxOverride("tab_unselected", inactive.AsStyleBox())
 
-	// Hovered tab
-	hovered := makeStyleBoxPadded(colorBtnHover, 4, 2, colorBtnHover, 0)
+	hovered := StyleBoxFlat.New()
+	hovered.SetBgColor(colorBtnHover)
+	hovered.SetCornerRadiusAll(3)
+	hovered.AsStyleBox().SetContentMarginLeft(6)
+	hovered.AsStyleBox().SetContentMarginTop(2)
+	hovered.AsStyleBox().SetContentMarginRight(6)
+	hovered.AsStyleBox().SetContentMarginBottom(2)
 	c.AddThemeStyleboxOverride("tab_hovered", hovered.AsStyleBox())
+
+	// Smaller close button icon and spacing
+	c.AddThemeConstantOverride("h_separation", 4)
+	c.AddThemeConstantOverride("icon_max_width", 12)
 }
