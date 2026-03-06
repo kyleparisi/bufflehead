@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 
+	"parquet-viewer/internal/control"
 	"parquet-viewer/internal/db"
 	"parquet-viewer/internal/models"
 	"parquet-viewer/internal/ui"
@@ -40,9 +41,13 @@ func main() {
 	}
 	defer duck.Close()
 
+	ctrlServer := control.New(9900)
+	ctrlServer.Start()
+
 	app := new(ui.App)
 	app.Duck = duck
 	app.State = models.NewAppState()
+	app.ControlServer = ctrlServer
 	SceneTree.Add(app.AsNode())
 
 	startup.Scene()

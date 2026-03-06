@@ -1,8 +1,10 @@
 package ui
 
 import (
+	"encoding/json"
 	"fmt"
 
+	"parquet-viewer/internal/control"
 	"parquet-viewer/internal/db"
 	"parquet-viewer/internal/models"
 
@@ -14,6 +16,7 @@ import (
 	"graphics.gd/classdb/Input"
 	"graphics.gd/classdb/InputEvent"
 	"graphics.gd/classdb/InputEventMouseButton"
+	"graphics.gd/variant/Float"
 	"graphics.gd/variant/Object"
 	"graphics.gd/classdb/HSplitContainer"
 	"graphics.gd/classdb/Label"
@@ -337,8 +340,9 @@ func (s *StatusBar) SetStatus(msg string) {
 type App struct {
 	MarginContainer.Extension[App] `gd:"ParquetViewer"`
 
-	Duck  *db.DB           `gd:"-"`
-	State *models.AppState `gd:"-"`
+	Duck          *db.DB            `gd:"-"`
+	State         *models.AppState  `gd:"-"`
+	ControlServer *control.Server   `gd:"-"`
 
 	titleBar  *TitleBar
 	toolbar   *Toolbar
@@ -475,6 +479,132 @@ func (a *App) Ready() {
 
 	bg.AsNode().AddChild(outerVBox.AsNode())
 	a.AsNode().AddChild(bg.AsNode())
+
+	// Wire up control server state provider
+	if a.ControlServer != nil {
+		a.ControlServer.SetStateProvider(func() (json.RawMessage, error) {
+			state := map[string]any{
+				"filePath":   a.State.FilePath,
+				"userSQL":    a.State.UserSQL,
+				"sortColumn": a.State.SortColumn,
+				"sortDir":    int(a.State.SortDir),
+				"pageOffset": a.State.PageOffset,
+				"pageSize":   a.State.PageSize,
+				"rowCount":   0,
+				"columns":    []string{},
+			}
+			if a.State.Result != nil {
+				state["rowCount"] = a.State.Result.Total
+				state["columns"] = a.State.Result.Columns
+			}
+			if a.State.Schema != nil {
+				schema := make([]map[string]any, len(a.State.Schema))
+				for i, c := range a.State.Schema {
+					schema[i] = map[string]any{
+						"name": c.Name, "type": c.DataType, "nullable": c.Nullable,
+					}
+				}
+				state["schema"] = schema
+			}
+			return json.Marshal(state)
+		})
+	}
+}
+
+func (a *App) Process(delta Float.X) {
+	if a.ControlServer == nil {
+		return
+	}
+	for {
+		select {
+		case cmd := <-a.ControlServer.Commands():
+			a.handleControlCommand(cmd)
+		default:
+			return
+		}
+	}
+}
+
+func (a *App) handleControlCommand(cmd *control.Command) {
+	defer func() {
+		if r := recover(); r != nil {
+			cmd.Respond(control.Result{Error: fmt.Sprintf("panic: %v", r)})
+		}
+	}()
+	switch cmd.Action {
+	case "open":
+		var d control.OpenData
+		if err := json.Unmarshal(cmd.Data, &d); err != nil {
+			cmd.Respond(control.Result{Error: err.Error()})
+			return
+		}
+		a.onFileSelected(d.Path)
+		a.toolbar.fileLabel.SetText(d.Path)
+		cmd.Respond(control.Result{OK: true})
+
+	case "sort":
+		var d control.SortData
+		if err := json.Unmarshal(cmd.Data, &d); err != nil {
+			cmd.Respond(control.Result{Error: err.Error()})
+			return
+		}
+		if a.State.Result == nil || d.Column >= len(a.State.Result.Columns) {
+			cmd.Respond(control.Result{Error: "invalid column or no data loaded"})
+			return
+		}
+		colName := a.State.Result.Columns[d.Column]
+		if a.State.SortColumn == colName {
+			switch a.State.SortDir {
+			case models.SortAsc:
+				a.State.SortDir = models.SortDesc
+			case models.SortDesc:
+				a.State.SortColumn = ""
+				a.State.SortDir = models.SortNone
+			default:
+				a.State.SortDir = models.SortAsc
+			}
+		} else {
+			a.State.SortColumn = colName
+			a.State.SortDir = models.SortAsc
+		}
+		a.State.PageOffset = 0
+		a.execQuery()
+		cmd.Respond(control.Result{OK: true})
+
+	case "query":
+		var d control.QueryData
+		if err := json.Unmarshal(cmd.Data, &d); err != nil {
+			cmd.Respond(control.Result{Error: err.Error()})
+			return
+		}
+		a.State.UserSQL = d.SQL
+		a.State.PageOffset = 0
+		a.State.SortColumn = ""
+		a.State.SortDir = models.SortNone
+		a.sqlPanel.SetSQL(d.SQL)
+		a.execQuery()
+		cmd.Respond(control.Result{OK: true})
+
+	case "page":
+		var d control.PageData
+		if err := json.Unmarshal(cmd.Data, &d); err != nil {
+			cmd.Respond(control.Result{Error: err.Error()})
+			return
+		}
+		a.State.PageOffset = d.Offset
+		a.execQuery()
+		cmd.Respond(control.Result{OK: true})
+
+	case "reset_sort":
+		a.State.SortColumn = ""
+		a.State.SortDir = models.SortNone
+		a.State.PageOffset = 0
+		a.execQuery()
+		cmd.Respond(control.Result{OK: true})
+
+	default:
+		cmd.Respond(control.Result{Error: "unknown action: " + cmd.Action})
+	}
 }
 
 func (a *App) onFileSelected(path string) {
