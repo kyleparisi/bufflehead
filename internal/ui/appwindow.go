@@ -410,6 +410,9 @@ func (w *AppWindow) showTabView() {
 func (w *AppWindow) onFileSelected(path string) {
 	if len(w.tabs) == 0 {
 		w.addNewTab()
+	} else if ts := w.currentTab(); ts != nil && ts.State.FilePath != "" {
+		// Current tab has a file — open in new tab
+		w.addNewTab()
 	}
 	ts := w.currentTab()
 	if ts == nil {

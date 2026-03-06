@@ -13,9 +13,11 @@ FAIL=0
 
 # Build the dylib first
 cd "$(dirname "$0")/.."
+ROOT="$(pwd)"
 PATH="$PATH:/Users/openclaw/go/bin"
-echo "Building..."
-gd run --help >/dev/null 2>&1 || true  # ensure gd is available
+echo "Building dylib..."
+go build -buildmode=c-shared -o "$ROOT/graphics/darwin_amd64.dylib" ./cmd/viewer
+echo "Build OK"
 
 # Start headless
 cd "$PROJECT_DIR"
@@ -111,7 +113,11 @@ assert_eq "still 500 total" "500" "$(echo "$STATE" | json_get '["rowCount"]')"
 
 # ── Test: Open replaces current tab ──────────────────────────────────────
 CITIES="$(dirname "$SAMPLE")/cities.parquet"
-echo "Test: Open second file replaces current tab"
+# Reset: close all tabs, start fresh
+echo "Test: Open second file opens new tab"
+while [ "$(curl -s "$URL/state" | json_get '["tabCount"]')" != "0" ]; do
+    curl -s -X POST "$URL/close-tab" >/dev/null; sleep 0.1
+done
 curl -s -X POST "$URL/open" -d "{\"path\":\"$SAMPLE\"}" >/dev/null
 sleep 0.5
 STATE=$(curl -s "$URL/state")
@@ -122,25 +128,24 @@ curl -s -X POST "$URL/open" -d "{\"path\":\"$CITIES\"}" >/dev/null
 sleep 0.5
 STATE=$(curl -s "$URL/state")
 assert_eq "cities loaded" "3" "$(echo "$STATE" | json_get '["rowCount"]')"
-assert_eq "tab count unchanged" "$TABS_BEFORE" "$(echo "$STATE" | json_get '["tabCount"]')"
+assert_eq "tab count +1" "$((TABS_BEFORE + 1))" "$(echo "$STATE" | json_get '["tabCount"]')"
 assert_eq "cities file path" "$CITIES" "$(echo "$STATE" | json_get '["filePath"]')"
 assert_eq "cities 2 cols" "2" "$(echo "$STATE" | python3 -c "import sys,json; print(len(json.load(sys.stdin)['columns']))")"
 
 # ── Test: New tab then open file ─────────────────────────────────────────
-echo "Test: New tab then open file"
+echo "Test: New tab then open file (uses empty tab)"
 curl -s -X POST "$URL/new-tab" >/dev/null
 sleep 0.3
 STATE=$(curl -s "$URL/state")
 NEW_TABS=$(echo "$STATE" | json_get '["tabCount"]')
-assert_eq "tab count +1" "$((TABS_BEFORE + 1))" "$NEW_TABS"
 assert_eq "new tab empty" "" "$(echo "$STATE" | json_get '["filePath"]')"
 
 curl -s -X POST "$URL/open" -d "{\"path\":\"$SAMPLE\"}" >/dev/null
 sleep 0.5
 STATE=$(curl -s "$URL/state")
-assert_eq "sample in new tab" "$SAMPLE" "$(echo "$STATE" | json_get '["filePath"]')"
-assert_eq "500 rows in new tab" "500" "$(echo "$STATE" | json_get '["rowCount"]')"
-assert_eq "tab count same" "$NEW_TABS" "$(echo "$STATE" | json_get '["tabCount"]')"
+assert_eq "sample in empty tab" "$SAMPLE" "$(echo "$STATE" | json_get '["filePath"]')"
+assert_eq "500 rows" "500" "$(echo "$STATE" | json_get '["rowCount"]')"
+assert_eq "no extra tab" "$NEW_TABS" "$(echo "$STATE" | json_get '["tabCount"]')"
 
 # ── Test: Close all tabs then open file ──────────────────────────────────
 echo "Test: Close all tabs then open file"

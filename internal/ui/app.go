@@ -3,6 +3,7 @@ package ui
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	"parquet-viewer/internal/control"
@@ -330,6 +331,14 @@ func (d *DataGrid) SetResult(r *db.QueryResult) {
 		for i, cell := range row {
 			item.SetText(i, cell)
 		}
+	}
+}
+
+func debugLog(msg string) {
+	f, _ := os.OpenFile("/tmp/pv-debug.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if f != nil {
+		fmt.Fprintln(f, msg)
+		f.Close()
 	}
 }
 
