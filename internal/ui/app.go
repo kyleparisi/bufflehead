@@ -29,6 +29,7 @@ import (
 	"graphics.gd/classdb/Tree"
 	"graphics.gd/classdb/TreeItem"
 	"graphics.gd/classdb/VBoxContainer"
+	"graphics.gd/classdb/Window"
 	"graphics.gd/variant/Vector2"
 
 )
@@ -533,6 +534,26 @@ func (a *App) Ready() {
 
 	bg.AsNode().AddChild(outerVBox.AsNode())
 	a.AsNode().AddChild(bg.AsNode())
+
+	// Setup file drag & drop
+	if tree, ok := Object.As[SceneTree.Instance](Engine.GetMainLoop()); ok {
+		if root := tree.Root(); root != Window.Nil {
+			root.OnFilesDropped(func(files []string) {
+				for _, f := range files {
+					if len(f) > 8 && f[len(f)-8:] == ".parquet" {
+						a.onFileSelected(f)
+						a.toolbar.fileLabel.SetText(f)
+						return
+					}
+				}
+				// If no .parquet found, try the first file anyway
+				if len(files) > 0 {
+					a.onFileSelected(files[0])
+					a.toolbar.fileLabel.SetText(files[0])
+				}
+			})
+		}
+	}
 
 	// Setup native menu bar
 	a.appMenu = &AppMenu{
