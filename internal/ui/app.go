@@ -290,9 +290,9 @@ func (s *SchemaPanel) SetCheckedColumns(selected []string) {
 
 func (s *SchemaPanel) selectOnly(target CheckBox.Instance) {
 	for _, cb := range s.checkBoxes {
-		cb.AsBaseButton().SetButtonPressed(false)
+		cb.AsBaseButton().SetPressedNoSignal(false)
 	}
-	target.AsBaseButton().SetButtonPressed(true)
+	target.AsBaseButton().SetPressedNoSignal(true)
 	if s.OnColumnsChanged != nil {
 		s.OnColumnsChanged(s.getCheckedColumns())
 	}
@@ -335,6 +335,7 @@ func (s *SchemaPanel) filterCols(query string) {
 		cb.AsBaseButton().SetButtonPressed(true)
 		cb.AsControl().AddThemeFontSizeOverride("font_size", 12)
 		cb.AsControl().SetTooltipText(col.Name)
+		// CheckBox keeps default MouseFilterStop for click handling
 		cb.AsBaseButton().OnToggled(func(pressed bool) {
 			if s.OnColumnsChanged != nil {
 				s.OnColumnsChanged(s.getCheckedColumns())
@@ -345,16 +346,18 @@ func (s *SchemaPanel) filterCols(query string) {
 		nameLabel.SetText(col.Name)
 		nameLabel.AsControl().AddThemeFontSizeOverride("font_size", 12)
 		nameLabel.AsControl().AddThemeColorOverride("font_color", colorText)
+		nameLabel.AsControl().SetMouseFilter(Control.MouseFilterPass)
 
 		typeLabel := Label.New()
 		typeLabel.SetText(typeSuffix)
 		typeLabel.AsControl().AddThemeFontSizeOverride("font_size", 10)
 		typeLabel.AsControl().AddThemeColorOverride("font_color", colorTextDim)
+		typeLabel.AsControl().SetMouseFilter(Control.MouseFilterPass)
 
 		// Spacer pushes "only" to the right
 		spacer := Control.New()
 		spacer.SetSizeFlagsHorizontal(Control.SizeExpandFill)
-		spacer.SetMouseFilter(Control.MouseFilterIgnore)
+		spacer.SetMouseFilter(Control.MouseFilterPass)
 
 		// "only" link — hidden until hover
 		onlyLabel := Label.New()
