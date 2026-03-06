@@ -16,9 +16,10 @@ type Command struct {
 
 // Result is returned after the main thread processes a command.
 type Result struct {
-	OK    bool            `json:"ok"`
-	Error string          `json:"error,omitempty"`
-	Data  json.RawMessage `json:"data,omitempty"`
+	OK       bool            `json:"ok"`
+	Error    string          `json:"error,omitempty"`
+	Data     json.RawMessage `json:"data,omitempty"`
+	RawBytes []byte          `json:"-"` // for binary responses like screenshots
 }
 
 // OpenData is the payload for the "open" action.
@@ -117,6 +118,21 @@ func (s *Server) Start() {
 
 	mux.HandleFunc("POST /reset-sort", func(w http.ResponseWriter, r *http.Request) {
 		s.handleCommand(w, r, "reset_sort")
+	})
+
+	mux.HandleFunc("GET /screenshot", func(w http.ResponseWriter, r *http.Request) {
+		cmd := &Command{
+			Action: "screenshot",
+			result: make(chan Result, 1),
+		}
+		s.commands <- cmd
+		res := <-cmd.result
+		if !res.OK {
+			http.Error(w, res.Error, 500)
+			return
+		}
+		w.Header().Set("Content-Type", "image/png")
+		w.Write(res.RawBytes)
 	})
 
 	go func() {

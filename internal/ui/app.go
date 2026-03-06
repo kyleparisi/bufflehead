@@ -12,6 +12,7 @@ import (
 	"graphics.gd/classdb/Button"
 	"graphics.gd/classdb/Control"
 	"graphics.gd/classdb/DisplayServer"
+	"graphics.gd/classdb/Engine"
 	"graphics.gd/classdb/HBoxContainer"
 	"graphics.gd/classdb/Input"
 	"graphics.gd/classdb/InputEvent"
@@ -23,6 +24,7 @@ import (
 	"graphics.gd/classdb/LineEdit"
 	"graphics.gd/classdb/MarginContainer"
 	"graphics.gd/classdb/PanelContainer"
+	"graphics.gd/classdb/SceneTree"
 	"graphics.gd/classdb/TextEdit"
 	"graphics.gd/classdb/Tree"
 	"graphics.gd/classdb/TreeItem"
@@ -601,6 +603,18 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 		a.State.PageOffset = 0
 		a.execQuery()
 		cmd.Respond(control.Result{OK: true})
+
+	case "screenshot":
+		viewport := Engine.GetMainLoop()
+		if tree, ok := Object.As[SceneTree.Instance](viewport); ok {
+			root := tree.Root()
+			tex := root.AsViewport().GetTexture()
+			img := tex.AsTexture2D().GetImage()
+			pngBytes := img.SavePngToBuffer()
+			cmd.Respond(control.Result{OK: true, RawBytes: pngBytes})
+		} else {
+			cmd.Respond(control.Result{Error: "could not get viewport"})
+		}
 
 	default:
 		cmd.Respond(control.Result{Error: "unknown action: " + cmd.Action})
