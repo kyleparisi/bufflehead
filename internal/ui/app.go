@@ -302,7 +302,11 @@ func (d *DataGrid) SetResult(r *db.QueryResult) {
 type StatusBar struct {
 	HBoxContainer.Extension[StatusBar] `gd:"ParquetStatusBar"`
 
-	rowCount Label.Instance
+	rowCount  Label.Instance
+	pageLabel Label.Instance
+
+	OnPrevPage func()
+	OnNextPage func()
 }
 
 func (s *StatusBar) Ready() {
@@ -322,6 +326,33 @@ func (s *StatusBar) Ready() {
 	spacer := Control.New()
 	spacer.SetSizeFlagsHorizontal(Control.SizeExpandFill)
 
+	// Pagination controls
+	prevBtn := Button.New()
+	prevBtn.SetText("◀")
+	applySecondaryButtonTheme(prevBtn.AsControl())
+	prevBtn.AsBaseButton().OnPressed(func() {
+		if s.OnPrevPage != nil {
+			s.OnPrevPage()
+		}
+	})
+
+	s.pageLabel = Label.New()
+	s.pageLabel.SetText("Page 1")
+	applyStatusBarTheme(s.pageLabel.AsControl())
+
+	nextBtn := Button.New()
+	nextBtn.SetText("▶")
+	applySecondaryButtonTheme(nextBtn.AsControl())
+	nextBtn.AsBaseButton().OnPressed(func() {
+		if s.OnNextPage != nil {
+			s.OnNextPage()
+		}
+	})
+
+	sep := Label.New()
+	sep.SetText("·")
+	applyStatusBarTheme(sep.AsControl())
+
 	// Right: row count
 	s.rowCount = Label.New()
 	s.rowCount.SetText("Ready")
@@ -330,11 +361,19 @@ func (s *StatusBar) Ready() {
 	s.AsNode().AddChild(dataTab.AsNode())
 	s.AsNode().AddChild(structTab.AsNode())
 	s.AsNode().AddChild(spacer.AsNode())
+	s.AsNode().AddChild(prevBtn.AsNode())
+	s.AsNode().AddChild(s.pageLabel.AsNode())
+	s.AsNode().AddChild(nextBtn.AsNode())
+	s.AsNode().AddChild(sep.AsNode())
 	s.AsNode().AddChild(s.rowCount.AsNode())
 }
 
 func (s *StatusBar) SetStatus(msg string) {
 	s.rowCount.SetText(msg)
+}
+
+func (s *StatusBar) SetPage(page, totalPages int) {
+	s.pageLabel.SetText(fmt.Sprintf("Page %d / %d", page, totalPages))
 }
 
 // ── App root ───────────────────────────────────────────────────────────────
@@ -470,6 +509,18 @@ func (a *App) Ready() {
 	statusMargin.AsControl().AddThemeConstantOverride("margin_bottom", 4)
 
 	a.statusBar = new(StatusBar)
+	a.statusBar.OnPrevPage = func() {
+		if a.State.PageOffset-a.State.PageSize >= 0 {
+			a.State.PageOffset -= a.State.PageSize
+			a.execQuery()
+		}
+	}
+	a.statusBar.OnNextPage = func() {
+		if a.State.Result != nil && a.State.PageOffset+a.State.PageSize < int(a.State.Result.Total) {
+			a.State.PageOffset += a.State.PageSize
+			a.execQuery()
+		}
+	}
 	statusMargin.AsNode().AddChild(a.statusBar.AsNode())
 	statusWrap.AsNode().AddChild(statusMargin.AsNode())
 
@@ -654,7 +705,13 @@ func (a *App) execQuery() {
 	a.State.Result = result
 	a.dataGrid.SetResult(result)
 	a.dataGrid.UpdateColumnTitles(result.Columns, a.State.SortColumn, a.State.SortDir)
-	a.statusBar.SetStatus(fmt.Sprintf("1–%d of %d rows", len(result.Rows), result.Total))
+	start := a.State.PageOffset + 1
+	end := a.State.PageOffset + len(result.Rows)
+	a.statusBar.SetStatus(fmt.Sprintf("%d–%d of %d rows", start, end, result.Total))
+
+	page := (a.State.PageOffset / a.State.PageSize) + 1
+	totalPages := (int(result.Total) + a.State.PageSize - 1) / a.State.PageSize
+	a.statusBar.SetPage(page, totalPages)
 }
 
 // RegisterAll registers all custom classes with the engine.
