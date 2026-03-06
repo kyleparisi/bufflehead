@@ -288,6 +288,16 @@ func (s *SchemaPanel) SetCheckedColumns(selected []string) {
 	}
 }
 
+func (s *SchemaPanel) selectOnly(target CheckBox.Instance) {
+	for _, cb := range s.checkBoxes {
+		cb.AsBaseButton().SetButtonPressed(false)
+	}
+	target.AsBaseButton().SetButtonPressed(true)
+	if s.OnColumnsChanged != nil {
+		s.OnColumnsChanged(s.getCheckedColumns())
+	}
+}
+
 func (s *SchemaPanel) getCheckedColumns() []string {
 	var cols []string
 	for _, cb := range s.checkBoxes {
@@ -318,6 +328,8 @@ func (s *SchemaPanel) filterCols(query string) {
 		}
 		row := HBoxContainer.New()
 		row.AsControl().AddThemeConstantOverride("separation", 4)
+		row.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+		row.AsControl().SetMouseFilter(Control.MouseFilterStop)
 
 		cb := CheckBox.New()
 		cb.AsBaseButton().SetButtonPressed(true)
@@ -339,9 +351,47 @@ func (s *SchemaPanel) filterCols(query string) {
 		typeLabel.AsControl().AddThemeFontSizeOverride("font_size", 10)
 		typeLabel.AsControl().AddThemeColorOverride("font_color", colorTextDim)
 
+		// Spacer pushes "only" to the right
+		spacer := Control.New()
+		spacer.SetSizeFlagsHorizontal(Control.SizeExpandFill)
+		spacer.SetMouseFilter(Control.MouseFilterIgnore)
+
+		// "only" button — hidden until hover
+		onlyBtn := Button.New()
+		onlyBtn.SetText("only")
+		onlyBtn.AsControl().AddThemeFontSizeOverride("font_size", 10)
+		onlyBtn.AsControl().AddThemeColorOverride("font_color", colorTextMuted)
+		applySecondaryButtonTheme(onlyBtn.AsControl())
+		onlyBtn.AsCanvasItem().SetVisible(false)
+		onlyBtn.AsControl().SetMouseFilter(Control.MouseFilterStop)
+
+		// Capture index for "only" click
+		cbRef := cb
+		onlyBtn.AsBaseButton().OnPressed(func() {
+			s.selectOnly(cbRef)
+		})
+
+		// Hover: show "only" + highlight row
+		hoverBg := makeStyleBox(colorSelected, 0, 0, colorSelected)
+		normalBg := makeStyleBox(colorBgSidebar, 0, 0, colorBgSidebar)
+		row.AsControl().AddThemeStyleboxOverride("panel", normalBg.AsStyleBox())
+
+		onlyBtnRef := onlyBtn
+		rowRef := row
+		row.AsControl().OnMouseEntered(func() {
+			onlyBtnRef.AsCanvasItem().SetVisible(true)
+			rowRef.AsControl().AddThemeStyleboxOverride("panel", hoverBg.AsStyleBox())
+		})
+		row.AsControl().OnMouseExited(func() {
+			onlyBtnRef.AsCanvasItem().SetVisible(false)
+			rowRef.AsControl().AddThemeStyleboxOverride("panel", normalBg.AsStyleBox())
+		})
+
 		row.AsNode().AddChild(cb.AsNode())
 		row.AsNode().AddChild(nameLabel.AsNode())
 		row.AsNode().AddChild(typeLabel.AsNode())
+		row.AsNode().AddChild(spacer.AsNode())
+		row.AsNode().AddChild(onlyBtn.AsNode())
 		s.Super().AsNode().AddChild(row.AsNode())
 		s.checkBoxes = append(s.checkBoxes, cb)
 		s.checkRows = append(s.checkRows, row)
