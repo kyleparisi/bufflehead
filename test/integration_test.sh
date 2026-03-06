@@ -63,7 +63,7 @@ sleep 0.5
 STATE=$(curl -s "$URL/state")
 assert_eq "file path set" "$SAMPLE" "$(echo "$STATE" | json_get '["filePath"]')"
 assert_eq "500 rows" "500" "$(echo "$STATE" | json_get '["rowCount"]')"
-assert_eq "5 columns" "5" "$(echo "$STATE" | python3 -c "import sys,json; print(len(json.load(sys.stdin)['columns']))")"
+assert_eq "8 columns" "8" "$(echo "$STATE" | python3 -c "import sys,json; print(len(json.load(sys.stdin)['columns']))")"
 assert_eq "no sort" "" "$(echo "$STATE" | json_get '["sortColumn"]')"
 assert_eq "sort dir none" "0" "$(echo "$STATE" | json_get '["sortDir"]')"
 
@@ -108,3 +108,69 @@ sleep 0.5
 STATE=$(curl -s "$URL/state")
 assert_eq "offset 100" "100" "$(echo "$STATE" | json_get '["pageOffset"]')"
 assert_eq "still 500 total" "500" "$(echo "$STATE" | json_get '["rowCount"]')"
+
+# ── Test: Open replaces current tab ──────────────────────────────────────
+CITIES="$(dirname "$SAMPLE")/cities.parquet"
+echo "Test: Open second file replaces current tab"
+curl -s -X POST "$URL/open" -d "{\"path\":\"$SAMPLE\"}" >/dev/null
+sleep 0.5
+STATE=$(curl -s "$URL/state")
+assert_eq "sample loaded" "500" "$(echo "$STATE" | json_get '["rowCount"]')"
+TABS_BEFORE=$(echo "$STATE" | json_get '["tabCount"]')
+
+curl -s -X POST "$URL/open" -d "{\"path\":\"$CITIES\"}" >/dev/null
+sleep 0.5
+STATE=$(curl -s "$URL/state")
+assert_eq "cities loaded" "3" "$(echo "$STATE" | json_get '["rowCount"]')"
+assert_eq "tab count unchanged" "$TABS_BEFORE" "$(echo "$STATE" | json_get '["tabCount"]')"
+assert_eq "cities file path" "$CITIES" "$(echo "$STATE" | json_get '["filePath"]')"
+assert_eq "cities 2 cols" "2" "$(echo "$STATE" | python3 -c "import sys,json; print(len(json.load(sys.stdin)['columns']))")"
+
+# ── Test: New tab then open file ─────────────────────────────────────────
+echo "Test: New tab then open file"
+curl -s -X POST "$URL/new-tab" >/dev/null
+sleep 0.3
+STATE=$(curl -s "$URL/state")
+NEW_TABS=$(echo "$STATE" | json_get '["tabCount"]')
+assert_eq "tab count +1" "$((TABS_BEFORE + 1))" "$NEW_TABS"
+assert_eq "new tab empty" "" "$(echo "$STATE" | json_get '["filePath"]')"
+
+curl -s -X POST "$URL/open" -d "{\"path\":\"$SAMPLE\"}" >/dev/null
+sleep 0.5
+STATE=$(curl -s "$URL/state")
+assert_eq "sample in new tab" "$SAMPLE" "$(echo "$STATE" | json_get '["filePath"]')"
+assert_eq "500 rows in new tab" "500" "$(echo "$STATE" | json_get '["rowCount"]')"
+assert_eq "tab count same" "$NEW_TABS" "$(echo "$STATE" | json_get '["tabCount"]')"
+
+# ── Test: Close all tabs then open file ──────────────────────────────────
+echo "Test: Close all tabs then open file"
+# Close all tabs
+for i in $(seq 1 $NEW_TABS); do
+    curl -s -X POST "$URL/close-tab" >/dev/null
+    sleep 0.2
+done
+STATE=$(curl -s "$URL/state")
+assert_eq "zero tabs" "0" "$(echo "$STATE" | json_get '["tabCount"]')"
+
+curl -s -X POST "$URL/open" -d "{\"path\":\"$CITIES\"}" >/dev/null
+sleep 0.5
+STATE=$(curl -s "$URL/state")
+assert_eq "auto-created tab" "1" "$(echo "$STATE" | json_get '["tabCount"]')"
+assert_eq "cities file" "$CITIES" "$(echo "$STATE" | json_get '["filePath"]')"
+assert_eq "3 rows" "3" "$(echo "$STATE" | json_get '["rowCount"]')"
+
+# ── Test: Select row populates detail ────────────────────────────────────
+echo "Test: Select row"
+curl -s -X POST "$URL/open" -d "{\"path\":\"$SAMPLE\"}" >/dev/null
+sleep 0.5
+RESULT=$(curl -s -X POST "$URL/select-row" -d '{"row":0}')
+assert_eq "select row ok" "True" "$(echo "$RESULT" | json_get '["ok"]')"
+RESULT=$(curl -s -X POST "$URL/select-row" -d '{"row":999}')
+assert_eq "out of range error" "False" "$(echo "$RESULT" | json_get '.get("ok", False)')"
+
+# ── Test: Search detail ──────────────────────────────────────────────────
+echo "Test: Search detail"
+curl -s -X POST "$URL/select-row" -d '{"row":0}' >/dev/null
+sleep 0.3
+RESULT=$(curl -s -X POST "$URL/search-detail" -d '{"query":"tags"}')
+assert_eq "search detail ok" "True" "$(echo "$RESULT" | json_get '["ok"]')"
