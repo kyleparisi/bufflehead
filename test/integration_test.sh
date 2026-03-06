@@ -228,3 +228,30 @@ assert_eq "corrupted returns error" "False" "$(echo "$RESULT" | json_get '.get("
 echo "Test: Invalid SQL shows error"
 RESULT=$(curl -s -X POST "$URL/query" -d '{"sql":"SELEKT * FORM nowhere"}')
 assert_eq "bad sql returns error" "False" "$(echo "$RESULT" | json_get '.get("ok", False)')"
+
+# ── Test: DuckDB database file ───────────────────────────────────────────
+DUCKDB="$TESTDATA/test.duckdb"
+echo "Test: Open DuckDB database"
+while [ "$(curl -s "$URL/state" | json_get '["tabCount"]')" != "0" ]; do
+    curl -s -X POST "$URL/close-tab" >/dev/null; sleep 0.1
+done
+RESULT=$(curl -s -X POST "$URL/open" -d "{\"path\":\"$DUCKDB\"}")
+assert_eq "duckdb open ok" "True" "$(echo "$RESULT" | json_get '["ok"]')"
+sleep 0.5
+STATE=$(curl -s "$URL/state")
+assert_eq "duckdb has rows" "True" "$(echo "$STATE" | python3 -c "import sys,json; print(json.load(sys.stdin)['rowCount'] > 0)")"
+assert_eq "duckdb has columns" "True" "$(echo "$STATE" | python3 -c "import sys,json; print(len(json.load(sys.stdin)['columns']) > 0)")"
+
+echo "Test: Query DuckDB table"
+curl -s -X POST "$URL/query" -d '{"sql":"SELECT * FROM users"}' >/dev/null
+sleep 0.5
+STATE=$(curl -s "$URL/state")
+assert_eq "users 3 rows" "3" "$(echo "$STATE" | json_get '["rowCount"]')"
+assert_eq "users has name" "True" "$(echo "$STATE" | python3 -c "import sys,json; print('name' in json.load(sys.stdin)['columns'])")"
+
+echo "Test: Query DuckDB view"
+curl -s -X POST "$URL/query" -d '{"sql":"SELECT * FROM user_orders"}' >/dev/null
+sleep 0.5
+STATE=$(curl -s "$URL/state")
+assert_eq "view 3 rows" "3" "$(echo "$STATE" | json_get '["rowCount"]')"
+assert_eq "view has amount" "True" "$(echo "$STATE" | python3 -c "import sys,json; print('amount' in json.load(sys.stdin)['columns'])")"

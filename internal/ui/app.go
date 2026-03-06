@@ -163,7 +163,8 @@ func (t *Toolbar) Ready() {
 type SchemaPanel struct {
 	VBoxContainer.Extension[SchemaPanel] `gd:"ParquetSchemaPanel"`
 
-	tree Tree.Instance
+	tree           Tree.Instance
+	OnTableClicked func(tableName string)
 }
 
 func (s *SchemaPanel) Ready() {
@@ -177,6 +178,17 @@ func (s *SchemaPanel) Ready() {
 	s.tree.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
 	s.tree.SetHideRoot(true)
 	applySidebarTreeTheme(s.tree.AsControl())
+
+	s.tree.OnItemActivated(func() {
+		selected := s.tree.GetSelected()
+		if selected == (TreeItem.Instance{}) || s.OnTableClicked == nil {
+			return
+		}
+		tableName := selected.GetTooltipText(0)
+		if tableName != "" {
+			s.OnTableClicked(tableName)
+		}
+	})
 
 	s.AsNode().AddChild(header.AsNode())
 	s.AsNode().AddChild(s.tree.AsNode())
@@ -194,6 +206,39 @@ func (s *SchemaPanel) SetSchema(cols []db.Column) {
 		}
 		item.SetText(0, col.Name)
 		item.SetText(1, typeSuffix)
+	}
+}
+
+func (s *SchemaPanel) SetTables(tables []db.TableInfo) {
+	s.tree.Clear()
+	s.tree.SetColumns(2)
+	root := s.tree.CreateItem()
+	for _, t := range tables {
+		tableItem := s.tree.MoreArgs().CreateItem(root, -1)
+		icon := "📋"
+		if t.Type == "VIEW" {
+			icon = "👁"
+		}
+		tableItem.SetText(0, icon+" "+t.Name)
+		tableItem.SetText(1, "")
+		tableItem.SetSelectable(0, true)
+		tableItem.SetSelectable(1, false)
+		// Store table name in tooltip for retrieval on click
+		tableItem.SetTooltipText(0, t.Name)
+
+		// Add columns as children (collapsed)
+		for _, col := range t.Columns {
+			colItem := s.tree.MoreArgs().CreateItem(tableItem, -1)
+			typeSuffix := col.DataType
+			if col.Nullable {
+				typeSuffix += "?"
+			}
+			colItem.SetText(0, "  "+col.Name)
+			colItem.SetText(1, typeSuffix)
+			colItem.SetSelectable(0, false)
+			colItem.SetSelectable(1, false)
+		}
+		tableItem.SetCollapsed(true)
 	}
 }
 
@@ -609,6 +654,7 @@ type tabState struct {
 	sqlPanel     *SQLPanel
 	dataGrid     *DataGrid
 	detailPanel  *RowDetailPanel
+	dbConn       *db.DB // separate connection for .duckdb files
 
 	// Container nodes for show/hide on tab switch
 	sidebarWrap PanelContainer.Instance
@@ -859,7 +905,7 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 			s.SortDir = models.SortAsc
 		}
 		s.PageOffset = 0
-		w.execQuery()
+		w.runCurrentQuery()
 		cmd.Respond(control.Result{OK: true})
 
 	case "query":
@@ -876,7 +922,7 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 			ts.State.SortDir = models.SortNone
 			ts.sqlPanel.SetSQL(d.SQL)
 		}
-		if err := w.execQuery(); err != nil {
+		if err := w.runCurrentQuery(); err != nil {
 			cmd.Respond(control.Result{Error: err.Error()})
 		} else {
 			cmd.Respond(control.Result{OK: true})
@@ -891,7 +937,7 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 		if s := w.currentState(); s != nil {
 			s.PageOffset = d.Offset
 		}
-		w.execQuery()
+		w.runCurrentQuery()
 		cmd.Respond(control.Result{OK: true})
 
 	case "reset_sort":
@@ -900,7 +946,7 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 			s.SortDir = models.SortNone
 			s.PageOffset = 0
 		}
-		w.execQuery()
+		w.runCurrentQuery()
 		cmd.Respond(control.Result{OK: true})
 
 	case "new_tab":

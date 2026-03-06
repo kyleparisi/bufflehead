@@ -26,6 +26,10 @@ type AppState struct {
 	PageSize   int
 	SortColumn string
 	SortDir    SortDirection
+
+	// Database mode (for .duckdb files)
+	IsDatabase  bool
+	ActiveTable string
 }
 
 // NewAppState returns defaults.

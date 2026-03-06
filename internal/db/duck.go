@@ -26,6 +26,13 @@ type QueryResult struct {
 	Total   int64
 }
 
+// TableInfo describes a table or view in a database.
+type TableInfo struct {
+	Name    string
+	Type    string // "table" or "view"
+	Columns []Column
+}
+
 // New opens an in-memory DuckDB instance.
 func New() (*DB, error) {
 	conn, err := sql.Open("duckdb", "")
@@ -35,9 +42,66 @@ func New() (*DB, error) {
 	return &DB{conn: conn}, nil
 }
 
+// OpenDB opens a DuckDB database file (read-only).
+func OpenDB(path string) (*DB, error) {
+	conn, err := sql.Open("duckdb", path+"?access_mode=read_only")
+	if err != nil {
+		return nil, fmt.Errorf("open duckdb db: %w", err)
+	}
+	return &DB{conn: conn}, nil
+}
+
 // Close releases the connection.
 func (d *DB) Close() error {
 	return d.conn.Close()
+}
+
+// Tables lists all tables and views in the database.
+func (d *DB) Tables() ([]TableInfo, error) {
+	rows, err := d.conn.Query(`
+		SELECT table_name, table_type 
+		FROM information_schema.tables 
+		WHERE table_schema = 'main'
+		ORDER BY table_type, table_name`)
+	if err != nil {
+		return nil, fmt.Errorf("list tables: %w", err)
+	}
+	defer rows.Close()
+
+	var tables []TableInfo
+	for rows.Next() {
+		var t TableInfo
+		if err := rows.Scan(&t.Name, &t.Type); err != nil {
+			return nil, err
+		}
+		tables = append(tables, t)
+	}
+	return tables, rows.Err()
+}
+
+// TableSchema returns column info for a table.
+func (d *DB) TableSchema(tableName string) ([]Column, error) {
+	rows, err := d.conn.Query(fmt.Sprintf(`
+		SELECT column_name, data_type, is_nullable
+		FROM information_schema.columns
+		WHERE table_schema = 'main' AND table_name = '%s'
+		ORDER BY ordinal_position`, tableName))
+	if err != nil {
+		return nil, fmt.Errorf("table schema: %w", err)
+	}
+	defer rows.Close()
+
+	var cols []Column
+	for rows.Next() {
+		var c Column
+		var nullable string
+		if err := rows.Scan(&c.Name, &c.DataType, &nullable); err != nil {
+			return nil, err
+		}
+		c.Nullable = nullable == "YES"
+		cols = append(cols, c)
+	}
+	return cols, rows.Err()
 }
 
 // Schema returns column info for a parquet file.

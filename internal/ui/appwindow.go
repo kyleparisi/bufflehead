@@ -113,14 +113,14 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 		ts := w.currentTab()
 		if ts != nil && ts.State.PageOffset-ts.State.PageSize >= 0 {
 			ts.State.PageOffset -= ts.State.PageSize
-			w.execQuery()
+			w.runCurrentQuery()
 		}
 	}
 	w.statusBar.OnNextPage = func() {
 		ts := w.currentTab()
 		if ts != nil && ts.State.Result != nil && ts.State.PageOffset+ts.State.PageSize < int(ts.State.Result.Total) {
 			ts.State.PageOffset += ts.State.PageSize
-			w.execQuery()
+			w.runCurrentQuery()
 		}
 	}
 	statusMargin.AsNode().AddChild(w.statusBar.AsNode())
@@ -274,7 +274,11 @@ func (w *AppWindow) addNewTab() {
 		ts.State.PageOffset = 0
 		ts.State.SortColumn = ""
 		ts.State.SortDir = models.SortNone
-		w.execQuery()
+		if ts.State.IsDatabase && ts.dbConn != nil {
+			w.execQueryWithDB(ts)
+		} else {
+			w.execQuery()
+		}
 	}
 	sqlWrap := MarginContainer.New()
 	sqlWrap.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
@@ -305,7 +309,11 @@ func (w *AppWindow) addNewTab() {
 			ts.State.SortDir = models.SortAsc
 		}
 		ts.State.PageOffset = 0
-		w.execQuery()
+		if ts.State.IsDatabase && ts.dbConn != nil {
+			w.execQueryWithDB(ts)
+		} else {
+			w.execQuery()
+		}
 	}
 
 	ts.dataGrid.OnRowSelected = func(rowIndex int) {
@@ -463,7 +471,20 @@ func (w *AppWindow) showTabView() {
 	w.tabBarWrap.AsCanvasItem().SetVisible(true)
 }
 
+func (w *AppWindow) isDuckDBFile(path string) bool {
+	for _, ext := range []string{".duckdb", ".db", ".ddb"} {
+		if len(path) > len(ext) && path[len(path)-len(ext):] == ext {
+			return true
+		}
+	}
+	return false
+}
+
 func (w *AppWindow) onFileSelected(path string) {
+	if w.isDuckDBFile(path) {
+		w.onDatabaseOpened(path)
+		return
+	}
 	if len(w.tabs) == 0 {
 		w.addNewTab()
 	} else if ts := w.currentTab(); ts != nil && ts.State.FilePath != "" {
@@ -496,6 +517,123 @@ func (w *AppWindow) onFileSelected(path string) {
 	meta, _ := w.duck.Metadata(path)
 	ts.State.Metadata = meta
 	w.execQuery()
+}
+
+// runCurrentQuery uses the right DB connection for the active tab.
+func (w *AppWindow) runCurrentQuery() error {
+	ts := w.currentTab()
+	if ts == nil {
+		return fmt.Errorf("no active tab")
+	}
+	if ts.State.IsDatabase && ts.dbConn != nil {
+		w.execQueryWithDB(ts)
+		return nil
+	}
+	return w.execQuery()
+}
+
+func (w *AppWindow) onDatabaseOpened(path string) {
+	if len(w.tabs) == 0 {
+		w.addNewTab()
+	} else if ts := w.currentTab(); ts != nil && ts.State.FilePath != "" {
+		w.addNewTab()
+	}
+	ts := w.currentTab()
+	if ts == nil {
+		return
+	}
+
+	// Open a read-only connection to the database
+	dbConn, err := db.OpenDB(path)
+	if err != nil {
+		w.statusBar.SetStatus("Error: " + err.Error())
+		ts.dataGrid.ShowError(err.Error())
+		return
+	}
+	// Close any previous db connection on this tab
+	if ts.dbConn != nil {
+		ts.dbConn.Close()
+	}
+	ts.dbConn = dbConn
+
+	ts.State.FilePath = path
+	ts.State.IsDatabase = true
+	ts.State.UserSQL = ""
+	ts.sqlPanel.SetSQL("")
+	w.titleBar.SetFileInfo(path)
+	w.updateTabTitle(w.activeTab)
+	w.toolbar.fileLabel.SetText(path)
+
+	// Load tables
+	tables, err := dbConn.Tables()
+	if err != nil {
+		w.statusBar.SetStatus("Error listing tables: " + err.Error())
+		ts.dataGrid.ShowError(err.Error())
+		return
+	}
+
+	// Load columns for each table
+	for i := range tables {
+		cols, err := dbConn.TableSchema(tables[i].Name)
+		if err == nil {
+			tables[i].Columns = cols
+		}
+	}
+
+	ts.schema.SetTables(tables)
+
+	// Wire table click to load data
+	ts.schema.OnTableClicked = func(tableName string) {
+		ts.State.ActiveTable = tableName
+		ts.State.UserSQL = fmt.Sprintf("SELECT * FROM \"%s\"", tableName)
+		ts.State.PageOffset = 0
+		ts.State.SortColumn = ""
+		ts.State.SortDir = models.SortNone
+		ts.sqlPanel.SetSQL(ts.State.UserSQL)
+		w.execQueryWithDB(ts)
+	}
+
+	if len(tables) > 0 {
+		// Auto-select first table
+		ts.schema.OnTableClicked(tables[0].Name)
+	}
+
+	w.statusBar.SetStatus(fmt.Sprintf("Database: %d tables/views", len(tables)))
+}
+
+// execQueryWithDB runs a query using the tab's database connection (for .duckdb mode)
+func (w *AppWindow) execQueryWithDB(ts *tabState) {
+	if ts == nil || ts.dbConn == nil {
+		return
+	}
+	w.statusBar.SetStatus("Running…")
+	queryStart := time.Now()
+	result, err := ts.dbConn.Query(ts.State.VirtualSQL(), ts.State.PageOffset, ts.State.PageSize)
+	if err != nil {
+		w.statusBar.SetStatus("Error: " + err.Error())
+		ts.dataGrid.ShowError(err.Error())
+		return
+	}
+	elapsed := time.Since(queryStart)
+	ts.State.Result = result
+
+	if w.history != nil {
+		w.history.Add(models.HistoryEntry{
+			SQL:        ts.State.VirtualSQL(),
+			FilePath:   ts.State.FilePath,
+			Timestamp:  time.Now(),
+			RowCount:   result.Total,
+			DurationMs: elapsed.Milliseconds(),
+		})
+	}
+	ts.dataGrid.SetResult(result)
+	ts.dataGrid.UpdateColumnTitles(result.Columns, ts.State.SortColumn, ts.State.SortDir)
+	start := ts.State.PageOffset + 1
+	end := ts.State.PageOffset + len(result.Rows)
+	w.statusBar.SetStatus(fmt.Sprintf("%d–%d of %d rows", start, end, result.Total))
+	page := (ts.State.PageOffset / ts.State.PageSize) + 1
+	totalPages := (int(result.Total) + ts.State.PageSize - 1) / ts.State.PageSize
+	w.statusBar.SetPage(page, totalPages)
 }
 
 func (w *AppWindow) execQuery() error {
