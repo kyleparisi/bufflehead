@@ -2,13 +2,15 @@ package ui
 
 import (
 	"fmt"
+	"time"
 
 	"parquet-viewer/internal/db"
 	"parquet-viewer/internal/models"
 
 	"graphics.gd/classdb/BoxContainer"
+	"graphics.gd/classdb/Button"
 	"graphics.gd/classdb/Control"
-
+	"graphics.gd/classdb/HBoxContainer"
 	"graphics.gd/classdb/HSplitContainer"
 	"graphics.gd/classdb/Label"
 	"graphics.gd/classdb/MarginContainer"
@@ -25,6 +27,7 @@ type AppWindow struct {
 	window    Window.Instance // zero for main window (uses root viewport)
 	isMain    bool
 	duck      *db.DB
+	history   *models.QueryHistory
 
 	titleBar   *TitleBar
 	toolbar    *Toolbar
@@ -192,7 +195,7 @@ func (w *AppWindow) addNewTab() {
 	// Sidebar
 	ts.sidebarWrap = PanelContainer.New()
 	ts.sidebarWrap.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
-	ts.sidebarWrap.AsControl().SetCustomMinimumSize(Vector2.New(120, 0)) // min width
+	ts.sidebarWrap.AsControl().SetCustomMinimumSize(Vector2.New(120, 0))
 	applyPanelBg(ts.sidebarWrap.AsControl(), colorBgSidebar)
 	sidebarMargin := MarginContainer.New()
 	sidebarMargin.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
@@ -201,8 +204,61 @@ func (w *AppWindow) addNewTab() {
 	sidebarMargin.AsControl().AddThemeConstantOverride("margin_left", 6)
 	sidebarMargin.AsControl().AddThemeConstantOverride("margin_right", 4)
 	sidebarMargin.AsControl().AddThemeConstantOverride("margin_bottom", 4)
+
+	sidebarVBox := VBoxContainer.New()
+	sidebarVBox.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	sidebarVBox.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
+	sidebarVBox.AsControl().AddThemeConstantOverride("separation", 4)
+
+	// Tab selector: Schema | History
+	selectorRow := HBoxContainer.New()
+	selectorRow.AsControl().AddThemeConstantOverride("separation", 2)
+
+	schemaBtn := Button.New()
+	schemaBtn.SetText("Schema")
+	schemaBtn.AsControl().AddThemeFontSizeOverride("font_size", 11)
+	schemaBtn.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	applySecondaryButtonTheme(schemaBtn.AsControl())
+
+	historyBtn := Button.New()
+	historyBtn.SetText("History")
+	historyBtn.AsControl().AddThemeFontSizeOverride("font_size", 11)
+	historyBtn.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	applySecondaryButtonTheme(historyBtn.AsControl())
+
+	selectorRow.AsNode().AddChild(schemaBtn.AsNode())
+	selectorRow.AsNode().AddChild(historyBtn.AsNode())
+
 	ts.schema = new(SchemaPanel)
-	sidebarMargin.AsNode().AddChild(ts.schema.AsNode())
+	ts.historyPanel = new(HistoryPanel)
+	ts.historyPanel.OnReplay = func(sql string) {
+		ts.State.UserSQL = sql
+		ts.State.PageOffset = 0
+		ts.State.SortColumn = ""
+		ts.State.SortDir = models.SortNone
+		ts.sqlPanel.SetSQL(sql)
+		w.execQuery()
+	}
+
+	// Start showing schema, hide history
+	ts.historyPanel.AsCanvasItem().SetVisible(false)
+
+	schemaBtn.AsBaseButton().OnPressed(func() {
+		ts.schema.AsCanvasItem().SetVisible(true)
+		ts.historyPanel.AsCanvasItem().SetVisible(false)
+	})
+	historyBtn.AsBaseButton().OnPressed(func() {
+		ts.schema.AsCanvasItem().SetVisible(false)
+		ts.historyPanel.AsCanvasItem().SetVisible(true)
+		if w.history != nil {
+			ts.historyPanel.SetHistory(w.history.All())
+		}
+	})
+
+	sidebarVBox.AsNode().AddChild(selectorRow.AsNode())
+	sidebarVBox.AsNode().AddChild(ts.schema.AsNode())
+	sidebarVBox.AsNode().AddChild(ts.historyPanel.AsNode())
+	sidebarMargin.AsNode().AddChild(sidebarVBox.AsNode())
 	ts.sidebarWrap.AsNode().AddChild(sidebarMargin.AsNode())
 
 	// Right panel
@@ -447,12 +503,25 @@ func (w *AppWindow) execQuery() {
 		return
 	}
 	w.statusBar.SetStatus("Running…")
+	queryStart := time.Now()
 	result, err := w.duck.Query(ts.State.VirtualSQL(), ts.State.PageOffset, ts.State.PageSize)
 	if err != nil {
 		w.statusBar.SetStatus("Error: " + err.Error())
 		return
 	}
+	elapsed := time.Since(queryStart)
 	ts.State.Result = result
+
+	// Record to history
+	if w.history != nil {
+		w.history.Add(models.HistoryEntry{
+			SQL:        ts.State.VirtualSQL(),
+			FilePath:   ts.State.FilePath,
+			Timestamp:  time.Now(),
+			RowCount:   result.Total,
+			DurationMs: elapsed.Milliseconds(),
+		})
+	}
 	ts.dataGrid.SetResult(result)
 	ts.dataGrid.UpdateColumnTitles(result.Columns, ts.State.SortColumn, ts.State.SortDir)
 	start := ts.State.PageOffset + 1
@@ -464,7 +533,7 @@ func (w *AppWindow) execQuery() {
 }
 
 // createSecondaryWindow creates a new OS-level window with full UI.
-func createSecondaryWindow(duck *db.DB, onNewWindow func()) *AppWindow {
+func createSecondaryWindow(duck *db.DB, history *models.QueryHistory, onNewWindow func()) *AppWindow {
 	win := Window.New()
 	win.SetTitle("Parquet Viewer")
 	win.SetSize(Vector2i.New(1440, 900))
@@ -475,6 +544,7 @@ func createSecondaryWindow(duck *db.DB, onNewWindow func()) *AppWindow {
 		window:      win,
 		isMain:      false,
 		duck:        duck,
+		history:     history,
 		onNewWindow: onNewWindow,
 	}
 

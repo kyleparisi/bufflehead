@@ -197,6 +197,59 @@ func (s *SchemaPanel) SetSchema(cols []db.Column) {
 	}
 }
 
+// ── History panel ──────────────────────────────────────────────────────────
+
+type HistoryPanel struct {
+	VBoxContainer.Extension[HistoryPanel] `gd:"ParquetHistoryPanel"`
+
+	tree      Tree.Instance
+	OnReplay  func(sql string) // callback when user clicks a history entry
+}
+
+func (h *HistoryPanel) Ready() {
+	h.AsControl().AddThemeConstantOverride("separation", 4)
+
+	header := Label.New()
+	header.SetText("Query History")
+	applyLabelTheme(header.AsControl(), true)
+
+	h.tree = Tree.New()
+	h.tree.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
+	h.tree.SetHideRoot(true)
+	h.tree.SetColumns(1)
+	applySidebarTreeTheme(h.tree.AsControl())
+
+	h.tree.OnItemActivated(func() {
+		selected := h.tree.GetSelected()
+		if selected == (TreeItem.Instance{}) || h.OnReplay == nil {
+			return
+		}
+		sql := selected.GetTooltipText(0)
+		if sql != "" {
+			h.OnReplay(sql)
+		}
+	})
+
+	h.AsNode().AddChild(header.AsNode())
+	h.AsNode().AddChild(h.tree.AsNode())
+}
+
+func (h *HistoryPanel) SetHistory(entries []models.HistoryEntry) {
+	h.tree.Clear()
+	root := h.tree.CreateItem()
+	for _, e := range entries {
+		item := h.tree.MoreArgs().CreateItem(root, -1)
+		// Show truncated SQL + timestamp
+		display := e.SQL
+		if len(display) > 60 {
+			display = display[:57] + "..."
+		}
+		ts := e.Timestamp.Local().Format("15:04:05")
+		item.SetText(0, ts+"  "+display)
+		item.SetTooltipText(0, e.SQL) // full SQL in tooltip for replay
+	}
+}
+
 // ── SQL editor ─────────────────────────────────────────────────────────────
 
 type SQLPanel struct {
@@ -538,11 +591,12 @@ func (s *StatusBar) SetPage(page, totalPages int) {
 // ── Tab state ──────────────────────────────────────────────────────────────
 
 type tabState struct {
-	State       *models.AppState
-	schema      *SchemaPanel
-	sqlPanel    *SQLPanel
-	dataGrid    *DataGrid
-	detailPanel *RowDetailPanel
+	State        *models.AppState
+	schema       *SchemaPanel
+	historyPanel *HistoryPanel
+	sqlPanel     *SQLPanel
+	dataGrid     *DataGrid
+	detailPanel  *RowDetailPanel
 
 	// Container nodes for show/hide on tab switch
 	sidebarWrap PanelContainer.Instance
@@ -575,9 +629,11 @@ func (a *App) Ready() {
 	a.AsControl().SetAnchorsAndOffsetsPreset(Control.PresetFullRect)
 
 	// Build main window UI
+	history := models.NewQueryHistory()
 	a.mainWin = &AppWindow{
-		isMain: true,
-		duck:   a.Duck,
+		isMain:  true,
+		duck:    a.Duck,
+		history: history,
 	}
 	a.mainWin.onNewWindow = func() { a.newWindow() }
 
@@ -680,7 +736,7 @@ func (a *App) Ready() {
 }
 
 func (a *App) newWindow() {
-	aw := createSecondaryWindow(a.Duck, func() { a.newWindow() })
+	aw := createSecondaryWindow(a.Duck, a.mainWin.history, func() { a.newWindow() })
 	a.secondWins = append(a.secondWins, aw)
 
 	// Add the window to the scene tree
@@ -902,6 +958,7 @@ func RegisterAll() {
 	classdb.Register[SchemaPanel]()
 	classdb.Register[SQLPanel]()
 	classdb.Register[DataGrid]()
+	classdb.Register[HistoryPanel]()
 	classdb.Register[RowDetailPanel]()
 	classdb.Register[StatusBar]()
 	classdb.Register[App]()
