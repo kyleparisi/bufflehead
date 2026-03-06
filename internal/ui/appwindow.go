@@ -129,6 +129,26 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 			w.runCurrentQuery()
 		}
 	}
+	w.statusBar.OnToggleLeftPane = func() {
+		ts := w.currentTab()
+		if ts == nil {
+			return
+		}
+		visible := ts.sidebarWrap.AsCanvasItem().Visible()
+		ts.sidebarWrap.AsCanvasItem().SetVisible(!visible)
+		// Also toggle connection rail
+		if len(w.connections) > 0 {
+			w.connRailWrap.AsCanvasItem().SetVisible(!visible)
+		}
+	}
+	w.statusBar.OnToggleRightPane = func() {
+		ts := w.currentTab()
+		if ts == nil {
+			return
+		}
+		visible := ts.detailWrap.AsCanvasItem().Visible()
+		ts.detailWrap.AsCanvasItem().SetVisible(!visible)
+	}
 	statusMargin.AsNode().AddChild(w.statusBar.AsNode())
 	statusWrap.AsNode().AddChild(statusMargin.AsNode())
 

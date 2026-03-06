@@ -7,6 +7,7 @@ import (
 	"graphics.gd/classdb/StyleBoxEmpty"
 	"graphics.gd/classdb/StyleBoxFlat"
 	"graphics.gd/classdb/SystemFont"
+	"graphics.gd/classdb/Texture2D"
 	"graphics.gd/variant/Color"
 )
 
@@ -78,6 +79,23 @@ func applySecondaryButtonTheme(c Control.Instance) {
 	c.AddThemeColorOverride("font_color", colorTextMuted)
 	c.AddThemeColorOverride("font_hover_color", colorText)
 	c.AddThemeFontSizeOverride("font_size", 13)
+}
+
+func applyToggleButtonTheme(c Control.Instance, active bool) {
+	if active {
+		bg := makeStyleBoxPadded(colorBtnHover, 3, 1, colorBorder, 3)
+		c.AddThemeStyleboxOverride("normal", bg.AsStyleBox())
+		c.AddThemeStyleboxOverride("hover", bg.AsStyleBox())
+		c.AddThemeStyleboxOverride("pressed", bg.AsStyleBox())
+		c.AddThemeColorOverride("font_color", colorTextBright)
+	} else {
+		bg := makeStyleBoxPadded(colorBtnNormal, 3, 0, colorBtnNormal, 3)
+		c.AddThemeStyleboxOverride("normal", bg.AsStyleBox())
+		hover := makeStyleBoxPadded(colorBtnHover, 3, 0, colorBtnHover, 3)
+		c.AddThemeStyleboxOverride("hover", hover.AsStyleBox())
+		c.AddThemeStyleboxOverride("pressed", hover.AsStyleBox())
+		c.AddThemeColorOverride("font_color", colorTextDim)
+	}
 }
 
 func applyActiveButtonTheme(c Control.Instance) {
@@ -236,7 +254,23 @@ func applyTabBarTheme(c Control.Instance) {
 	c.AddThemeIconOverride("close", closeIcon.AsTexture2D())
 }
 
+// SVG icon strings (Lucide icons)
 const closeSVG = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#d9d9d9" stroke-opacity="0.8" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>`
+
+// Sidebar left: panel-left icon
+const svgSidebarLeft = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#c8c8c8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/></svg>`
+
+// Sidebar right: panel-right icon
+const svgSidebarRight = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#c8c8c8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M15 3v18"/></svg>`
+
+func loadSVGTexture(svgStr string) Texture2D.Instance {
+	img := Image.New()
+	if err := img.LoadSvgFromString(svgStr); err != nil {
+		return Texture2D.Instance{}
+	}
+	tex := ImageTexture.CreateFromImage(img)
+	return tex.AsTexture2D()
+}
 
 func makeCloseIconSVG() ImageTexture.Instance {
 	img := Image.New()

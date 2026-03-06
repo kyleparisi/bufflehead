@@ -573,23 +573,43 @@ type StatusBar struct {
 
 	rowCount  Label.Instance
 	pageLabel Label.Instance
+	leftBtn   Button.Instance
+	rightBtn  Button.Instance
 
-	OnPrevPage func()
-	OnNextPage func()
+	OnPrevPage        func()
+	OnNextPage        func()
+	OnToggleLeftPane  func()
+	OnToggleRightPane func()
+
+	leftPaneVisible  bool
+	rightPaneVisible bool
 }
 
 func (s *StatusBar) Ready() {
 	s.AsControl().AddThemeConstantOverride("separation", 8)
 
-	// Left: Data tab indicator
-	dataTab := Label.New()
-	dataTab.SetText("Data")
-	dataTab.AsControl().AddThemeColorOverride("font_color", colorTextBright)
-	dataTab.AsControl().AddThemeFontSizeOverride("font_size", 13)
+	// Left: pane toggle buttons with SVG icons
+	s.leftPaneVisible = true
+	s.rightPaneVisible = false
 
-	structTab := Label.New()
-	structTab.SetText("Structure")
-	applyLabelTheme(structTab.AsControl(), true)
+	s.leftBtn = Button.New()
+	s.leftBtn.AsControl().SetTooltipText("Toggle Left Pane")
+	s.leftBtn.SetText("◧")
+	s.leftBtn.AsControl().SetCustomMinimumSize(Vector2.New(28, 22))
+	applyToggleButtonTheme(s.leftBtn.AsControl(), true)
+	s.leftBtn.AsBaseButton().OnPressed(func() {
+		s.leftPaneVisible = !s.leftPaneVisible
+		applyToggleButtonTheme(s.leftBtn.AsControl(), s.leftPaneVisible)
+		if s.OnToggleLeftPane != nil {
+			s.OnToggleLeftPane()
+		}
+	})
+
+	s.rightBtn = Button.New()
+	s.rightBtn.AsControl().SetTooltipText("Toggle Right Pane")
+	s.rightBtn.SetText("◨")
+	s.rightBtn.AsControl().SetCustomMinimumSize(Vector2.New(28, 22))
+	applyToggleButtonTheme(s.rightBtn.AsControl(), false)
 
 	// Spacer
 	spacer := Control.New()
@@ -627,8 +647,16 @@ func (s *StatusBar) Ready() {
 	s.rowCount.SetText("Ready")
 	applyStatusBarTheme(s.rowCount.AsControl())
 
-	s.AsNode().AddChild(dataTab.AsNode())
-	s.AsNode().AddChild(structTab.AsNode())
+	s.rightBtn.AsBaseButton().OnPressed(func() {
+		s.rightPaneVisible = !s.rightPaneVisible
+		applyToggleButtonTheme(s.rightBtn.AsControl(), s.rightPaneVisible)
+		if s.OnToggleRightPane != nil {
+			s.OnToggleRightPane()
+		}
+	})
+
+	s.AsNode().AddChild(s.leftBtn.AsNode())
+	s.AsNode().AddChild(s.rightBtn.AsNode())
 	s.AsNode().AddChild(spacer.AsNode())
 	s.AsNode().AddChild(prevBtn.AsNode())
 	s.AsNode().AddChild(s.pageLabel.AsNode())
