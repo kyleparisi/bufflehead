@@ -2,6 +2,8 @@ package ui
 
 import (
 	"graphics.gd/classdb/Control"
+	"graphics.gd/classdb/Image"
+	"graphics.gd/classdb/ImageTexture"
 	"graphics.gd/classdb/StyleBoxEmpty"
 	"graphics.gd/classdb/StyleBoxFlat"
 	"graphics.gd/classdb/SystemFont"
@@ -215,7 +217,39 @@ func applyTabBarTheme(c Control.Instance) {
 	hovered.AsStyleBox().SetContentMarginBottom(2)
 	c.AddThemeStyleboxOverride("tab_hovered", hovered.AsStyleBox())
 
-	// Smaller close button icon and spacing
+	// Spacing
 	c.AddThemeConstantOverride("h_separation", 4)
-	c.AddThemeConstantOverride("icon_max_width", 12)
+
+	// Small close icon (8x8 X at 80% opacity)
+	// Small close icon at 80% opacity
+	closeIcon := makeCloseIcon(12, Color.RGBA{R: 0.85, G: 0.85, B: 0.85, A: 0.80})
+	c.AddThemeIconOverride("close", closeIcon.AsTexture2D())
+}
+
+func makeCloseIcon(size int, col Color.RGBA) ImageTexture.Instance {
+	img := Image.Create(size, size, false, Image.FormatRgba8)
+	img.Fill(Color.RGBA{R: 0, G: 0, B: 0, A: 0}) // transparent
+
+	// Draw X with 2px thick lines + anti-alias fringe
+	half := Color.RGBA{R: col.R, G: col.G, B: col.B, A: col.A * 0.4}
+	pad := size / 4 // inset from edges
+	span := size - 2*pad
+	for i := 0; i < span; i++ {
+		x := pad + i
+		y := pad + i
+		ry := pad + span - 1 - i
+		// Main pixels
+		img.SetPixel(x, y, col)
+		img.SetPixel(x, ry, col)
+		// Thickness (offset by 1)
+		if x+1 < size {
+			img.SetPixel(x+1, y, half)
+			img.SetPixel(x+1, ry, half)
+		}
+		if x > 0 {
+			img.SetPixel(x-1, y, half)
+			img.SetPixel(x-1, ry, half)
+		}
+	}
+	return ImageTexture.CreateFromImage(img)
 }
