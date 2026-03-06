@@ -16,6 +16,7 @@ import (
 	"graphics.gd/classdb/DisplayServer"
 	"graphics.gd/classdb/Engine"
 	"graphics.gd/classdb/HBoxContainer"
+	"graphics.gd/classdb/HSplitContainer"
 	"graphics.gd/classdb/Input"
 	"graphics.gd/classdb/InputEvent"
 	"graphics.gd/classdb/InputEventKey"
@@ -348,7 +349,6 @@ func (p *RowDetailPanel) Ready() {
 	p.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	p.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
 	p.AsControl().AddThemeConstantOverride("separation", 0)
-	p.AsControl().SetCustomMinimumSize(Vector2.New(250, 0))
 	p.AsControl().SetClipContents(true)
 
 	// Search input
@@ -537,7 +537,8 @@ type tabState struct {
 
 	// Container nodes for show/hide on tab switch
 	sidebarWrap PanelContainer.Instance
-	rightPanel  VBoxContainer.Instance
+	outerWrap   HSplitContainer.Instance // content | detail
+	rightPanel  VBoxContainer.Instance   // SQL + data grid
 	detailWrap  PanelContainer.Instance
 }
 

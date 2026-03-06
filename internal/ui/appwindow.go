@@ -16,6 +16,7 @@ import (
 	"graphics.gd/classdb/TabBar"
 	"graphics.gd/classdb/VBoxContainer"
 	"graphics.gd/classdb/Window"
+	"graphics.gd/variant/Vector2"
 	"graphics.gd/variant/Vector2i"
 )
 
@@ -93,6 +94,7 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 	w.split.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
 	w.split.AsSplitContainer().SetSplitOffset(180)
 	w.split.AsControl().AddThemeConstantOverride("separation", 1)
+	w.split.AsControl().SetClipContents(true)
 
 	// Status bar
 	statusWrap := PanelContainer.New()
@@ -190,6 +192,7 @@ func (w *AppWindow) addNewTab() {
 	// Sidebar
 	ts.sidebarWrap = PanelContainer.New()
 	ts.sidebarWrap.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
+	ts.sidebarWrap.AsControl().SetCustomMinimumSize(Vector2.New(120, 0)) // min width
 	applyPanelBg(ts.sidebarWrap.AsControl(), colorBgSidebar)
 	sidebarMargin := MarginContainer.New()
 	sidebarMargin.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
@@ -207,6 +210,7 @@ func (w *AppWindow) addNewTab() {
 	ts.rightPanel.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	ts.rightPanel.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
 	ts.rightPanel.AsControl().AddThemeConstantOverride("separation", 1)
+	ts.rightPanel.AsControl().SetCustomMinimumSize(Vector2.New(300, 0)) // min width for data grid
 
 	ts.sqlPanel = new(SQLPanel)
 	ts.sqlPanel.OnRunQuery = func(sql string) {
@@ -260,6 +264,8 @@ func (w *AppWindow) addNewTab() {
 	ts.detailWrap = PanelContainer.New()
 	applyPanelBg(ts.detailWrap.AsControl(), colorBgSidebar)
 	ts.detailWrap.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
+	ts.detailWrap.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	ts.detailWrap.AsControl().SetCustomMinimumSize(Vector2.New(200, 0)) // min width for detail
 	detailMargin := MarginContainer.New()
 	detailMargin.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	detailMargin.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
@@ -274,9 +280,18 @@ func (w *AppWindow) addNewTab() {
 	ts.rightPanel.AsNode().AddChild(sqlWrap.AsNode())
 	ts.rightPanel.AsNode().AddChild(ts.dataGrid.AsNode())
 
+	// Inner split: content | detail
+	ts.outerWrap = HSplitContainer.New()
+	ts.outerWrap.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	ts.outerWrap.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
+	ts.outerWrap.AsControl().AddThemeConstantOverride("separation", 1)
+	ts.outerWrap.AsControl().SetClipContents(true)
+	ts.outerWrap.AsSplitContainer().SetSplitOffset(-280) // negative = from right edge
+	ts.outerWrap.AsNode().AddChild(ts.rightPanel.AsNode())
+	ts.outerWrap.AsNode().AddChild(ts.detailWrap.AsNode())
+
 	w.split.AsNode().AddChild(ts.sidebarWrap.AsNode())
-	w.split.AsNode().AddChild(ts.rightPanel.AsNode())
-	w.split.AsNode().AddChild(ts.detailWrap.AsNode())
+	w.split.AsNode().AddChild(ts.outerWrap.AsNode())
 
 	w.showTabView()
 
@@ -294,17 +309,12 @@ func (w *AppWindow) switchTab(idx int) {
 	}
 	for _, ts := range w.tabs {
 		ts.sidebarWrap.AsCanvasItem().SetVisible(false)
-		ts.rightPanel.AsCanvasItem().SetVisible(false)
-		ts.detailWrap.AsCanvasItem().SetVisible(false)
+		ts.outerWrap.AsCanvasItem().SetVisible(false)
 	}
 	w.activeTab = idx
 	ts := w.tabs[idx]
 	ts.sidebarWrap.AsCanvasItem().SetVisible(true)
-	ts.rightPanel.AsCanvasItem().SetVisible(true)
-	// Only show detail if it has content
-	if ts.detailPanel.columns != nil {
-		ts.detailWrap.AsCanvasItem().SetVisible(true)
-	}
+	ts.outerWrap.AsCanvasItem().SetVisible(true)
 
 	if ts.State.FilePath != "" {
 		w.toolbar.fileLabel.SetText(ts.State.FilePath)
@@ -340,14 +350,11 @@ func (w *AppWindow) closeTab(idx int) {
 
 	ts := w.tabs[idx]
 	ts.sidebarWrap.AsCanvasItem().SetVisible(false)
-	ts.rightPanel.AsCanvasItem().SetVisible(false)
-	ts.detailWrap.AsCanvasItem().SetVisible(false)
+	ts.outerWrap.AsCanvasItem().SetVisible(false)
 	w.split.AsNode().RemoveChild(ts.sidebarWrap.AsNode())
-	w.split.AsNode().RemoveChild(ts.rightPanel.AsNode())
-	w.split.AsNode().RemoveChild(ts.detailWrap.AsNode())
+	w.split.AsNode().RemoveChild(ts.outerWrap.AsNode())
 	ts.sidebarWrap.AsNode().QueueFree()
-	ts.rightPanel.AsNode().QueueFree()
-	ts.detailWrap.AsNode().QueueFree()
+	ts.outerWrap.AsNode().QueueFree()
 
 	w.tabs = append(w.tabs[:idx], w.tabs[idx+1:]...)
 	w.tabBar.RemoveTab(idx)
