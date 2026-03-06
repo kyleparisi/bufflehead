@@ -18,6 +18,7 @@ import (
 	"graphics.gd/classdb/Control"
 	"graphics.gd/classdb/DisplayServer"
 	"graphics.gd/classdb/Engine"
+	"graphics.gd/classdb/GUI"
 	"graphics.gd/classdb/HBoxContainer"
 	"graphics.gd/classdb/HSplitContainer"
 	"graphics.gd/classdb/Input"
@@ -659,6 +660,7 @@ type DataGrid struct {
 	OnRowSelected   func(rowIndex int)
 	columns         []string // track current column names
 	rows            [][]string
+	colTypes        []string // data types for alignment
 	colWidthCache   map[string][]int // query hash → column widths
 	dragging        bool
 	dragCol         int
@@ -743,14 +745,37 @@ func (d *DataGrid) SetResult(r *db.QueryResult) {
 	for i, col := range r.Columns {
 		t.SetColumnTitle(i, col)
 	}
+	// Set column title alignment for numeric types
+	for i := range r.Columns {
+		if d.isNumericCol(i) {
+			t.SetColumnTitleAlignment(i, GUI.HorizontalAlignmentRight) // right align
+		}
+	}
+
 	root := t.CreateItem()
 	for _, row := range r.Rows {
 		item := t.MoreArgs().CreateItem(root, -1)
 		for i, cell := range row {
 			item.SetText(i, cell)
+			if d.isNumericCol(i) {
+				item.SetTextAlignment(i, GUI.HorizontalAlignmentRight) // right align
+			}
 		}
 	}
 	d.autoSizeColumns(r)
+}
+
+func (d *DataGrid) isNumericCol(i int) bool {
+	if i >= len(d.colTypes) {
+		return false
+	}
+	t := strings.ToUpper(d.colTypes[i])
+	return strings.Contains(t, "INT") || strings.Contains(t, "FLOAT") ||
+		strings.Contains(t, "DOUBLE") || strings.Contains(t, "DECIMAL") ||
+		strings.Contains(t, "NUMERIC") || strings.Contains(t, "REAL") ||
+		t == "BIGINT" || t == "SMALLINT" || t == "TINYINT" ||
+		t == "HUGEINT" || t == "UBIGINT" || t == "UINTEGER" ||
+		t == "USMALLINT" || t == "UTINYINT"
 }
 
 func (d *DataGrid) queryKey() string {

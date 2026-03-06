@@ -761,6 +761,7 @@ func (w *AppWindow) execQueryWithConn(ts *tabState, conn *db.DB) {
 		}
 		ts.State.NavPush(ts.State.UserSQL)
 	}
+	ts.dataGrid.colTypes = schemaColTypes(ts.State.Schema, result.Columns)
 	ts.dataGrid.SetResult(result)
 	ts.dataGrid.UpdateColumnTitles(result.Columns, ts.State.SortColumn, ts.State.SortDir)
 	start := ts.State.PageOffset + 1
@@ -800,6 +801,7 @@ func (w *AppWindow) execQuery() error {
 		}
 		ts.State.NavPush(ts.State.UserSQL)
 	}
+	ts.dataGrid.colTypes = schemaColTypes(ts.State.Schema, result.Columns)
 	ts.dataGrid.SetResult(result)
 	ts.dataGrid.UpdateColumnTitles(result.Columns, ts.State.SortColumn, ts.State.SortDir)
 	start := ts.State.PageOffset + 1
@@ -861,6 +863,19 @@ func (w *AppWindow) navForward() {
 	w.runCurrentQuery()
 	ts.navigating = false
 	w.updateNavButtons()
+}
+
+// schemaColTypes maps result columns to their schema types.
+func schemaColTypes(schema []db.Column, resultCols []string) []string {
+	typeMap := make(map[string]string, len(schema))
+	for _, c := range schema {
+		typeMap[c.Name] = c.DataType
+	}
+	types := make([]string, len(resultCols))
+	for i, col := range resultCols {
+		types[i] = typeMap[col]
+	}
+	return types
 }
 
 // createSecondaryWindow creates a new OS-level window with full UI.
