@@ -11,6 +11,7 @@ import (
 	"parquet-viewer/internal/models"
 
 	"graphics.gd/classdb"
+	"graphics.gd/classdb/BoxContainer"
 	"graphics.gd/classdb/Button"
 	"graphics.gd/classdb/CodeEdit"
 	"graphics.gd/classdb/Control"
@@ -108,7 +109,37 @@ func (t *TitleBar) Ready() {
 }
 
 func (t *TitleBar) SetFileInfo(path string) {
-	t.infoLabel.SetText("DuckDB  ·  In-Memory  ·  " + path)
+	if path == "" {
+		t.infoLabel.SetText("DuckDB  ·  In-Memory")
+		return
+	}
+	// Extract filename
+	name := path
+	for i := len(path) - 1; i >= 0; i-- {
+		if path[i] == '/' {
+			name = path[i+1:]
+			break
+		}
+	}
+	// Detect type
+	ext := ""
+	if dot := strings.LastIndex(name, "."); dot >= 0 {
+		ext = strings.ToLower(name[dot:])
+	}
+	switch ext {
+	case ".duckdb", ".db", ".ddb":
+		t.infoLabel.SetText("DuckDB  ·  " + name)
+	case ".parquet":
+		t.infoLabel.SetText("DuckDB  ·  In-Memory  ·  " + name)
+	case ".csv":
+		t.infoLabel.SetText("DuckDB  ·  CSV  ·  " + name)
+	case ".json":
+		t.infoLabel.SetText("DuckDB  ·  JSON  ·  " + name)
+	case ".tsv":
+		t.infoLabel.SetText("DuckDB  ·  TSV  ·  " + name)
+	default:
+		t.infoLabel.SetText("DuckDB  ·  " + name)
+	}
 }
 
 // ── Toolbar ────────────────────────────────────────────────────────────────
@@ -163,16 +194,28 @@ func (t *Toolbar) Ready() {
 type SchemaPanel struct {
 	VBoxContainer.Extension[SchemaPanel] `gd:"ParquetSchemaPanel"`
 
+	searchBox      LineEdit.Instance
 	tree           Tree.Instance
 	OnTableClicked func(tableName string)
+	allCols        []db.Column
+	allTables      []db.TableInfo
 }
 
 func (s *SchemaPanel) Ready() {
 	s.AsControl().AddThemeConstantOverride("separation", 4)
 
-	header := Label.New()
-	header.SetText("Schema")
-	applyLabelTheme(header.AsControl(), true)
+	// Search input
+	s.searchBox = LineEdit.New()
+	s.searchBox.SetPlaceholderText("Search items…")
+	s.searchBox.AsControl().AddThemeFontSizeOverride("font_size", 12)
+	applyInputTheme(s.searchBox.AsControl())
+	s.searchBox.OnTextChanged(func(text string) {
+		if len(s.allTables) > 0 {
+			s.filterTables(text)
+		} else {
+			s.filterCols(text)
+		}
+	})
 
 	s.tree = Tree.New()
 	s.tree.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
@@ -190,56 +233,103 @@ func (s *SchemaPanel) Ready() {
 		}
 	})
 
-	s.AsNode().AddChild(header.AsNode())
+	s.AsNode().AddChild(s.searchBox.AsNode())
 	s.AsNode().AddChild(s.tree.AsNode())
 }
 
 func (s *SchemaPanel) SetSchema(cols []db.Column) {
+	s.allCols = cols
+	s.allTables = nil
+	s.searchBox.SetText("")
+	s.filterCols("")
+}
+
+func (s *SchemaPanel) filterCols(query string) {
+	q := strings.ToLower(query)
 	s.tree.Clear()
 	s.tree.SetColumns(2)
 	root := s.tree.CreateItem()
-	for _, col := range cols {
+	for _, col := range s.allCols {
+		if q != "" && !strings.Contains(strings.ToLower(col.Name), q) {
+			continue
+		}
 		item := s.tree.MoreArgs().CreateItem(root, -1)
 		typeSuffix := col.DataType
 		if col.Nullable {
 			typeSuffix += "?"
 		}
-		item.SetText(0, col.Name)
+		item.SetText(0, "  "+col.Name)
 		item.SetText(1, typeSuffix)
 	}
 }
 
 func (s *SchemaPanel) SetTables(tables []db.TableInfo) {
+	s.allTables = tables
+	s.allCols = nil
+	s.searchBox.SetText("")
+	s.filterTables("")
+}
+
+func (s *SchemaPanel) filterTables(query string) {
+	q := strings.ToLower(query)
 	s.tree.Clear()
 	s.tree.SetColumns(2)
 	root := s.tree.CreateItem()
-	for _, t := range tables {
-		tableItem := s.tree.MoreArgs().CreateItem(root, -1)
-		icon := "📋"
-		if t.Type == "VIEW" {
-			icon = "👁"
-		}
-		tableItem.SetText(0, icon+" "+t.Name)
-		tableItem.SetText(1, "")
-		tableItem.SetSelectable(0, true)
-		tableItem.SetSelectable(1, false)
-		// Store table name in tooltip for retrieval on click
-		tableItem.SetTooltipText(0, t.Name)
 
-		// Add columns as children (collapsed)
-		for _, col := range t.Columns {
-			colItem := s.tree.MoreArgs().CreateItem(tableItem, -1)
-			typeSuffix := col.DataType
-			if col.Nullable {
-				typeSuffix += "?"
-			}
-			colItem.SetText(0, "  "+col.Name)
-			colItem.SetText(1, typeSuffix)
-			colItem.SetSelectable(0, false)
-			colItem.SetSelectable(1, false)
+	// Group: Tables
+	var tableItems, viewItems []db.TableInfo
+	for _, t := range s.allTables {
+		if q != "" && !strings.Contains(strings.ToLower(t.Name), q) {
+			continue
 		}
-		tableItem.SetCollapsed(true)
+		if t.Type == "VIEW" {
+			viewItems = append(viewItems, t)
+		} else {
+			tableItems = append(tableItems, t)
+		}
 	}
+
+	if len(tableItems) > 0 {
+		group := s.tree.MoreArgs().CreateItem(root, -1)
+		group.SetText(0, fmt.Sprintf("Tables (%d)", len(tableItems)))
+		group.SetSelectable(0, false)
+		group.SetSelectable(1, false)
+		for _, t := range tableItems {
+			s.addTableItem(group, t)
+		}
+	}
+
+	if len(viewItems) > 0 {
+		group := s.tree.MoreArgs().CreateItem(root, -1)
+		group.SetText(0, fmt.Sprintf("Views (%d)", len(viewItems)))
+		group.SetSelectable(0, false)
+		group.SetSelectable(1, false)
+		for _, t := range viewItems {
+			s.addTableItem(group, t)
+		}
+	}
+}
+
+func (s *SchemaPanel) addTableItem(parent TreeItem.Instance, t db.TableInfo) {
+	tableItem := s.tree.MoreArgs().CreateItem(parent, -1)
+	tableItem.SetText(0, "  "+t.Name)
+	tableItem.SetText(1, "")
+	tableItem.SetSelectable(0, true)
+	tableItem.SetSelectable(1, false)
+	tableItem.SetTooltipText(0, t.Name)
+
+	for _, col := range t.Columns {
+		colItem := s.tree.MoreArgs().CreateItem(tableItem, -1)
+		typeSuffix := col.DataType
+		if col.Nullable {
+			typeSuffix += "?"
+		}
+		colItem.SetText(0, "    "+col.Name)
+		colItem.SetText(1, typeSuffix)
+		colItem.SetSelectable(0, false)
+		colItem.SetSelectable(1, false)
+	}
+	tableItem.SetCollapsed(true)
 }
 
 // ── History panel ──────────────────────────────────────────────────────────
@@ -457,11 +547,12 @@ func debugLog(msg string) {
 type RowDetailPanel struct {
 	VBoxContainer.Extension[RowDetailPanel] `gd:"ParquetRowDetail"`
 
-	searchBox  LineEdit.Instance
-	scrollBox  ScrollContainer.Instance
-	fieldsList VBoxContainer.Instance
-	columns    []string
-	values     []string
+	searchBox    LineEdit.Instance
+	scrollBox    ScrollContainer.Instance
+	fieldsList   VBoxContainer.Instance
+	placeholder  VBoxContainer.Instance
+	columns      []string
+	values       []string
 }
 
 func (p *RowDetailPanel) Ready() {
@@ -473,7 +564,7 @@ func (p *RowDetailPanel) Ready() {
 	// Search input
 	p.searchBox = LineEdit.New()
 	p.searchBox.SetPlaceholderText("Search fields…")
-	p.searchBox.AsControl().AddThemeFontSizeOverride("font_size", 13)
+	p.searchBox.AsControl().AddThemeFontSizeOverride("font_size", 12)
 	applyInputTheme(p.searchBox.AsControl())
 	p.searchBox.OnTextChanged(func(text string) {
 		p.filterFields(text)
@@ -486,11 +577,33 @@ func (p *RowDetailPanel) Ready() {
 	searchWrap.AsControl().AddThemeConstantOverride("margin_bottom", 4)
 	searchWrap.AsNode().AddChild(p.searchBox.AsNode())
 
+	// Placeholder: "No row selected"
+	p.placeholder = VBoxContainer.New()
+	p.placeholder.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	p.placeholder.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
+	p.placeholder.AsBoxContainer().SetAlignment(BoxContainer.AlignmentCenter)
+
+	phIcon := Label.New()
+	phIcon.SetText("☰")
+	phIcon.AsControl().AddThemeFontSizeOverride("font_size", 32)
+	phIcon.AsControl().AddThemeColorOverride("font_color", colorTextDim)
+	phIcon.SetHorizontalAlignment(1)
+
+	phText := Label.New()
+	phText.SetText("No row selected")
+	phText.AsControl().AddThemeFontSizeOverride("font_size", 12)
+	phText.AsControl().AddThemeColorOverride("font_color", colorTextDim)
+	phText.SetHorizontalAlignment(1)
+
+	p.placeholder.AsNode().AddChild(phIcon.AsNode())
+	p.placeholder.AsNode().AddChild(phText.AsNode())
+
 	// Scrollable form area
 	p.scrollBox = ScrollContainer.New()
 	p.scrollBox.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	p.scrollBox.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
 	p.scrollBox.SetHorizontalScrollMode(ScrollContainer.ScrollModeDisabled)
+	p.scrollBox.AsCanvasItem().SetVisible(false)
 
 	p.fieldsList = VBoxContainer.New()
 	p.fieldsList.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
@@ -506,6 +619,7 @@ func (p *RowDetailPanel) Ready() {
 	p.scrollBox.AsNode().AddChild(fieldsMargin.AsNode())
 
 	p.AsNode().AddChild(searchWrap.AsNode())
+	p.AsNode().AddChild(p.placeholder.AsNode())
 	p.AsNode().AddChild(p.scrollBox.AsNode())
 }
 
@@ -513,6 +627,8 @@ func (p *RowDetailPanel) SetRow(columns []string, values []string) {
 	p.columns = columns
 	p.values = values
 	p.searchBox.SetText("")
+	p.placeholder.AsCanvasItem().SetVisible(false)
+	p.scrollBox.AsCanvasItem().SetVisible(true)
 	p.filterFields("")
 }
 

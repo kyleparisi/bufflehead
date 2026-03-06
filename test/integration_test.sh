@@ -12,6 +12,14 @@ URL="http://127.0.0.1:$PORT"
 PASS=0
 FAIL=0
 
+# Kill any stale Godot processes holding port 9900
+pkill -9 -if godot 2>/dev/null || true
+# Wait for port to free
+for i in $(seq 1 10); do
+    curl -s http://127.0.0.1:9900/state >/dev/null 2>&1 || break
+    sleep 1
+done
+
 # Build the dylib first
 cd "$(dirname "$0")/.."
 ROOT="$(pwd)"

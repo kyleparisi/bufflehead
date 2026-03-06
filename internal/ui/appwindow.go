@@ -286,21 +286,21 @@ func (w *AppWindow) addNewTab() {
 	sidebarVBox.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
 	sidebarVBox.AsControl().AddThemeConstantOverride("separation", 4)
 
-	// Tab selector: Schema | History
+	// Tab selector: Items | History (TablePlus-style)
 	selectorRow := HBoxContainer.New()
-	selectorRow.AsControl().AddThemeConstantOverride("separation", 2)
+	selectorRow.AsControl().AddThemeConstantOverride("separation", 0)
 
 	schemaBtn := Button.New()
-	schemaBtn.SetText("Schema")
+	schemaBtn.SetText("Items")
 	schemaBtn.AsControl().AddThemeFontSizeOverride("font_size", 11)
 	schemaBtn.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
-	applySecondaryButtonTheme(schemaBtn.AsControl())
+	applySidebarTabTheme(schemaBtn.AsControl(), true)
 
 	historyBtn := Button.New()
 	historyBtn.SetText("History")
 	historyBtn.AsControl().AddThemeFontSizeOverride("font_size", 11)
 	historyBtn.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
-	applySecondaryButtonTheme(historyBtn.AsControl())
+	applySidebarTabTheme(historyBtn.AsControl(), false)
 
 	selectorRow.AsNode().AddChild(schemaBtn.AsNode())
 	selectorRow.AsNode().AddChild(historyBtn.AsNode())
@@ -322,10 +322,14 @@ func (w *AppWindow) addNewTab() {
 	schemaBtn.AsBaseButton().OnPressed(func() {
 		ts.schema.AsCanvasItem().SetVisible(true)
 		ts.historyPanel.AsCanvasItem().SetVisible(false)
+		applySidebarTabTheme(schemaBtn.AsControl(), true)
+		applySidebarTabTheme(historyBtn.AsControl(), false)
 	})
 	historyBtn.AsBaseButton().OnPressed(func() {
 		ts.schema.AsCanvasItem().SetVisible(false)
 		ts.historyPanel.AsCanvasItem().SetVisible(true)
+		applySidebarTabTheme(schemaBtn.AsControl(), false)
+		applySidebarTabTheme(historyBtn.AsControl(), true)
 		if w.history != nil {
 			ts.historyPanel.SetHistory(w.history.All())
 		}

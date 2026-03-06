@@ -81,6 +81,37 @@ func applySecondaryButtonTheme(c Control.Instance) {
 	c.AddThemeFontSizeOverride("font_size", 13)
 }
 
+func applySidebarTabTheme(c Control.Instance, active bool) {
+	transparent := Color.RGBA{R: 0, G: 0, B: 0, A: 0}
+	if active {
+		bg := makeStyleBox(transparent, 0, 0, transparent)
+		bg.SetBorderWidthBottom(2)
+		bg.SetBorderColor(colorAccent)
+		sb := bg.AsStyleBox()
+		sb.SetContentMarginTop(6)
+		sb.SetContentMarginBottom(6)
+		sb.SetContentMarginLeft(8)
+		sb.SetContentMarginRight(8)
+		c.AddThemeStyleboxOverride("normal", sb)
+		c.AddThemeStyleboxOverride("hover", sb)
+		c.AddThemeStyleboxOverride("pressed", sb)
+		c.AddThemeColorOverride("font_color", colorTextBright)
+		c.AddThemeColorOverride("font_hover_color", colorTextBright)
+	} else {
+		bg := makeStyleBox(transparent, 0, 0, transparent)
+		sb := bg.AsStyleBox()
+		sb.SetContentMarginTop(6)
+		sb.SetContentMarginBottom(8)
+		sb.SetContentMarginLeft(8)
+		sb.SetContentMarginRight(8)
+		c.AddThemeStyleboxOverride("normal", sb)
+		c.AddThemeStyleboxOverride("hover", sb)
+		c.AddThemeStyleboxOverride("pressed", sb)
+		c.AddThemeColorOverride("font_color", colorTextDim)
+		c.AddThemeColorOverride("font_hover_color", colorTextMuted)
+	}
+}
+
 func applyToggleButtonTheme(c Control.Instance, active bool) {
 	if active {
 		bg := makeStyleBoxPadded(colorBtnHover, 3, 1, colorBorder, 3)
