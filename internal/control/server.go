@@ -128,6 +128,10 @@ func (s *Server) Start() {
 		s.handleCommand(w, r, "close_tab")
 	})
 
+	mux.HandleFunc("POST /new-window", func(w http.ResponseWriter, r *http.Request) {
+		s.handleCommand(w, r, "new_window")
+	})
+
 	mux.HandleFunc("GET /screenshot", func(w http.ResponseWriter, r *http.Request) {
 		cmd := &Command{
 			Action: "screenshot",

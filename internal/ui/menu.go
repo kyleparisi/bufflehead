@@ -20,8 +20,9 @@ type AppMenu struct {
 
 	OnOpenFile   func()            // triggers native file dialog
 	OnOpenRecent func(path string) // opens a specific recent file
-	OnNewTab     func()            // creates new tab (⌘N)
+	OnNewTab     func()            // creates new tab (⌘T)
 	OnCloseTab   func()            // closes current tab (⌘W)
+	OnNewWindow  func()            // creates new window (⌘N)
 }
 
 func (m *AppMenu) Setup() {
@@ -32,6 +33,13 @@ func (m *AppMenu) Setup() {
 
 	// Create File menu
 	m.fileMenu = NativeMenu.CreateMenu()
+
+	// New Window (Cmd+N)
+	NativeMenu.AddItem(m.fileMenu, "New Window", func(tag any) {
+		if m.OnNewWindow != nil {
+			m.OnNewWindow()
+		}
+	}, nil, nil, Input.Key(Input.KeyMaskMeta)|Input.KeyN)
 
 	// New Tab (Cmd+T)
 	NativeMenu.AddItem(m.fileMenu, "New Tab", func(tag any) {
