@@ -391,6 +391,7 @@ type App struct {
 	sqlPanel  *SQLPanel
 	dataGrid  *DataGrid
 	statusBar *StatusBar
+	appMenu   *AppMenu
 }
 
 func (a *App) Ready() {
@@ -532,6 +533,32 @@ func (a *App) Ready() {
 
 	bg.AsNode().AddChild(outerVBox.AsNode())
 	a.AsNode().AddChild(bg.AsNode())
+
+	// Setup native menu bar
+	a.appMenu = &AppMenu{
+		OnOpenFile: func() {
+			DisplayServer.FileDialogShow(
+				"Open Parquet File",
+				"",
+				"",
+				false,
+				DisplayServer.FileDialogModeOpenFile,
+				[]string{"*.parquet ; Parquet Files"},
+				func(status bool, selectedPaths []string, selectedFilterIndex int) {
+					if status && len(selectedPaths) > 0 {
+						a.onFileSelected(selectedPaths[0])
+						a.toolbar.fileLabel.SetText(selectedPaths[0])
+					}
+				},
+				0,
+			)
+		},
+		OnOpenRecent: func(path string) {
+			a.onFileSelected(path)
+			a.toolbar.fileLabel.SetText(path)
+		},
+	}
+	a.appMenu.Setup()
 
 	// Wire up control server state provider
 	if a.ControlServer != nil {
@@ -675,6 +702,9 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 func (a *App) onFileSelected(path string) {
 	a.State.FilePath = path
 	a.State.UserSQL = db.DefaultQuery(path)
+	if a.appMenu != nil {
+		a.appMenu.AddRecentFile(path)
+	}
 	a.State.PageOffset = 0
 	a.State.SortColumn = ""
 	a.State.SortDir = models.SortNone
