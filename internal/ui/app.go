@@ -654,7 +654,7 @@ type tabState struct {
 	sqlPanel     *SQLPanel
 	dataGrid     *DataGrid
 	detailPanel  *RowDetailPanel
-	dbConn       *db.DB // separate connection for .duckdb files
+	connIdx      int // index into AppWindow.connections (-1 = in-memory)
 
 	// Container nodes for show/hide on tab switch
 	sidebarWrap PanelContainer.Instance

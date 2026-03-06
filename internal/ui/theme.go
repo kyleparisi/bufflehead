@@ -14,6 +14,7 @@ import (
 var (
 	colorBg         = Color.RGBA{R: 0.10, G: 0.10, B: 0.10, A: 1} // #1a1a1a
 	colorBgSidebar  = Color.RGBA{R: 0.11, G: 0.11, B: 0.11, A: 1} // #1c1c1c
+	colorBgDarker   = Color.RGBA{R: 0.08, G: 0.08, B: 0.08, A: 1} // #141414
 	colorBgPanel    = Color.RGBA{R: 0.13, G: 0.13, B: 0.13, A: 1} // #222222
 	colorBgInput    = Color.RGBA{R: 0.16, G: 0.16, B: 0.16, A: 1} // #2a2a2a
 	colorBgHeader   = Color.RGBA{R: 0.15, G: 0.15, B: 0.15, A: 1} // #252525
@@ -77,6 +78,15 @@ func applySecondaryButtonTheme(c Control.Instance) {
 	c.AddThemeColorOverride("font_color", colorTextMuted)
 	c.AddThemeColorOverride("font_hover_color", colorText)
 	c.AddThemeFontSizeOverride("font_size", 13)
+}
+
+func applyActiveButtonTheme(c Control.Instance) {
+	active := makeStyleBoxPadded(colorAccent, 3, 1, colorAccent, 5)
+	c.AddThemeStyleboxOverride("normal", active.AsStyleBox())
+	c.AddThemeStyleboxOverride("hover", active.AsStyleBox())
+	c.AddThemeStyleboxOverride("pressed", active.AsStyleBox())
+	c.AddThemeColorOverride("font_color", colorBg)
+	c.AddThemeColorOverride("font_hover_color", colorBg)
 }
 
 func applyInputTheme(c Control.Instance) {

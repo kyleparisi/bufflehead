@@ -22,11 +22,20 @@ import (
 	"graphics.gd/variant/Vector2i"
 )
 
+// Connection represents an open database connection.
+type Connection struct {
+	Name   string
+	Path   string
+	DB     *db.DB
+	Tables []db.TableInfo
+	button Button.Instance
+}
+
 // AppWindow represents a single viewer window (main or secondary).
 type AppWindow struct {
 	window    Window.Instance // zero for main window (uses root viewport)
 	isMain    bool
-	duck      *db.DB
+	duck      *db.DB // in-memory DuckDB for file queries
 	history   *models.QueryHistory
 
 	titleBar   *TitleBar
@@ -36,6 +45,12 @@ type AppWindow struct {
 	tabBarWrap MarginContainer.Instance
 	split      HSplitContainer.Instance
 	emptyView  VBoxContainer.Instance
+
+	// Connection rail
+	connRail      VBoxContainer.Instance
+	connRailWrap  PanelContainer.Instance
+	connections   []*Connection
+	activeConnIdx int
 
 	tabs      []*tabState
 	activeTab int
@@ -161,12 +176,43 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 	emptyCenter.AsNode().AddChild(emptyHint.AsNode())
 	w.emptyView.AsNode().AddChild(emptyCenter.AsNode())
 
+	// Connection rail (far-left column)
+	w.connRailWrap = PanelContainer.New()
+	w.connRailWrap.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
+	w.connRailWrap.AsControl().SetCustomMinimumSize(Vector2.New(44, 0))
+	applyPanelBg(w.connRailWrap.AsControl(), colorBgDarker)
+
+	railMargin := MarginContainer.New()
+	railMargin.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	railMargin.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
+	railMargin.AsControl().AddThemeConstantOverride("margin_top", 4)
+	railMargin.AsControl().AddThemeConstantOverride("margin_left", 4)
+	railMargin.AsControl().AddThemeConstantOverride("margin_right", 4)
+	railMargin.AsControl().AddThemeConstantOverride("margin_bottom", 4)
+
+	w.connRail = VBoxContainer.New()
+	w.connRail.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	w.connRail.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
+	w.connRail.AsControl().AddThemeConstantOverride("separation", 4)
+
+	railMargin.AsNode().AddChild(w.connRail.AsNode())
+	w.connRailWrap.AsNode().AddChild(railMargin.AsNode())
+	w.connRailWrap.AsCanvasItem().SetVisible(false) // hidden until a DB is opened
+
+	// Content area (rail | main)
+	contentHBox := HBoxContainer.New()
+	contentHBox.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	contentHBox.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
+	contentHBox.AsControl().AddThemeConstantOverride("separation", 0)
+	contentHBox.AsNode().AddChild(w.connRailWrap.AsNode())
+	contentHBox.AsNode().AddChild(w.split.AsNode())
+	contentHBox.AsNode().AddChild(w.emptyView.AsNode())
+
 	// Assemble
 	outerVBox.AsNode().AddChild(w.titleBar.AsNode())
 	outerVBox.AsNode().AddChild(toolbarWrap.AsNode())
 	outerVBox.AsNode().AddChild(w.tabBarWrap.AsNode())
-	outerVBox.AsNode().AddChild(w.split.AsNode())
-	outerVBox.AsNode().AddChild(w.emptyView.AsNode())
+	outerVBox.AsNode().AddChild(contentHBox.AsNode())
 	outerVBox.AsNode().AddChild(statusWrap.AsNode())
 
 	bg.AsNode().AddChild(outerVBox.AsNode())
@@ -190,7 +236,7 @@ func (w *AppWindow) currentState() *models.AppState {
 }
 
 func (w *AppWindow) addNewTab() {
-	ts := &tabState{State: models.NewAppState()}
+	ts := &tabState{State: models.NewAppState(), connIdx: -1}
 
 	// Sidebar
 	ts.sidebarWrap = PanelContainer.New()
@@ -274,11 +320,7 @@ func (w *AppWindow) addNewTab() {
 		ts.State.PageOffset = 0
 		ts.State.SortColumn = ""
 		ts.State.SortDir = models.SortNone
-		if ts.State.IsDatabase && ts.dbConn != nil {
-			w.execQueryWithDB(ts)
-		} else {
-			w.execQuery()
-		}
+		w.runCurrentQuery()
 	}
 	sqlWrap := MarginContainer.New()
 	sqlWrap.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
@@ -309,11 +351,7 @@ func (w *AppWindow) addNewTab() {
 			ts.State.SortDir = models.SortAsc
 		}
 		ts.State.PageOffset = 0
-		if ts.State.IsDatabase && ts.dbConn != nil {
-			w.execQueryWithDB(ts)
-		} else {
-			w.execQuery()
-		}
+		w.runCurrentQuery()
 	}
 
 	ts.dataGrid.OnRowSelected = func(rowIndex int) {
@@ -525,64 +563,115 @@ func (w *AppWindow) runCurrentQuery() error {
 	if ts == nil {
 		return fmt.Errorf("no active tab")
 	}
-	if ts.State.IsDatabase && ts.dbConn != nil {
-		w.execQueryWithDB(ts)
+	if ts.State.IsDatabase && ts.connIdx >= 0 && ts.connIdx < len(w.connections) {
+		w.execQueryWithConn(ts, w.connections[ts.connIdx].DB)
 		return nil
 	}
 	return w.execQuery()
 }
 
 func (w *AppWindow) onDatabaseOpened(path string) {
+	// Open a read-only connection
+	dbConn, err := db.OpenDB(path)
+	if err != nil {
+		w.statusBar.SetStatus("Error: " + err.Error())
+		if ts := w.currentTab(); ts != nil {
+			ts.dataGrid.ShowError(err.Error())
+		}
+		return
+	}
+
+	// Load tables
+	tables, err := dbConn.Tables()
+	if err != nil {
+		dbConn.Close()
+		w.statusBar.SetStatus("Error listing tables: " + err.Error())
+		return
+	}
+	for i := range tables {
+		cols, _ := dbConn.TableSchema(tables[i].Name)
+		tables[i].Columns = cols
+	}
+
+	// Extract short name from path
+	name := path
+	for i := len(path) - 1; i >= 0; i-- {
+		if path[i] == '/' {
+			name = path[i+1:]
+			break
+		}
+	}
+
+	// Create connection
+	conn := &Connection{
+		Name:   name,
+		Path:   path,
+		DB:     dbConn,
+		Tables: tables,
+	}
+
+	// Add button to rail
+	btn := Button.New()
+	btn.SetText(name)
+	btn.AsControl().AddThemeFontSizeOverride("font_size", 10)
+	btn.AsControl().SetCustomMinimumSize(Vector2.New(36, 36))
+	btn.SetClipText(true)
+	applySecondaryButtonTheme(btn.AsControl())
+	conn.button = btn
+
+	idx := len(w.connections)
+	w.connections = append(w.connections, conn)
+	w.connRail.AsNode().AddChild(btn.AsNode())
+	w.connRailWrap.AsCanvasItem().SetVisible(true)
+
+	btn.AsBaseButton().OnPressed(func() {
+		w.selectConnection(idx)
+	})
+
+	// Select this connection
+	w.selectConnection(idx)
+
+	w.statusBar.SetStatus(fmt.Sprintf("Connected: %s (%d tables/views)", name, len(tables)))
+}
+
+func (w *AppWindow) selectConnection(idx int) {
+	if idx < 0 || idx >= len(w.connections) {
+		return
+	}
+	w.activeConnIdx = idx
+	conn := w.connections[idx]
+
+	// Highlight active button
+	for i, c := range w.connections {
+		if i == idx {
+			applyActiveButtonTheme(c.button.AsControl())
+		} else {
+			applySecondaryButtonTheme(c.button.AsControl())
+		}
+	}
+
+	// Ensure we have a tab
 	if len(w.tabs) == 0 {
 		w.addNewTab()
-	} else if ts := w.currentTab(); ts != nil && ts.State.FilePath != "" {
+	} else if ts := w.currentTab(); ts != nil && ts.State.FilePath != "" && ts.State.FilePath != conn.Path {
 		w.addNewTab()
 	}
+
 	ts := w.currentTab()
 	if ts == nil {
 		return
 	}
 
-	// Open a read-only connection to the database
-	dbConn, err := db.OpenDB(path)
-	if err != nil {
-		w.statusBar.SetStatus("Error: " + err.Error())
-		ts.dataGrid.ShowError(err.Error())
-		return
-	}
-	// Close any previous db connection on this tab
-	if ts.dbConn != nil {
-		ts.dbConn.Close()
-	}
-	ts.dbConn = dbConn
-
-	ts.State.FilePath = path
+	ts.State.FilePath = conn.Path
 	ts.State.IsDatabase = true
-	ts.State.UserSQL = ""
-	ts.sqlPanel.SetSQL("")
-	w.titleBar.SetFileInfo(path)
+	ts.connIdx = idx
+	w.titleBar.SetFileInfo(conn.Path)
 	w.updateTabTitle(w.activeTab)
-	w.toolbar.fileLabel.SetText(path)
+	w.toolbar.fileLabel.SetText(conn.Path)
 
-	// Load tables
-	tables, err := dbConn.Tables()
-	if err != nil {
-		w.statusBar.SetStatus("Error listing tables: " + err.Error())
-		ts.dataGrid.ShowError(err.Error())
-		return
-	}
+	ts.schema.SetTables(conn.Tables)
 
-	// Load columns for each table
-	for i := range tables {
-		cols, err := dbConn.TableSchema(tables[i].Name)
-		if err == nil {
-			tables[i].Columns = cols
-		}
-	}
-
-	ts.schema.SetTables(tables)
-
-	// Wire table click to load data
+	// Wire table click
 	ts.schema.OnTableClicked = func(tableName string) {
 		ts.State.ActiveTable = tableName
 		ts.State.UserSQL = fmt.Sprintf("SELECT * FROM \"%s\"", tableName)
@@ -590,25 +679,22 @@ func (w *AppWindow) onDatabaseOpened(path string) {
 		ts.State.SortColumn = ""
 		ts.State.SortDir = models.SortNone
 		ts.sqlPanel.SetSQL(ts.State.UserSQL)
-		w.execQueryWithDB(ts)
+		w.runCurrentQuery()
 	}
 
-	if len(tables) > 0 {
-		// Auto-select first table
-		ts.schema.OnTableClicked(tables[0].Name)
+	if len(conn.Tables) > 0 {
+		ts.schema.OnTableClicked(conn.Tables[0].Name)
 	}
-
-	w.statusBar.SetStatus(fmt.Sprintf("Database: %d tables/views", len(tables)))
 }
 
-// execQueryWithDB runs a query using the tab's database connection (for .duckdb mode)
-func (w *AppWindow) execQueryWithDB(ts *tabState) {
-	if ts == nil || ts.dbConn == nil {
+// execQueryWithConn runs a query using a specific database connection.
+func (w *AppWindow) execQueryWithConn(ts *tabState, conn *db.DB) {
+	if ts == nil || conn == nil {
 		return
 	}
 	w.statusBar.SetStatus("Running…")
 	queryStart := time.Now()
-	result, err := ts.dbConn.Query(ts.State.VirtualSQL(), ts.State.PageOffset, ts.State.PageSize)
+	result, err := conn.Query(ts.State.VirtualSQL(), ts.State.PageOffset, ts.State.PageSize)
 	if err != nil {
 		w.statusBar.SetStatus("Error: " + err.Error())
 		ts.dataGrid.ShowError(err.Error())
