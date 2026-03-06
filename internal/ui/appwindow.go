@@ -729,14 +729,17 @@ func (w *AppWindow) execQueryWithConn(ts *tabState, conn *db.DB) {
 	elapsed := time.Since(queryStart)
 	ts.State.Result = result
 
-	if w.history != nil {
-		w.history.Add(models.HistoryEntry{
-			SQL:        ts.State.VirtualSQL(),
-			FilePath:   ts.State.FilePath,
-			Timestamp:  time.Now(),
-			RowCount:   result.Total,
-			DurationMs: elapsed.Milliseconds(),
-		})
+	if !ts.navigating {
+		if w.history != nil {
+			w.history.Add(models.HistoryEntry{
+				SQL:        ts.State.VirtualSQL(),
+				FilePath:   ts.State.FilePath,
+				Timestamp:  time.Now(),
+				RowCount:   result.Total,
+				DurationMs: elapsed.Milliseconds(),
+			})
+		}
+		ts.State.NavPush(ts.State.UserSQL)
 	}
 	ts.dataGrid.SetResult(result)
 	ts.dataGrid.UpdateColumnTitles(result.Columns, ts.State.SortColumn, ts.State.SortDir)
@@ -764,15 +767,17 @@ func (w *AppWindow) execQuery() error {
 	elapsed := time.Since(queryStart)
 	ts.State.Result = result
 
-	// Record to history
-	if w.history != nil {
-		w.history.Add(models.HistoryEntry{
-			SQL:        ts.State.VirtualSQL(),
-			FilePath:   ts.State.FilePath,
-			Timestamp:  time.Now(),
-			RowCount:   result.Total,
-			DurationMs: elapsed.Milliseconds(),
-		})
+	if !ts.navigating {
+		if w.history != nil {
+			w.history.Add(models.HistoryEntry{
+				SQL:        ts.State.VirtualSQL(),
+				FilePath:   ts.State.FilePath,
+				Timestamp:  time.Now(),
+				RowCount:   result.Total,
+				DurationMs: elapsed.Milliseconds(),
+			})
+		}
+		ts.State.NavPush(ts.State.UserSQL)
 	}
 	ts.dataGrid.SetResult(result)
 	ts.dataGrid.UpdateColumnTitles(result.Columns, ts.State.SortColumn, ts.State.SortDir)
@@ -783,6 +788,44 @@ func (w *AppWindow) execQuery() error {
 	totalPages := (int(result.Total) + ts.State.PageSize - 1) / ts.State.PageSize
 	w.statusBar.SetPage(page, totalPages)
 	return nil
+}
+
+func (w *AppWindow) navBack() {
+	ts := w.currentTab()
+	if ts == nil {
+		return
+	}
+	entry, ok := ts.State.NavBack()
+	if !ok {
+		return
+	}
+	ts.navigating = true
+	ts.State.UserSQL = entry.SQL
+	ts.State.SortColumn = entry.SortColumn
+	ts.State.SortDir = entry.SortDir
+	ts.State.PageOffset = entry.PageOffset
+	ts.sqlPanel.SetSQL(entry.SQL)
+	w.runCurrentQuery()
+	ts.navigating = false
+}
+
+func (w *AppWindow) navForward() {
+	ts := w.currentTab()
+	if ts == nil {
+		return
+	}
+	entry, ok := ts.State.NavForward()
+	if !ok {
+		return
+	}
+	ts.navigating = true
+	ts.State.UserSQL = entry.SQL
+	ts.State.SortColumn = entry.SortColumn
+	ts.State.SortDir = entry.SortDir
+	ts.State.PageOffset = entry.PageOffset
+	ts.sqlPanel.SetSQL(entry.SQL)
+	w.runCurrentQuery()
+	ts.navigating = false
 }
 
 // createSecondaryWindow creates a new OS-level window with full UI.

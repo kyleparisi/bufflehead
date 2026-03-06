@@ -262,3 +262,30 @@ sleep 0.5
 STATE=$(curl -s "$URL/state")
 assert_eq "view 3 rows" "3" "$(echo "$STATE" | json_get '["rowCount"]')"
 assert_eq "view has amount" "True" "$(echo "$STATE" | python3 -c "import sys,json; print('amount' in json.load(sys.stdin)['columns'])")"
+
+# ── Test: Navigation back/forward ────────────────────────────────────────
+echo "Test: Nav back/forward"
+# Reset: close all tabs, create fresh
+while [ "$(curl -s "$URL/state" | json_get '["tabCount"]')" != "0" ]; do
+    curl -s -X POST "$URL/close-tab" >/dev/null; sleep 0.1
+done
+curl -s -X POST "$URL/new-tab" >/dev/null
+sleep 0.3
+# Run query A
+curl -s -X POST "$URL/query" -d "{\"sql\":\"SELECT * FROM '$SAMPLE'\"}" >/dev/null
+sleep 0.3
+# Run query B
+curl -s -X POST "$URL/query" -d "{\"sql\":\"SELECT id, name FROM '$SAMPLE' LIMIT 10\"}" >/dev/null
+sleep 0.3
+STATE=$(curl -s "$URL/state")
+assert_eq "at query B" "10" "$(echo "$STATE" | json_get '["rowCount"]')"
+# Nav back → query A
+curl -s -X POST "$URL/nav-back" >/dev/null
+sleep 0.3
+STATE=$(curl -s "$URL/state")
+assert_eq "back to query A" "500" "$(echo "$STATE" | json_get '["rowCount"]')"
+# Nav forward → query B
+curl -s -X POST "$URL/nav-forward" >/dev/null
+sleep 0.3
+STATE=$(curl -s "$URL/state")
+assert_eq "forward to query B" "10" "$(echo "$STATE" | json_get '["rowCount"]')"

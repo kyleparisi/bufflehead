@@ -140,6 +140,14 @@ func (s *Server) Start() {
 		s.handleCommand(w, r, "search_detail")
 	})
 
+	mux.HandleFunc("POST /nav-back", func(w http.ResponseWriter, r *http.Request) {
+		s.handleCommand(w, r, "nav_back")
+	})
+
+	mux.HandleFunc("POST /nav-forward", func(w http.ResponseWriter, r *http.Request) {
+		s.handleCommand(w, r, "nav_forward")
+	})
+
 	mux.HandleFunc("GET /screenshot", func(w http.ResponseWriter, r *http.Request) {
 		cmd := &Command{
 			Action: "screenshot",

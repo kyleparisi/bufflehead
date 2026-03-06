@@ -30,13 +30,92 @@ type AppState struct {
 	// Database mode (for .duckdb files)
 	IsDatabase  bool
 	ActiveTable string
+
+	// Navigation stack (back/forward)
+	navStack []NavEntry
+	navPos   int
+}
+
+// NavEntry stores a snapshot for back/forward navigation.
+type NavEntry struct {
+	SQL        string
+	SortColumn string
+	SortDir    SortDirection
+	PageOffset int
 }
 
 // NewAppState returns defaults.
 func NewAppState() *AppState {
 	return &AppState{
 		PageSize: 100,
+		navPos:   -1,
 	}
+}
+
+// NavPush pushes a SELECT query onto the navigation stack.
+// Non-SELECT queries are ignored.
+func (s *AppState) NavPush(sql string) {
+	if !isSelectQuery(sql) {
+		return
+	}
+	entry := NavEntry{
+		SQL:        sql,
+		SortColumn: s.SortColumn,
+		SortDir:    s.SortDir,
+		PageOffset: s.PageOffset,
+	}
+	// Truncate forward history
+	if s.navPos < len(s.navStack)-1 {
+		s.navStack = s.navStack[:s.navPos+1]
+	}
+	s.navStack = append(s.navStack, entry)
+	s.navPos = len(s.navStack) - 1
+	// Cap at 100 entries
+	if len(s.navStack) > 100 {
+		s.navStack = s.navStack[len(s.navStack)-100:]
+		s.navPos = len(s.navStack) - 1
+	}
+}
+
+// NavBack moves back in navigation history. Returns the entry and true, or false if at start.
+func (s *AppState) NavBack() (NavEntry, bool) {
+	if s.navPos <= 0 {
+		return NavEntry{}, false
+	}
+	s.navPos--
+	return s.navStack[s.navPos], true
+}
+
+// NavForward moves forward in navigation history. Returns the entry and true, or false if at end.
+func (s *AppState) NavForward() (NavEntry, bool) {
+	if s.navPos >= len(s.navStack)-1 {
+		return NavEntry{}, false
+	}
+	s.navPos++
+	return s.navStack[s.navPos], true
+}
+
+// CanNavBack returns true if back navigation is possible.
+func (s *AppState) CanNavBack() bool {
+	return s.navPos > 0
+}
+
+// CanNavForward returns true if forward navigation is possible.
+func (s *AppState) CanNavForward() bool {
+	return s.navPos < len(s.navStack)-1
+}
+
+func isSelectQuery(sql string) bool {
+	// Trim and check if it starts with SELECT (case-insensitive)
+	trimmed := sql
+	for len(trimmed) > 0 && (trimmed[0] == ' ' || trimmed[0] == '\t' || trimmed[0] == '\n' || trimmed[0] == '\r') {
+		trimmed = trimmed[1:]
+	}
+	if len(trimmed) < 6 {
+		return false
+	}
+	prefix := trimmed[:6]
+	return prefix == "SELECT" || prefix == "select" || prefix == "Select"
 }
 
 // VirtualSQL wraps the user's query with sorting and pagination.

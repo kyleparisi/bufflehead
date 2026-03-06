@@ -804,7 +804,8 @@ type tabState struct {
 	sqlPanel     *SQLPanel
 	dataGrid     *DataGrid
 	detailPanel  *RowDetailPanel
-	connIdx      int // index into AppWindow.connections (-1 = in-memory)
+	connIdx      int  // index into AppWindow.connections (-1 = in-memory)
+	navigating   bool // true during back/forward nav — skip history+nav recording
 
 	// Container nodes for show/hide on tab switch
 	sidebarWrap PanelContainer.Instance
@@ -987,6 +988,10 @@ func (a *App) UnhandledKeyInput(event InputEvent.Instance) {
 		if a.appMenu != nil && a.appMenu.OnOpenFile != nil {
 			a.appMenu.OnOpenFile()
 		}
+	case Input.KeyBracketleft:
+		a.activeWindow().navBack()
+	case Input.KeyBracketright:
+		a.activeWindow().navForward()
 	}
 }
 
@@ -1143,6 +1148,14 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 
 	case "new_window":
 		a.newWindow()
+		cmd.Respond(control.Result{OK: true})
+
+	case "nav_back":
+		w.navBack()
+		cmd.Respond(control.Result{OK: true})
+
+	case "nav_forward":
+		w.navForward()
 		cmd.Respond(control.Result{OK: true})
 
 	case "screenshot":
