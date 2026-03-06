@@ -364,19 +364,12 @@ func (s *SchemaPanel) filterCols(query string) {
 		onlyLabel.SetText("only")
 		onlyLabel.AsControl().AddThemeFontSizeOverride("font_size", 10)
 		onlyLabel.AsControl().AddThemeColorOverride("font_color", colorTextMuted)
-		onlyLabel.AsControl().SetMouseFilter(Control.MouseFilterStop)
+		onlyLabel.AsControl().SetMouseFilter(Control.MouseFilterIgnore)
 		onlyLabel.AsCanvasItem().SetVisible(false)
 
-		// Capture for click + hover
+		// Capture for click on row — detect if over "only" label area
 		cbRef := cb
 		onlyLabelRef := onlyLabel
-		onlyLabel.AsControl().OnGuiInput(func(event InputEvent.Instance) {
-			if mb, ok := Object.As[InputEventMouseButton.Instance](event); ok {
-				if mb.AsInputEvent().IsPressed() && mb.ButtonIndex() == Input.MouseButtonLeft {
-					s.selectOnly(cbRef)
-				}
-			}
-		})
 
 		// Hover: show "only" label
 		row.AsControl().OnMouseEntered(func() {
@@ -384,6 +377,20 @@ func (s *SchemaPanel) filterCols(query string) {
 		})
 		row.AsControl().OnMouseExited(func() {
 			onlyLabelRef.AsCanvasItem().SetVisible(false)
+		})
+
+		// Click on row: if over "only" label area, trigger selectOnly
+		row.AsControl().OnGuiInput(func(event InputEvent.Instance) {
+			if mb, ok := Object.As[InputEventMouseButton.Instance](event); ok {
+				if mb.AsInputEvent().IsPressed() && mb.ButtonIndex() == Input.MouseButtonLeft {
+					// Check if click is within the "only" label's rect
+					localPos := mb.AsInputEventMouse().Position()
+					labelRect := onlyLabelRef.AsControl().GetRect()
+					if localPos.X >= labelRect.Position.X && localPos.X <= labelRect.Position.X+labelRect.Size.X {
+						s.selectOnly(cbRef)
+					}
+				}
+			}
 		})
 
 		row.AsNode().AddChild(cb.AsNode())
