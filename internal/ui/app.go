@@ -618,7 +618,13 @@ func (p *RowDetailPanel) Ready() {
 	fieldsMargin.AsNode().AddChild(p.fieldsList.AsNode())
 	p.scrollBox.AsNode().AddChild(fieldsMargin.AsNode())
 
+	// Separator line between search and fields
+	sep := PanelContainer.New()
+	sep.AsControl().SetCustomMinimumSize(Vector2.New(0, 1))
+	applyPanelBg(sep.AsControl(), colorBorder)
+
 	p.AsNode().AddChild(searchWrap.AsNode())
+	p.AsNode().AddChild(sep.AsNode())
 	p.AsNode().AddChild(p.placeholder.AsNode())
 	p.AsNode().AddChild(p.scrollBox.AsNode())
 }
