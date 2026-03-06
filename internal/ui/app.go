@@ -356,42 +356,38 @@ func (s *SchemaPanel) filterCols(query string) {
 		spacer.SetSizeFlagsHorizontal(Control.SizeExpandFill)
 		spacer.SetMouseFilter(Control.MouseFilterIgnore)
 
-		// "only" button — hidden until hover
-		onlyBtn := Button.New()
-		onlyBtn.SetText("only")
-		onlyBtn.AsControl().AddThemeFontSizeOverride("font_size", 10)
-		onlyBtn.AsControl().AddThemeColorOverride("font_color", colorTextMuted)
-		applySecondaryButtonTheme(onlyBtn.AsControl())
-		onlyBtn.AsCanvasItem().SetVisible(false)
-		onlyBtn.AsControl().SetMouseFilter(Control.MouseFilterStop)
+		// "only" link — hidden until hover
+		onlyLabel := Label.New()
+		onlyLabel.SetText("only")
+		onlyLabel.AsControl().AddThemeFontSizeOverride("font_size", 10)
+		onlyLabel.AsControl().AddThemeColorOverride("font_color", colorTextMuted)
+		onlyLabel.AsControl().SetMouseFilter(Control.MouseFilterStop)
+		onlyLabel.AsCanvasItem().SetVisible(false)
 
-		// Capture index for "only" click
+		// Capture for click + hover
 		cbRef := cb
-		onlyBtn.AsBaseButton().OnPressed(func() {
-			s.selectOnly(cbRef)
+		onlyLabelRef := onlyLabel
+		onlyLabel.AsControl().OnGuiInput(func(event InputEvent.Instance) {
+			if mb, ok := Object.As[InputEventMouseButton.Instance](event); ok {
+				if mb.AsInputEvent().IsPressed() && mb.ButtonIndex() == Input.MouseButtonLeft {
+					s.selectOnly(cbRef)
+				}
+			}
 		})
 
-		// Hover: show "only" + highlight row
-		hoverBg := makeStyleBox(colorSelected, 0, 0, colorSelected)
-		normalBg := makeStyleBox(colorBgSidebar, 0, 0, colorBgSidebar)
-		row.AsControl().AddThemeStyleboxOverride("panel", normalBg.AsStyleBox())
-
-		onlyBtnRef := onlyBtn
-		rowRef := row
+		// Hover: show "only" label
 		row.AsControl().OnMouseEntered(func() {
-			onlyBtnRef.AsCanvasItem().SetVisible(true)
-			rowRef.AsControl().AddThemeStyleboxOverride("panel", hoverBg.AsStyleBox())
+			onlyLabelRef.AsCanvasItem().SetVisible(true)
 		})
 		row.AsControl().OnMouseExited(func() {
-			onlyBtnRef.AsCanvasItem().SetVisible(false)
-			rowRef.AsControl().AddThemeStyleboxOverride("panel", normalBg.AsStyleBox())
+			onlyLabelRef.AsCanvasItem().SetVisible(false)
 		})
 
 		row.AsNode().AddChild(cb.AsNode())
 		row.AsNode().AddChild(nameLabel.AsNode())
 		row.AsNode().AddChild(typeLabel.AsNode())
 		row.AsNode().AddChild(spacer.AsNode())
-		row.AsNode().AddChild(onlyBtn.AsNode())
+		row.AsNode().AddChild(onlyLabel.AsNode())
 		s.Super().AsNode().AddChild(row.AsNode())
 		s.checkBoxes = append(s.checkBoxes, cb)
 		s.checkRows = append(s.checkRows, row)
