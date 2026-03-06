@@ -12,6 +12,7 @@ import (
 	"graphics.gd/classdb/SceneTree"
 	"graphics.gd/classdb/Window"
 	"graphics.gd/startup"
+	"graphics.gd/variant/Float"
 	"graphics.gd/variant/Object"
 	"graphics.gd/variant/Vector2i"
 )
@@ -22,16 +23,23 @@ func main() {
 	// Register all custom classes before building the scene.
 	ui.RegisterAll()
 
-	// Set window size now that the engine is initialized.
-	DisplayServer.WindowSetSize(Vector2i.New(1440, 900), 0)
-	DisplayServer.WindowSetMinSize(Vector2i.New(800, 500), 0)
+	// Scale UI to match screen DPI (2.0 on Retina, 1.0 on standard).
+	// Window size is set in physical pixels; multiply by scale so logical size stays 1440x900.
+	scale := float64(DisplayServer.ScreenGetScale())
+	if scale < 1 {
+		scale = 1
+	}
+	winW := int(1440 * scale)
+	winH := int(900 * scale)
+	minW := int(800 * scale)
+	minH := int(500 * scale)
+	DisplayServer.WindowSetSize(Vector2i.New(winW, winH), 0)
+	DisplayServer.WindowSetMinSize(Vector2i.New(minW, minH), 0)
 
-	// Extend content into the native title bar (disabled — causes invisible window on some macOS hardware)
 	if tree, ok := Object.As[SceneTree.Instance](Engine.GetMainLoop()); ok {
 		if root := tree.Root(); root != Window.Nil {
 			root.SetTitle("Parquet Viewer")
-			// Retina: let Godot handle HiDPI natively via display server
-			// root.SetContentScaleFactor(2.0) — removed: halves logical resolution
+			root.SetContentScaleFactor(Float.X(scale))
 		}
 	}
 

@@ -10,6 +10,7 @@ import (
 	"graphics.gd/classdb/BoxContainer"
 	"graphics.gd/classdb/Button"
 	"graphics.gd/classdb/Control"
+	"graphics.gd/classdb/DisplayServer"
 	"graphics.gd/classdb/HBoxContainer"
 	"graphics.gd/classdb/HSplitContainer"
 	"graphics.gd/classdb/Label"
@@ -18,6 +19,7 @@ import (
 	"graphics.gd/classdb/TabBar"
 	"graphics.gd/classdb/VBoxContainer"
 	"graphics.gd/classdb/Window"
+	"graphics.gd/variant/Float"
 	"graphics.gd/variant/Vector2"
 	"graphics.gd/variant/Vector2i"
 )
@@ -784,7 +786,11 @@ func createSecondaryWindow(duck *db.DB, history *models.QueryHistory, onNewWindo
 	win := Window.New()
 	win.SetTitle("Parquet Viewer")
 	win.SetSize(Vector2i.New(1440, 900))
-	// Retina handled by Godot's native HiDPI
+	// Scale to match screen DPI
+	scale := float64(DisplayServer.ScreenGetScale())
+	if scale > 0 {
+		win.SetContentScaleFactor(Float.X(scale))
+	}
 	win.SetExtendToTitle(true)
 
 	aw := &AppWindow{
