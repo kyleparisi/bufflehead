@@ -537,6 +537,7 @@ type tabState struct {
 	// Container nodes for show/hide on tab switch
 	sidebarWrap PanelContainer.Instance
 	rightPanel  VBoxContainer.Instance
+	detailWrap  PanelContainer.Instance
 }
 
 // ── App root ───────────────────────────────────────────────────────────────
@@ -826,6 +827,25 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 
 	case "close_tab":
 		w.closeTab(w.activeTab)
+		cmd.Respond(control.Result{OK: true})
+
+	case "select_row":
+		var d struct{ Row int `json:"row"` }
+		if err := json.Unmarshal(cmd.Data, &d); err != nil {
+			cmd.Respond(control.Result{Error: err.Error()})
+			return
+		}
+		ts := w.currentTab()
+		if ts == nil || ts.dataGrid == nil {
+			cmd.Respond(control.Result{Error: "no active tab"})
+			return
+		}
+		if d.Row < 0 || d.Row >= len(ts.dataGrid.rows) {
+			cmd.Respond(control.Result{Error: "row index out of range"})
+			return
+		}
+		ts.detailPanel.SetRow(ts.dataGrid.columns, ts.dataGrid.rows[d.Row])
+		ts.detailWrap.AsCanvasItem().SetVisible(true)
 		cmd.Respond(control.Result{OK: true})
 
 	case "new_window":

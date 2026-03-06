@@ -251,30 +251,24 @@ func (w *AppWindow) addNewTab() {
 	ts.dataGrid.OnRowSelected = func(rowIndex int) {
 		if rowIndex < len(ts.dataGrid.rows) {
 			ts.detailPanel.SetRow(ts.dataGrid.columns, ts.dataGrid.rows[rowIndex])
-			ts.detailPanel.AsCanvasItem().SetVisible(true)
+			ts.detailWrap.AsCanvasItem().SetVisible(true)
 		}
 	}
 
-	// Detail panel (right side)
+	// Detail panel (third column)
 	ts.detailPanel = new(RowDetailPanel)
-	detailWrap := PanelContainer.New()
-	applyPanelBg(detailWrap.AsControl(), colorBgSidebar)
-	detailWrap.AsNode().AddChild(ts.detailPanel.AsNode())
-
-	// HSplit for data grid | detail panel
-	dataSplit := HSplitContainer.New()
-	dataSplit.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
-	dataSplit.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
-	dataSplit.AsSplitContainer().SetSplitOffset(-300)
-	dataSplit.AsControl().AddThemeConstantOverride("separation", 1)
-	dataSplit.AsNode().AddChild(ts.dataGrid.AsNode())
-	dataSplit.AsNode().AddChild(detailWrap.AsNode())
+	ts.detailWrap = PanelContainer.New()
+	applyPanelBg(ts.detailWrap.AsControl(), colorBgSidebar)
+	ts.detailWrap.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
+	ts.detailWrap.AsNode().AddChild(ts.detailPanel.AsNode())
+	ts.detailWrap.AsCanvasItem().SetVisible(false) // hidden until row clicked
 
 	ts.rightPanel.AsNode().AddChild(sqlWrap.AsNode())
-	ts.rightPanel.AsNode().AddChild(dataSplit.AsNode())
+	ts.rightPanel.AsNode().AddChild(ts.dataGrid.AsNode())
 
 	w.split.AsNode().AddChild(ts.sidebarWrap.AsNode())
 	w.split.AsNode().AddChild(ts.rightPanel.AsNode())
+	w.split.AsNode().AddChild(ts.detailWrap.AsNode())
 
 	w.showTabView()
 
@@ -293,11 +287,16 @@ func (w *AppWindow) switchTab(idx int) {
 	for _, ts := range w.tabs {
 		ts.sidebarWrap.AsCanvasItem().SetVisible(false)
 		ts.rightPanel.AsCanvasItem().SetVisible(false)
+		ts.detailWrap.AsCanvasItem().SetVisible(false)
 	}
 	w.activeTab = idx
 	ts := w.tabs[idx]
 	ts.sidebarWrap.AsCanvasItem().SetVisible(true)
 	ts.rightPanel.AsCanvasItem().SetVisible(true)
+	// Only show detail if it has content
+	if ts.detailPanel.columns != nil {
+		ts.detailWrap.AsCanvasItem().SetVisible(true)
+	}
 
 	if ts.State.FilePath != "" {
 		w.toolbar.fileLabel.SetText(ts.State.FilePath)
@@ -334,10 +333,13 @@ func (w *AppWindow) closeTab(idx int) {
 	ts := w.tabs[idx]
 	ts.sidebarWrap.AsCanvasItem().SetVisible(false)
 	ts.rightPanel.AsCanvasItem().SetVisible(false)
+	ts.detailWrap.AsCanvasItem().SetVisible(false)
 	w.split.AsNode().RemoveChild(ts.sidebarWrap.AsNode())
 	w.split.AsNode().RemoveChild(ts.rightPanel.AsNode())
+	w.split.AsNode().RemoveChild(ts.detailWrap.AsNode())
 	ts.sidebarWrap.AsNode().QueueFree()
 	ts.rightPanel.AsNode().QueueFree()
+	ts.detailWrap.AsNode().QueueFree()
 
 	w.tabs = append(w.tabs[:idx], w.tabs[idx+1:]...)
 	w.tabBar.RemoveTab(idx)
