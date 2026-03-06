@@ -24,8 +24,8 @@ func main() {
 	ui.RegisterAll()
 
 	// Set window size now that the engine is initialized.
-	DisplayServer.WindowSetSize(Vector2i.New(1024, 640), 0)
-	DisplayServer.WindowSetMinSize(Vector2i.New(640, 400), 0)
+	DisplayServer.WindowSetSize(Vector2i.New(1440, 900), 0)
+	DisplayServer.WindowSetMinSize(Vector2i.New(800, 500), 0)
 
 	// Extend content into the native title bar (disabled — causes invisible window on some macOS hardware)
 	if tree, ok := Object.As[SceneTree.Instance](Engine.GetMainLoop()); ok {
