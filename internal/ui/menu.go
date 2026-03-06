@@ -18,8 +18,10 @@ type AppMenu struct {
 	recentMenu  RID.NativeMenu
 	recentPaths []string
 
-	OnOpenFile   func()              // triggers native file dialog
-	OnOpenRecent func(path string)   // opens a specific recent file
+	OnOpenFile   func()            // triggers native file dialog
+	OnOpenRecent func(path string) // opens a specific recent file
+	OnNewTab     func()            // creates new tab (⌘N)
+	OnCloseTab   func()            // closes current tab (⌘W)
 }
 
 func (m *AppMenu) Setup() {
@@ -31,12 +33,26 @@ func (m *AppMenu) Setup() {
 	// Create File menu
 	m.fileMenu = NativeMenu.CreateMenu()
 
+	// New Tab (Cmd+N)
+	NativeMenu.AddItem(m.fileMenu, "New Tab", func(tag any) {
+		if m.OnNewTab != nil {
+			m.OnNewTab()
+		}
+	}, nil, nil, Input.Key(Input.KeyMaskMeta)|Input.KeyN)
+
 	// Open… (Cmd+O)
 	NativeMenu.AddItem(m.fileMenu, "Open…", func(tag any) {
 		if m.OnOpenFile != nil {
 			m.OnOpenFile()
 		}
 	}, nil, nil, Input.Key(Input.KeyMaskMeta)|Input.KeyO)
+
+	// Close Tab (Cmd+W)
+	NativeMenu.AddItem(m.fileMenu, "Close Tab", func(tag any) {
+		if m.OnCloseTab != nil {
+			m.OnCloseTab()
+		}
+	}, nil, nil, Input.Key(Input.KeyMaskMeta)|Input.KeyW)
 
 	// Open Recent submenu
 	m.recentMenu = NativeMenu.CreateMenu()

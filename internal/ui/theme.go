@@ -174,3 +174,22 @@ func applyPanelBg(c Control.Instance, bg Color.RGBA) {
 	sb := makeStyleBox(bg, 0, 0, bg)
 	c.AddThemeStyleboxOverride("panel", sb.AsStyleBox())
 }
+
+func applyTabBarTheme(c Control.Instance) {
+	c.AddThemeFontSizeOverride("font_size", 13)
+	c.AddThemeColorOverride("font_selected_color", colorTextBright)
+	c.AddThemeColorOverride("font_unselected_color", colorTextDim)
+	c.AddThemeColorOverride("font_hovered_color", colorText)
+
+	// Active tab style
+	active := makeStyleBoxPadded(colorBgSidebar, 4, 2, colorBorder, 0)
+	c.AddThemeStyleboxOverride("tab_selected", active.AsStyleBox())
+
+	// Inactive tab
+	inactive := makeStyleBoxPadded(colorBg, 4, 2, colorBg, 0)
+	c.AddThemeStyleboxOverride("tab_unselected", inactive.AsStyleBox())
+
+	// Hovered tab
+	hovered := makeStyleBoxPadded(colorBtnHover, 4, 2, colorBtnHover, 0)
+	c.AddThemeStyleboxOverride("tab_hovered", hovered.AsStyleBox())
+}

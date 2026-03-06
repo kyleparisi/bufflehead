@@ -10,28 +10,28 @@ import (
 
 	"graphics.gd/classdb"
 	"graphics.gd/classdb/Button"
+	"graphics.gd/classdb/CodeEdit"
 	"graphics.gd/classdb/Control"
 	"graphics.gd/classdb/DisplayServer"
 	"graphics.gd/classdb/Engine"
 	"graphics.gd/classdb/HBoxContainer"
+	"graphics.gd/classdb/HSplitContainer"
 	"graphics.gd/classdb/Input"
 	"graphics.gd/classdb/InputEvent"
 	"graphics.gd/classdb/InputEventMouseButton"
-	"graphics.gd/variant/Float"
-	"graphics.gd/variant/Object"
-	"graphics.gd/classdb/HSplitContainer"
 	"graphics.gd/classdb/Label"
 	"graphics.gd/classdb/LineEdit"
 	"graphics.gd/classdb/MarginContainer"
 	"graphics.gd/classdb/PanelContainer"
 	"graphics.gd/classdb/SceneTree"
-	"graphics.gd/classdb/CodeEdit"
+	"graphics.gd/classdb/TabBar"
 	"graphics.gd/classdb/Tree"
 	"graphics.gd/classdb/TreeItem"
 	"graphics.gd/classdb/VBoxContainer"
 	"graphics.gd/classdb/Window"
+	"graphics.gd/variant/Float"
+	"graphics.gd/variant/Object"
 	"graphics.gd/variant/Vector2"
-
 )
 
 // ── Title bar ──────────────────────────────────────────────────────────────
@@ -384,29 +384,46 @@ func (s *StatusBar) SetPage(page, totalPages int) {
 	s.pageLabel.SetText(fmt.Sprintf("Page %d / %d", page, totalPages))
 }
 
+// ── Tab state ──────────────────────────────────────────────────────────────
+
+type tabState struct {
+	State    *models.AppState
+	schema   *SchemaPanel
+	sqlPanel *SQLPanel
+	dataGrid *DataGrid
+
+	// Container nodes for show/hide on tab switch
+	sidebarWrap PanelContainer.Instance
+	rightPanel  VBoxContainer.Instance
+}
+
 // ── App root ───────────────────────────────────────────────────────────────
 
 type App struct {
 	MarginContainer.Extension[App] `gd:"ParquetViewer"`
 
-	Duck          *db.DB            `gd:"-"`
-	State         *models.AppState  `gd:"-"`
-	ControlServer *control.Server   `gd:"-"`
+	Duck          *db.DB          `gd:"-"`
+	ControlServer *control.Server `gd:"-"`
+
+	// Legacy accessor — points to active tab's state
+	State *models.AppState `gd:"-"`
 
 	titleBar  *TitleBar
 	toolbar   *Toolbar
-	schema    *SchemaPanel
-	sqlPanel  *SQLPanel
-	dataGrid  *DataGrid
 	statusBar *StatusBar
 	appMenu   *AppMenu
+	tabBar    TabBar.Instance
+
+	tabs      []*tabState `gd:"-"`
+	activeTab int         `gd:"-"`
+
+	// The split container holds tab content
+	split HSplitContainer.Instance
 }
 
 func (a *App) Ready() {
-	// Make this node fill the entire window
 	a.AsControl().SetAnchorsAndOffsetsPreset(Control.PresetFullRect)
 
-	// Dark background — as child of MarginContainer, it fills automatically
 	bg := PanelContainer.New()
 	bg.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	bg.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
@@ -431,82 +448,32 @@ func (a *App) Ready() {
 	a.toolbar.OnFileOpened = a.onFileSelected
 	toolbarWrap.AsNode().AddChild(a.toolbar.AsNode())
 
-	// ── Main split ───────────────────────────────────────────────────
-	split := HSplitContainer.New()
-	split.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
-	split.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
-	split.AsSplitContainer().SetSplitOffset(180)
-	split.AsControl().AddThemeConstantOverride("separation", 1)
+	// ── Tab bar ──────────────────────────────────────────────────────
+	tabBarWrap := MarginContainer.New()
+	tabBarWrap.AsControl().AddThemeConstantOverride("margin_left", 8)
+	tabBarWrap.AsControl().AddThemeConstantOverride("margin_right", 8)
+	tabBarWrap.AsControl().AddThemeConstantOverride("margin_top", 0)
+	tabBarWrap.AsControl().AddThemeConstantOverride("margin_bottom", 0)
 
-	// Left: sidebar with padding
-	sidebarWrap := PanelContainer.New()
-	sidebarWrap.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
-	applyPanelBg(sidebarWrap.AsControl(), colorBgSidebar)
-	sidebarMargin := MarginContainer.New()
-	sidebarMargin.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
-	sidebarMargin.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
-	sidebarMargin.AsControl().AddThemeConstantOverride("margin_top", 6)
-	sidebarMargin.AsControl().AddThemeConstantOverride("margin_left", 6)
-	sidebarMargin.AsControl().AddThemeConstantOverride("margin_right", 4)
-	sidebarMargin.AsControl().AddThemeConstantOverride("margin_bottom", 4)
+	a.tabBar = TabBar.New()
+	a.tabBar.SetTabCloseDisplayPolicy(TabBar.CloseButtonShowActiveOnly)
+	a.tabBar.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	applyTabBarTheme(a.tabBar.AsControl())
 
-	a.schema = new(SchemaPanel)
-	sidebarMargin.AsNode().AddChild(a.schema.AsNode())
-	sidebarWrap.AsNode().AddChild(sidebarMargin.AsNode())
+	a.tabBar.OnTabChanged(func(tab int) {
+		a.switchTab(tab)
+	})
+	a.tabBar.OnTabClosePressed(func(tab int) {
+		a.closeTab(tab)
+	})
+	tabBarWrap.AsNode().AddChild(a.tabBar.AsNode())
 
-	// Right: sql + grid
-	rightPanel := VBoxContainer.New()
-	rightPanel.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
-	rightPanel.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
-	rightPanel.AsControl().AddThemeConstantOverride("separation", 1)
-
-	a.sqlPanel = new(SQLPanel)
-	a.sqlPanel.OnRunQuery = func(sql string) {
-		a.State.UserSQL = sql
-		a.State.PageOffset = 0 // reset pagination on new query
-		a.State.SortColumn = ""
-		a.State.SortDir = models.SortNone
-		a.execQuery()
-	}
-
-	sqlWrap := MarginContainer.New()
-	sqlWrap.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
-	sqlWrap.AsControl().AddThemeConstantOverride("margin_top", 4)
-	sqlWrap.AsControl().AddThemeConstantOverride("margin_left", 6)
-	sqlWrap.AsControl().AddThemeConstantOverride("margin_right", 6)
-	sqlWrap.AsControl().AddThemeConstantOverride("margin_bottom", 2)
-	sqlWrap.AsNode().AddChild(a.sqlPanel.AsNode())
-
-	a.dataGrid = new(DataGrid)
-	a.dataGrid.OnColumnClicked = func(column int) {
-		if a.State.Result == nil || column >= len(a.State.Result.Columns) {
-			return
-		}
-		colName := a.State.Result.Columns[column]
-		if a.State.SortColumn == colName {
-			// Cycle: asc → desc → none
-			switch a.State.SortDir {
-			case models.SortAsc:
-				a.State.SortDir = models.SortDesc
-			case models.SortDesc:
-				a.State.SortColumn = ""
-				a.State.SortDir = models.SortNone
-			default:
-				a.State.SortDir = models.SortAsc
-			}
-		} else {
-			a.State.SortColumn = colName
-			a.State.SortDir = models.SortAsc
-		}
-		a.State.PageOffset = 0
-		a.execQuery()
-	}
-
-	rightPanel.AsNode().AddChild(sqlWrap.AsNode())
-	rightPanel.AsNode().AddChild(a.dataGrid.AsNode())
-
-	split.AsNode().AddChild(sidebarWrap.AsNode())
-	split.AsNode().AddChild(rightPanel.AsNode())
+	// ── Main split container ─────────────────────────────────────────
+	a.split = HSplitContainer.New()
+	a.split.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	a.split.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
+	a.split.AsSplitContainer().SetSplitOffset(180)
+	a.split.AsControl().AddThemeConstantOverride("separation", 1)
 
 	// ── Bottom status bar ────────────────────────────────────────────
 	statusWrap := PanelContainer.New()
@@ -536,11 +503,15 @@ func (a *App) Ready() {
 	// ── Assemble ─────────────────────────────────────────────────────
 	outerVBox.AsNode().AddChild(a.titleBar.AsNode())
 	outerVBox.AsNode().AddChild(toolbarWrap.AsNode())
-	outerVBox.AsNode().AddChild(split.AsNode())
+	outerVBox.AsNode().AddChild(tabBarWrap.AsNode())
+	outerVBox.AsNode().AddChild(a.split.AsNode())
 	outerVBox.AsNode().AddChild(statusWrap.AsNode())
 
 	bg.AsNode().AddChild(outerVBox.AsNode())
 	a.AsNode().AddChild(bg.AsNode())
+
+	// Create initial tab
+	a.addNewTab()
 
 	// Setup file drag & drop
 	if tree, ok := Object.As[SceneTree.Instance](Engine.GetMainLoop()); ok {
@@ -553,7 +524,6 @@ func (a *App) Ready() {
 						return
 					}
 				}
-				// If no .parquet found, try the first file anyway
 				if len(files) > 0 {
 					a.onFileSelected(files[0])
 					a.toolbar.fileLabel.SetText(files[0])
@@ -585,6 +555,12 @@ func (a *App) Ready() {
 			a.onFileSelected(path)
 			a.toolbar.fileLabel.SetText(path)
 		},
+		OnNewTab: func() {
+			a.addNewTab()
+		},
+		OnCloseTab: func() {
+			a.closeTab(a.activeTab)
+		},
 	}
 	a.appMenu.Setup()
 
@@ -600,6 +576,8 @@ func (a *App) Ready() {
 				"pageSize":   a.State.PageSize,
 				"rowCount":   0,
 				"columns":    []string{},
+				"tabCount":   len(a.tabs),
+				"activeTab":  a.activeTab,
 			}
 			if a.State.Result != nil {
 				state["rowCount"] = a.State.Result.Total
@@ -618,6 +596,191 @@ func (a *App) Ready() {
 		})
 	}
 }
+
+// ── Tab management ─────────────────────────────────────────────────────────
+
+func (a *App) currentTab() *tabState {
+	if a.activeTab >= 0 && a.activeTab < len(a.tabs) {
+		return a.tabs[a.activeTab]
+	}
+	return nil
+}
+
+func (a *App) addNewTab() {
+	ts := &tabState{
+		State: models.NewAppState(),
+	}
+
+	// Build sidebar
+	ts.sidebarWrap = PanelContainer.New()
+	ts.sidebarWrap.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
+	applyPanelBg(ts.sidebarWrap.AsControl(), colorBgSidebar)
+	sidebarMargin := MarginContainer.New()
+	sidebarMargin.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	sidebarMargin.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
+	sidebarMargin.AsControl().AddThemeConstantOverride("margin_top", 6)
+	sidebarMargin.AsControl().AddThemeConstantOverride("margin_left", 6)
+	sidebarMargin.AsControl().AddThemeConstantOverride("margin_right", 4)
+	sidebarMargin.AsControl().AddThemeConstantOverride("margin_bottom", 4)
+
+	ts.schema = new(SchemaPanel)
+	sidebarMargin.AsNode().AddChild(ts.schema.AsNode())
+	ts.sidebarWrap.AsNode().AddChild(sidebarMargin.AsNode())
+
+	// Build right panel
+	ts.rightPanel = VBoxContainer.New()
+	ts.rightPanel.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	ts.rightPanel.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
+	ts.rightPanel.AsControl().AddThemeConstantOverride("separation", 1)
+
+	ts.sqlPanel = new(SQLPanel)
+	ts.sqlPanel.OnRunQuery = func(sql string) {
+		ts.State.UserSQL = sql
+		ts.State.PageOffset = 0
+		ts.State.SortColumn = ""
+		ts.State.SortDir = models.SortNone
+		a.execQuery()
+	}
+	sqlWrap := MarginContainer.New()
+	sqlWrap.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	sqlWrap.AsControl().AddThemeConstantOverride("margin_top", 4)
+	sqlWrap.AsControl().AddThemeConstantOverride("margin_left", 6)
+	sqlWrap.AsControl().AddThemeConstantOverride("margin_right", 6)
+	sqlWrap.AsControl().AddThemeConstantOverride("margin_bottom", 2)
+	sqlWrap.AsNode().AddChild(ts.sqlPanel.AsNode())
+
+	ts.dataGrid = new(DataGrid)
+	ts.dataGrid.OnColumnClicked = func(column int) {
+		if ts.State.Result == nil || column >= len(ts.State.Result.Columns) {
+			return
+		}
+		colName := ts.State.Result.Columns[column]
+		if ts.State.SortColumn == colName {
+			switch ts.State.SortDir {
+			case models.SortAsc:
+				ts.State.SortDir = models.SortDesc
+			case models.SortDesc:
+				ts.State.SortColumn = ""
+				ts.State.SortDir = models.SortNone
+			default:
+				ts.State.SortDir = models.SortAsc
+			}
+		} else {
+			ts.State.SortColumn = colName
+			ts.State.SortDir = models.SortAsc
+		}
+		ts.State.PageOffset = 0
+		a.execQuery()
+	}
+
+	ts.rightPanel.AsNode().AddChild(sqlWrap.AsNode())
+	ts.rightPanel.AsNode().AddChild(ts.dataGrid.AsNode())
+
+	// Add to split (hidden initially if not first tab)
+	a.split.AsNode().AddChild(ts.sidebarWrap.AsNode())
+	a.split.AsNode().AddChild(ts.rightPanel.AsNode())
+
+	// Add tab bar entry
+	idx := len(a.tabs)
+	a.tabs = append(a.tabs, ts)
+	a.tabBar.AddTab()
+	a.tabBar.SetTabTitle(idx, "Untitled")
+
+	// Switch to the new tab
+	a.tabBar.SetCurrentTab(idx)
+	a.switchTab(idx)
+}
+
+func (a *App) switchTab(idx int) {
+	if idx < 0 || idx >= len(a.tabs) {
+		return
+	}
+
+	// Hide all tab content
+	for _, ts := range a.tabs {
+		ts.sidebarWrap.AsCanvasItem().SetVisible(false)
+		ts.rightPanel.AsCanvasItem().SetVisible(false)
+	}
+
+	// Show active tab
+	a.activeTab = idx
+	ts := a.tabs[idx]
+	ts.sidebarWrap.AsCanvasItem().SetVisible(true)
+	ts.rightPanel.AsCanvasItem().SetVisible(true)
+	a.State = ts.State
+
+	// Update toolbar and title bar
+	if ts.State.FilePath != "" {
+		a.toolbar.fileLabel.SetText(ts.State.FilePath)
+		a.titleBar.SetFileInfo(ts.State.FilePath)
+	} else {
+		a.toolbar.fileLabel.SetText("")
+		a.titleBar.SetFileInfo("")
+	}
+
+	// Update status bar
+	if ts.State.Result != nil {
+		start := ts.State.PageOffset + 1
+		end := ts.State.PageOffset + len(ts.State.Result.Rows)
+		a.statusBar.SetStatus(fmt.Sprintf("%d–%d of %d rows", start, end, ts.State.Result.Total))
+		page := (ts.State.PageOffset / ts.State.PageSize) + 1
+		totalPages := (int(ts.State.Result.Total) + ts.State.PageSize - 1) / ts.State.PageSize
+		a.statusBar.SetPage(page, totalPages)
+	} else {
+		a.statusBar.SetStatus("Ready")
+		a.statusBar.SetPage(1, 1)
+	}
+}
+
+func (a *App) closeTab(idx int) {
+	if len(a.tabs) <= 1 {
+		return // keep at least one tab
+	}
+	if idx < 0 || idx >= len(a.tabs) {
+		return
+	}
+
+	ts := a.tabs[idx]
+
+	// Remove nodes from split
+	a.split.AsNode().RemoveChild(ts.sidebarWrap.AsNode())
+	a.split.AsNode().RemoveChild(ts.rightPanel.AsNode())
+	ts.sidebarWrap.AsNode().QueueFree()
+	ts.rightPanel.AsNode().QueueFree()
+
+	// Remove from tabs slice
+	a.tabs = append(a.tabs[:idx], a.tabs[idx+1:]...)
+	a.tabBar.RemoveTab(idx)
+
+	// Adjust active tab
+	if a.activeTab >= len(a.tabs) {
+		a.activeTab = len(a.tabs) - 1
+	}
+	a.tabBar.SetCurrentTab(a.activeTab)
+	a.switchTab(a.activeTab)
+}
+
+func (a *App) updateTabTitle(idx int) {
+	if idx < 0 || idx >= len(a.tabs) {
+		return
+	}
+	ts := a.tabs[idx]
+	if ts.State.FilePath != "" {
+		// Just the filename
+		name := ts.State.FilePath
+		for i := len(name) - 1; i >= 0; i-- {
+			if name[i] == '/' {
+				name = name[i+1:]
+				break
+			}
+		}
+		a.tabBar.SetTabTitle(idx, name)
+	} else {
+		a.tabBar.SetTabTitle(idx, "Untitled")
+	}
+}
+
+// ── Process + control commands ─────────────────────────────────────────────
 
 func (a *App) Process(delta Float.X) {
 	if a.ControlServer == nil {
@@ -685,11 +848,14 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 			cmd.Respond(control.Result{Error: err.Error()})
 			return
 		}
-		a.State.UserSQL = d.SQL
-		a.State.PageOffset = 0
-		a.State.SortColumn = ""
-		a.State.SortDir = models.SortNone
-		a.sqlPanel.SetSQL(d.SQL)
+		ts := a.currentTab()
+		if ts != nil {
+			ts.State.UserSQL = d.SQL
+			ts.State.PageOffset = 0
+			ts.State.SortColumn = ""
+			ts.State.SortDir = models.SortNone
+			ts.sqlPanel.SetSQL(d.SQL)
+		}
 		a.execQuery()
 		cmd.Respond(control.Result{OK: true})
 
@@ -727,48 +893,59 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 	}
 }
 
+// ── File + query logic ─────────────────────────────────────────────────────
+
 func (a *App) onFileSelected(path string) {
-	a.State.FilePath = path
-	a.State.UserSQL = db.DefaultQuery(path)
+	ts := a.currentTab()
+	if ts == nil {
+		return
+	}
+	ts.State.FilePath = path
+	ts.State.UserSQL = db.DefaultQuery(path)
 	if a.appMenu != nil {
 		a.appMenu.AddRecentFile(path)
 	}
-	a.State.PageOffset = 0
-	a.State.SortColumn = ""
-	a.State.SortDir = models.SortNone
-	a.sqlPanel.SetSQL(a.State.UserSQL)
+	ts.State.PageOffset = 0
+	ts.State.SortColumn = ""
+	ts.State.SortDir = models.SortNone
+	ts.sqlPanel.SetSQL(ts.State.UserSQL)
 	a.titleBar.SetFileInfo(path)
+	a.updateTabTitle(a.activeTab)
 
 	cols, err := a.Duck.Schema(path)
 	if err != nil {
 		a.statusBar.SetStatus("Error: " + err.Error())
 		return
 	}
-	a.State.Schema = cols
-	a.schema.SetSchema(cols)
+	ts.State.Schema = cols
+	ts.schema.SetSchema(cols)
 
 	meta, _ := a.Duck.Metadata(path)
-	a.State.Metadata = meta
+	ts.State.Metadata = meta
 
 	a.execQuery()
 }
 
 func (a *App) execQuery() {
+	ts := a.currentTab()
+	if ts == nil {
+		return
+	}
 	a.statusBar.SetStatus("Running…")
-	result, err := a.Duck.Query(a.State.VirtualSQL(), a.State.PageOffset, a.State.PageSize)
+	result, err := a.Duck.Query(ts.State.VirtualSQL(), ts.State.PageOffset, ts.State.PageSize)
 	if err != nil {
 		a.statusBar.SetStatus("Error: " + err.Error())
 		return
 	}
-	a.State.Result = result
-	a.dataGrid.SetResult(result)
-	a.dataGrid.UpdateColumnTitles(result.Columns, a.State.SortColumn, a.State.SortDir)
-	start := a.State.PageOffset + 1
-	end := a.State.PageOffset + len(result.Rows)
+	ts.State.Result = result
+	ts.dataGrid.SetResult(result)
+	ts.dataGrid.UpdateColumnTitles(result.Columns, ts.State.SortColumn, ts.State.SortDir)
+	start := ts.State.PageOffset + 1
+	end := ts.State.PageOffset + len(result.Rows)
 	a.statusBar.SetStatus(fmt.Sprintf("%d–%d of %d rows", start, end, result.Total))
 
-	page := (a.State.PageOffset / a.State.PageSize) + 1
-	totalPages := (int(result.Total) + a.State.PageSize - 1) / a.State.PageSize
+	page := (ts.State.PageOffset / ts.State.PageSize) + 1
+	totalPages := (int(result.Total) + ts.State.PageSize - 1) / ts.State.PageSize
 	a.statusBar.SetPage(page, totalPages)
 }
 

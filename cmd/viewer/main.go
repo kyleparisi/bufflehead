@@ -5,7 +5,6 @@ import (
 
 	"parquet-viewer/internal/control"
 	"parquet-viewer/internal/db"
-	"parquet-viewer/internal/models"
 	"parquet-viewer/internal/ui"
 
 	"graphics.gd/classdb/DisplayServer"
@@ -46,7 +45,6 @@ func main() {
 
 	app := new(ui.App)
 	app.Duck = duck
-	app.State = models.NewAppState()
 	app.ControlServer = ctrlServer
 	SceneTree.Add(app.AsNode())
 
