@@ -96,10 +96,16 @@ func (m *AppMenu) rebuildRecentMenu() {
 }
 
 func (m *AppMenu) recentFilePath() string {
-	home, _ := os.UserHomeDir()
-	dir := filepath.Join(home, ".parquet-viewer")
-	os.MkdirAll(dir, 0755)
-	return filepath.Join(dir, "recent.json")
+	// macOS: ~/Library/Application Support/ParquetViewer/
+	// Linux: ~/.local/share/ParquetViewer/
+	// Windows: %APPDATA%/ParquetViewer/
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		dir, _ = os.UserHomeDir()
+	}
+	appDir := filepath.Join(dir, "ParquetViewer")
+	os.MkdirAll(appDir, 0755)
+	return filepath.Join(appDir, "recent.json")
 }
 
 func (m *AppMenu) loadRecent() {
