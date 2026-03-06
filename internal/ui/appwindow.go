@@ -231,7 +231,27 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 
 	railMargin.AsNode().AddChild(w.connRail.AsNode())
 	w.connRailWrap.AsNode().AddChild(railMargin.AsNode())
-	w.connRailWrap.AsCanvasItem().SetVisible(false) // hidden until a DB is opened
+
+	// Memory connection is always index 0
+	memBtn := Button.New()
+	memBtn.SetText("mem")
+	memBtn.AsControl().AddThemeFontSizeOverride("font_size", 10)
+	memBtn.AsControl().SetCustomMinimumSize(Vector2.New(36, 36))
+	memBtn.SetClipText(true)
+	applyActiveButtonTheme(memBtn.AsControl()) // active by default
+	memConn := &Connection{
+		Name:   "Memory",
+		Path:   ":memory:",
+		DB:     w.duck,
+		Tables: nil,
+		button: memBtn,
+	}
+	w.connections = append(w.connections, memConn)
+	w.connRail.AsNode().AddChild(memBtn.AsNode())
+	w.activeConnIdx = 0
+	memBtn.AsBaseButton().OnPressed(func() {
+		w.selectConnection(0)
+	})
 
 	// Content area (rail | main)
 	contentHBox := HBoxContainer.New()
@@ -280,7 +300,7 @@ func (w *AppWindow) addNewTab() {
 		w.navWired = true
 	}
 
-	ts := &tabState{State: models.NewAppState(), connIdx: -1}
+	ts := &tabState{State: models.NewAppState(), connIdx: 0} // default to Memory connection
 
 	// Sidebar
 	ts.sidebarWrap = PanelContainer.New()
@@ -473,9 +493,22 @@ func (w *AppWindow) switchTab(idx int) {
 	ts.sidebarWrap.AsCanvasItem().SetVisible(true)
 	ts.outerWrap.AsCanvasItem().SetVisible(true)
 
+	// Update connection rail highlight
+	if ts.connIdx >= 0 && ts.connIdx < len(w.connections) {
+		w.activeConnIdx = ts.connIdx
+		for i, c := range w.connections {
+			if i == ts.connIdx {
+				applyActiveButtonTheme(c.button.AsControl())
+			} else {
+				applySecondaryButtonTheme(c.button.AsControl())
+			}
+		}
+		w.titleBar.SetFileInfo(w.connections[ts.connIdx].Path)
+	}
+
 	if ts.State.FilePath != "" {
 		w.titleBar.SetFileInfo(ts.State.FilePath)
-	} else {
+	} else if ts.connIdx == 0 {
 		w.titleBar.SetFileInfo("")
 	}
 
@@ -541,6 +574,8 @@ func (w *AppWindow) updateTabTitle(idx int) {
 			}
 		}
 		w.tabBar.SetTabTitle(idx, name)
+	} else if ts.connIdx > 0 && ts.connIdx < len(w.connections) {
+		w.tabBar.SetTabTitle(idx, w.connections[ts.connIdx].Name)
 	} else {
 		w.tabBar.SetTabTitle(idx, "Untitled")
 	}
@@ -615,9 +650,8 @@ func (w *AppWindow) runCurrentQuery() error {
 	if ts == nil {
 		return fmt.Errorf("no active tab")
 	}
-	if ts.State.IsDatabase && ts.connIdx >= 0 && ts.connIdx < len(w.connections) {
-		w.execQueryWithConn(ts, w.connections[ts.connIdx].DB)
-		return nil
+	if ts.connIdx >= 0 && ts.connIdx < len(w.connections) {
+		return w.execQueryWithConn(ts, w.connections[ts.connIdx].DB)
 	}
 	return w.execQuery()
 }
@@ -680,7 +714,25 @@ func (w *AppWindow) onDatabaseOpened(path string) {
 		w.selectConnection(idx)
 	})
 
-	// Select this connection
+	// Create a new tab bound to this connection
+	w.addNewTab()
+	ts := w.currentTab()
+	if ts != nil {
+		ts.State.IsDatabase = true
+		ts.connIdx = idx
+		ts.schema.SetTables(conn.Tables)
+		ts.schema.OnTableClicked = func(tableName string) {
+			ts.State.ActiveTable = tableName
+			ts.State.UserSQL = fmt.Sprintf("SELECT * FROM \"%s\"", tableName)
+			ts.State.PageOffset = 0
+			ts.State.SortColumn = ""
+			ts.State.SortDir = models.SortNone
+			ts.sqlPanel.SetSQL(ts.State.UserSQL)
+			w.runCurrentQuery()
+		}
+	}
+
+	// Highlight this connection in the rail
 	w.selectConnection(idx)
 
 	w.statusBar.SetStatus(fmt.Sprintf("Connected: %s (%d tables/views)", name, len(tables)))
@@ -691,7 +743,6 @@ func (w *AppWindow) selectConnection(idx int) {
 		return
 	}
 	w.activeConnIdx = idx
-	conn := w.connections[idx]
 
 	// Highlight active button
 	for i, c := range w.connections {
@@ -702,41 +753,19 @@ func (w *AppWindow) selectConnection(idx int) {
 		}
 	}
 
-	// Ensure we have a tab
-	if len(w.tabs) == 0 {
-		w.addNewTab()
+	// Find the first tab bound to this connection and switch to it
+	for i, ts := range w.tabs {
+		if ts.connIdx == idx {
+			w.tabBar.SetCurrentTab(i)
+			return
+		}
 	}
-
-	ts := w.currentTab()
-	if ts == nil {
-		return
-	}
-
-	// Connection applies to current tab — set it as database mode
-	ts.State.IsDatabase = true
-	ts.connIdx = idx
-	w.titleBar.SetFileInfo(conn.Path)
-
-	// Update schema panel with this connection's tables
-	ts.schema.SetTables(conn.Tables)
-
-	// Wire table click
-	ts.schema.OnTableClicked = func(tableName string) {
-		ts.State.ActiveTable = tableName
-		ts.State.UserSQL = fmt.Sprintf("SELECT * FROM \"%s\"", tableName)
-		ts.State.PageOffset = 0
-		ts.State.SortColumn = ""
-		ts.State.SortDir = models.SortNone
-		ts.sqlPanel.SetSQL(ts.State.UserSQL)
-		w.runCurrentQuery()
-	}
-
 }
 
 // execQueryWithConn runs a query using a specific database connection.
-func (w *AppWindow) execQueryWithConn(ts *tabState, conn *db.DB) {
+func (w *AppWindow) execQueryWithConn(ts *tabState, conn *db.DB) error {
 	if ts == nil || conn == nil {
-		return
+		return fmt.Errorf("no active tab or connection")
 	}
 	w.statusBar.SetStatus("Running…")
 	queryStart := time.Now()
@@ -744,7 +773,7 @@ func (w *AppWindow) execQueryWithConn(ts *tabState, conn *db.DB) {
 	if err != nil {
 		w.statusBar.SetStatus("Error: " + err.Error())
 		ts.dataGrid.ShowError(err.Error())
-		return
+		return err
 	}
 	elapsed := time.Since(queryStart)
 	ts.State.Result = result
@@ -771,6 +800,7 @@ func (w *AppWindow) execQueryWithConn(ts *tabState, conn *db.DB) {
 	totalPages := (int(result.Total) + ts.State.PageSize - 1) / ts.State.PageSize
 	w.statusBar.SetPage(page, totalPages)
 	w.updateNavButtons()
+	return nil
 }
 
 func (w *AppWindow) execQuery() error {
