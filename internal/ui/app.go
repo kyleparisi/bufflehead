@@ -17,6 +17,7 @@ import (
 	"graphics.gd/classdb/HBoxContainer"
 	"graphics.gd/classdb/Input"
 	"graphics.gd/classdb/InputEvent"
+	"graphics.gd/classdb/InputEventKey"
 	"graphics.gd/classdb/InputEventMouseButton"
 	"graphics.gd/classdb/Label"
 	"graphics.gd/classdb/LineEdit"
@@ -541,6 +542,33 @@ func (a *App) newWindow() {
 		aw.window.GrabFocus()
 		aw.window.MoveToForeground()
 		aw.addNewTab()
+	}
+}
+
+func (a *App) UnhandledKeyInput(event InputEvent.Instance) {
+	key, ok := Object.As[InputEventKey.Instance](event)
+	if !ok || !key.AsInputEvent().IsPressed() {
+		return
+	}
+	if !key.AsInputEventWithModifiers().IsCommandOrControlPressed() {
+		return
+	}
+	switch key.Keycode() {
+	case Input.KeyN:
+		fmt.Println("[input] Cmd+N → new window")
+		a.newWindow()
+	case Input.KeyT:
+		fmt.Println("[input] Cmd+T → new tab")
+		a.activeWindow().addNewTab()
+	case Input.KeyW:
+		fmt.Println("[input] Cmd+W → close tab")
+		w := a.activeWindow()
+		w.closeTab(w.activeTab)
+	case Input.KeyO:
+		fmt.Println("[input] Cmd+O → open file")
+		if a.appMenu != nil && a.appMenu.OnOpenFile != nil {
+			a.appMenu.OnOpenFile()
+		}
 	}
 }
 
