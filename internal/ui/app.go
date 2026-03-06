@@ -47,6 +47,7 @@ func (t *TitleBar) GuiInput(event InputEvent.Instance) {
 func (t *TitleBar) Ready() {
 	applyTitleBarTheme(t.AsControl())
 	t.AsControl().SetMouseFilter(Control.MouseFilterStop)
+	t.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 
 	margin := MarginContainer.New()
 	margin.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
@@ -76,6 +77,14 @@ func (t *TitleBar) Ready() {
 	t.infoLabel.AsControl().AddThemeColorOverride("font_color", colorText)
 	t.infoLabel.AsControl().AddThemeFontSizeOverride("font_size", 13)
 	pill.AsNode().AddChild(t.infoLabel.AsNode())
+
+	// Let all children pass mouse events through to the title bar for dragging
+	margin.AsControl().SetMouseFilter(Control.MouseFilterPass)
+	row.AsControl().SetMouseFilter(Control.MouseFilterPass)
+	appName.AsControl().SetMouseFilter(Control.MouseFilterPass)
+	spacer.SetMouseFilter(Control.MouseFilterPass)
+	pill.AsControl().SetMouseFilter(Control.MouseFilterPass)
+	t.infoLabel.AsControl().SetMouseFilter(Control.MouseFilterPass)
 
 	row.AsNode().AddChild(appName.AsNode())
 	row.AsNode().AddChild(spacer.AsNode())
