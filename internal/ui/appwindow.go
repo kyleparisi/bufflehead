@@ -248,8 +248,30 @@ func (w *AppWindow) addNewTab() {
 		w.execQuery()
 	}
 
+	ts.dataGrid.OnRowSelected = func(rowIndex int) {
+		if rowIndex < len(ts.dataGrid.rows) {
+			ts.detailPanel.SetRow(ts.dataGrid.columns, ts.dataGrid.rows[rowIndex])
+			ts.detailPanel.AsCanvasItem().SetVisible(true)
+		}
+	}
+
+	// Detail panel (right side)
+	ts.detailPanel = new(RowDetailPanel)
+	detailWrap := PanelContainer.New()
+	applyPanelBg(detailWrap.AsControl(), colorBgSidebar)
+	detailWrap.AsNode().AddChild(ts.detailPanel.AsNode())
+
+	// HSplit for data grid | detail panel
+	dataSplit := HSplitContainer.New()
+	dataSplit.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	dataSplit.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
+	dataSplit.AsSplitContainer().SetSplitOffset(-300)
+	dataSplit.AsControl().AddThemeConstantOverride("separation", 1)
+	dataSplit.AsNode().AddChild(ts.dataGrid.AsNode())
+	dataSplit.AsNode().AddChild(detailWrap.AsNode())
+
 	ts.rightPanel.AsNode().AddChild(sqlWrap.AsNode())
-	ts.rightPanel.AsNode().AddChild(ts.dataGrid.AsNode())
+	ts.rightPanel.AsNode().AddChild(dataSplit.AsNode())
 
 	w.split.AsNode().AddChild(ts.sidebarWrap.AsNode())
 	w.split.AsNode().AddChild(ts.rightPanel.AsNode())

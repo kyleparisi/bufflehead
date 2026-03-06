@@ -3,6 +3,7 @@ package ui
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"parquet-viewer/internal/control"
 	"parquet-viewer/internal/db"
@@ -251,7 +252,9 @@ type DataGrid struct {
 	Tree.Extension[DataGrid] `gd:"ParquetDataGrid"`
 
 	OnColumnClicked func(column int)
+	OnRowSelected   func(rowIndex int)
 	columns         []string // track current column names
+	rows            [][]string
 }
 
 func (d *DataGrid) Ready() {
@@ -265,6 +268,28 @@ func (d *DataGrid) Ready() {
 	d.Super().OnColumnTitleClicked(func(column int, mouseButton int) {
 		if d.OnColumnClicked != nil {
 			d.OnColumnClicked(column)
+		}
+	})
+
+	d.Super().OnItemSelected(func() {
+		if d.OnRowSelected == nil {
+			return
+		}
+		selected := d.Super().GetSelected()
+		if selected == (TreeItem.Instance{}) {
+			return
+		}
+		// Find row index by walking tree items
+		root := d.Super().GetRoot()
+		child := root.GetFirstChild()
+		idx := 0
+		for child != (TreeItem.Instance{}) {
+			if child == selected {
+				d.OnRowSelected(idx)
+				return
+			}
+			child = child.GetNext()
+			idx++
 		}
 	})
 }
@@ -290,6 +315,7 @@ func (d *DataGrid) SetResult(r *db.QueryResult) {
 		return
 	}
 	d.columns = r.Columns
+	d.rows = r.Rows
 	t := d.Super()
 	t.Clear()
 	t.SetColumns(len(r.Columns))
@@ -302,6 +328,87 @@ func (d *DataGrid) SetResult(r *db.QueryResult) {
 		for i, cell := range row {
 			item.SetText(i, cell)
 		}
+	}
+}
+
+// ── Row detail panel ───────────────────────────────────────────────────────
+
+type RowDetailPanel struct {
+	VBoxContainer.Extension[RowDetailPanel] `gd:"ParquetRowDetail"`
+
+	searchBox LineEdit.Instance
+	tree      Tree.Instance
+	columns   []string
+	values    []string
+}
+
+func (p *RowDetailPanel) Ready() {
+	p.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	p.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
+	p.AsControl().AddThemeConstantOverride("separation", 4)
+	p.AsControl().SetCustomMinimumSize(Vector2.New(250, 0))
+
+	// Search input
+	p.searchBox = LineEdit.New()
+	p.searchBox.SetPlaceholderText("Search fields…")
+	p.searchBox.AsControl().AddThemeFontSizeOverride("font_size", 13)
+	applyInputTheme(p.searchBox.AsControl())
+	p.searchBox.OnTextChanged(func(text string) {
+		p.filterFields(text)
+	})
+
+	searchWrap := MarginContainer.New()
+	searchWrap.AsControl().AddThemeConstantOverride("margin_top", 4)
+	searchWrap.AsControl().AddThemeConstantOverride("margin_left", 6)
+	searchWrap.AsControl().AddThemeConstantOverride("margin_right", 6)
+	searchWrap.AsControl().AddThemeConstantOverride("margin_bottom", 0)
+	searchWrap.AsNode().AddChild(p.searchBox.AsNode())
+
+	// Field tree (2 columns: field name, value)
+	p.tree = Tree.New()
+	p.tree.SetColumns(2)
+	p.tree.SetColumnTitlesVisible(true)
+	p.tree.SetColumnTitle(0, "Field")
+	p.tree.SetColumnTitle(1, "Value")
+	p.tree.SetHideRoot(true)
+	p.tree.SetSelectMode(Tree.SelectRow)
+	p.tree.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
+	p.tree.SetColumnExpandRatio(0, 2)
+	p.tree.SetColumnExpandRatio(1, 3)
+	applyTreeTheme(p.tree.AsControl())
+
+	p.AsNode().AddChild(searchWrap.AsNode())
+	p.AsNode().AddChild(p.tree.AsNode())
+}
+
+func (p *RowDetailPanel) SetRow(columns []string, values []string) {
+	p.columns = columns
+	p.values = values
+	p.searchBox.SetText("")
+	p.filterFields("")
+}
+
+func (p *RowDetailPanel) Clear() {
+	p.columns = nil
+	p.values = nil
+	p.tree.Clear()
+}
+
+func (p *RowDetailPanel) filterFields(query string) {
+	p.tree.Clear()
+	root := p.tree.CreateItem()
+	query = strings.ToLower(query)
+	for i, col := range p.columns {
+		val := ""
+		if i < len(p.values) {
+			val = p.values[i]
+		}
+		if query != "" && !strings.Contains(strings.ToLower(col), query) && !strings.Contains(strings.ToLower(val), query) {
+			continue
+		}
+		item := p.tree.MoreArgs().CreateItem(root, -1)
+		item.SetText(0, col)
+		item.SetText(1, val)
 	}
 }
 
@@ -387,10 +494,11 @@ func (s *StatusBar) SetPage(page, totalPages int) {
 // ── Tab state ──────────────────────────────────────────────────────────────
 
 type tabState struct {
-	State    *models.AppState
-	schema   *SchemaPanel
-	sqlPanel *SQLPanel
-	dataGrid *DataGrid
+	State       *models.AppState
+	schema      *SchemaPanel
+	sqlPanel    *SQLPanel
+	dataGrid    *DataGrid
+	detailPanel *RowDetailPanel
 
 	// Container nodes for show/hide on tab switch
 	sidebarWrap PanelContainer.Instance
@@ -714,6 +822,7 @@ func RegisterAll() {
 	classdb.Register[SchemaPanel]()
 	classdb.Register[SQLPanel]()
 	classdb.Register[DataGrid]()
+	classdb.Register[RowDetailPanel]()
 	classdb.Register[StatusBar]()
 	classdb.Register[App]()
 }
