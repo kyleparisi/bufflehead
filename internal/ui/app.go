@@ -30,6 +30,7 @@ import (
 	"graphics.gd/variant/Float"
 	"graphics.gd/variant/Object"
 	"graphics.gd/variant/Vector2"
+	"graphics.gd/variant/Vector2i"
 )
 
 // ── Title bar ──────────────────────────────────────────────────────────────
@@ -533,6 +534,10 @@ func (a *App) newWindow() {
 		root.AsNode().AddChild(aw.window.AsNode())
 		aw.window.Show()
 		aw.window.MoveToCenter()
+		// Cascade offset so windows don't stack exactly
+		pos := aw.window.Position()
+		offset := int32(len(a.secondWins) * 30)
+		aw.window.SetPosition(Vector2i.New(int(pos.X+offset), int(pos.Y+offset)))
 		aw.addNewTab()
 	}
 }
