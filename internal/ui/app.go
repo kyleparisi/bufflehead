@@ -25,6 +25,7 @@ import (
 	"graphics.gd/classdb/MarginContainer"
 	"graphics.gd/classdb/PanelContainer"
 	"graphics.gd/classdb/SceneTree"
+	"graphics.gd/classdb/ScrollContainer"
 	"graphics.gd/classdb/Tree"
 	"graphics.gd/classdb/TreeItem"
 	"graphics.gd/classdb/VBoxContainer"
@@ -336,16 +337,17 @@ func (d *DataGrid) SetResult(r *db.QueryResult) {
 type RowDetailPanel struct {
 	VBoxContainer.Extension[RowDetailPanel] `gd:"ParquetRowDetail"`
 
-	searchBox LineEdit.Instance
-	tree      Tree.Instance
-	columns   []string
-	values    []string
+	searchBox  LineEdit.Instance
+	scrollBox  ScrollContainer.Instance
+	fieldsList VBoxContainer.Instance
+	columns    []string
+	values     []string
 }
 
 func (p *RowDetailPanel) Ready() {
 	p.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	p.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
-	p.AsControl().AddThemeConstantOverride("separation", 4)
+	p.AsControl().AddThemeConstantOverride("separation", 0)
 	p.AsControl().SetCustomMinimumSize(Vector2.New(250, 0))
 
 	// Search input
@@ -361,24 +363,30 @@ func (p *RowDetailPanel) Ready() {
 	searchWrap.AsControl().AddThemeConstantOverride("margin_top", 4)
 	searchWrap.AsControl().AddThemeConstantOverride("margin_left", 6)
 	searchWrap.AsControl().AddThemeConstantOverride("margin_right", 6)
-	searchWrap.AsControl().AddThemeConstantOverride("margin_bottom", 0)
+	searchWrap.AsControl().AddThemeConstantOverride("margin_bottom", 4)
 	searchWrap.AsNode().AddChild(p.searchBox.AsNode())
 
-	// Field tree (2 columns: field name, value)
-	p.tree = Tree.New()
-	p.tree.SetColumns(2)
-	p.tree.SetColumnTitlesVisible(true)
-	p.tree.SetColumnTitle(0, "Field")
-	p.tree.SetColumnTitle(1, "Value")
-	p.tree.SetHideRoot(true)
-	p.tree.SetSelectMode(Tree.SelectRow)
-	p.tree.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
-	p.tree.SetColumnExpandRatio(0, 2)
-	p.tree.SetColumnExpandRatio(1, 3)
-	applyTreeTheme(p.tree.AsControl())
+	// Scrollable form area
+	p.scrollBox = ScrollContainer.New()
+	p.scrollBox.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	p.scrollBox.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
+	p.scrollBox.SetHorizontalScrollMode(ScrollContainer.ScrollModeDisabled)
+
+	p.fieldsList = VBoxContainer.New()
+	p.fieldsList.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	p.fieldsList.AsControl().AddThemeConstantOverride("separation", 12)
+
+	fieldsMargin := MarginContainer.New()
+	fieldsMargin.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	fieldsMargin.AsControl().AddThemeConstantOverride("margin_top", 4)
+	fieldsMargin.AsControl().AddThemeConstantOverride("margin_left", 6)
+	fieldsMargin.AsControl().AddThemeConstantOverride("margin_right", 6)
+	fieldsMargin.AsControl().AddThemeConstantOverride("margin_bottom", 6)
+	fieldsMargin.AsNode().AddChild(p.fieldsList.AsNode())
+	p.scrollBox.AsNode().AddChild(fieldsMargin.AsNode())
 
 	p.AsNode().AddChild(searchWrap.AsNode())
-	p.AsNode().AddChild(p.tree.AsNode())
+	p.AsNode().AddChild(p.scrollBox.AsNode())
 }
 
 func (p *RowDetailPanel) SetRow(columns []string, values []string) {
@@ -391,12 +399,19 @@ func (p *RowDetailPanel) SetRow(columns []string, values []string) {
 func (p *RowDetailPanel) Clear() {
 	p.columns = nil
 	p.values = nil
-	p.tree.Clear()
+	p.clearFields()
+}
+
+func (p *RowDetailPanel) clearFields() {
+	for p.fieldsList.AsNode().GetChildCount() > 0 {
+		child := p.fieldsList.AsNode().GetChild(0)
+		p.fieldsList.AsNode().RemoveChild(child)
+		child.QueueFree()
+	}
 }
 
 func (p *RowDetailPanel) filterFields(query string) {
-	p.tree.Clear()
-	root := p.tree.CreateItem()
+	p.clearFields()
 	query = strings.ToLower(query)
 	for i, col := range p.columns {
 		val := ""
@@ -406,9 +421,28 @@ func (p *RowDetailPanel) filterFields(query string) {
 		if query != "" && !strings.Contains(strings.ToLower(col), query) && !strings.Contains(strings.ToLower(val), query) {
 			continue
 		}
-		item := p.tree.MoreArgs().CreateItem(root, -1)
-		item.SetText(0, col)
-		item.SetText(1, val)
+		// Field group: label + value input
+		group := VBoxContainer.New()
+		group.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+		group.AsControl().AddThemeConstantOverride("separation", 2)
+
+		// Label (field name + type dim)
+		lbl := Label.New()
+		lbl.SetText(col)
+		lbl.AsControl().AddThemeFontSizeOverride("font_size", 11)
+		lbl.AsControl().AddThemeColorOverride("font_color", colorTextDim)
+
+		// Value (read-only input for copyable text)
+		valInput := LineEdit.New()
+		valInput.SetText(val)
+		valInput.SetEditable(false)
+		valInput.AsControl().AddThemeFontSizeOverride("font_size", 13)
+		valInput.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+		applyInputTheme(valInput.AsControl())
+
+		group.AsNode().AddChild(lbl.AsNode())
+		group.AsNode().AddChild(valInput.AsNode())
+		p.fieldsList.AsNode().AddChild(group.AsNode())
 	}
 }
 
