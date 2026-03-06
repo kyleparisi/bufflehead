@@ -24,6 +24,7 @@ import (
 	"graphics.gd/classdb/InputEvent"
 	"graphics.gd/classdb/InputEventKey"
 	"graphics.gd/classdb/InputEventMouseButton"
+	"graphics.gd/classdb/InputEventMouseMotion"
 	"graphics.gd/classdb/Label"
 	"graphics.gd/classdb/LineEdit"
 	"graphics.gd/classdb/MarginContainer"
@@ -658,6 +659,11 @@ type DataGrid struct {
 	OnRowSelected   func(rowIndex int)
 	columns         []string // track current column names
 	rows            [][]string
+	colWidthCache   map[string][]int // query hash → column widths
+	dragging        bool
+	dragCol         int
+	dragStartX      float32
+	dragStartWidth  int
 }
 
 func (d *DataGrid) Ready() {
@@ -742,6 +748,137 @@ func (d *DataGrid) SetResult(r *db.QueryResult) {
 		item := t.MoreArgs().CreateItem(root, -1)
 		for i, cell := range row {
 			item.SetText(i, cell)
+		}
+	}
+	d.autoSizeColumns(r)
+}
+
+func (d *DataGrid) queryKey() string {
+	// Simple key from column names
+	return strings.Join(d.columns, "|")
+}
+
+func (d *DataGrid) autoSizeColumns(r *db.QueryResult) {
+	t := d.Super()
+	numCols := len(r.Columns)
+	if numCols == 0 {
+		return
+	}
+
+	// Check cache
+	key := d.queryKey()
+	if d.colWidthCache != nil {
+		if cached, ok := d.colWidthCache[key]; ok && len(cached) == numCols {
+			for i, w := range cached {
+				t.SetColumnExpand(i, false)
+				t.SetColumnCustomMinimumWidth(i, w)
+			}
+			// Last column expands to fill
+			t.SetColumnExpand(numCols-1, true)
+			return
+		}
+	}
+
+	// Estimate widths from content (header + first 50 rows)
+	widths := make([]int, numCols)
+	for i, col := range r.Columns {
+		widths[i] = len(col)
+	}
+	sampleRows := len(r.Rows)
+	if sampleRows > 50 {
+		sampleRows = 50
+	}
+	for _, row := range r.Rows[:sampleRows] {
+		for i, cell := range row {
+			if len(cell) > widths[i] {
+				widths[i] = len(cell)
+			}
+		}
+	}
+
+	// Convert char widths to pixels (~7px per char at 13px font + padding)
+	for i := range widths {
+		w := widths[i]*7 + 24 // padding
+		if w < 60 {
+			w = 60
+		}
+		if w > 400 {
+			w = 400
+		}
+		widths[i] = w
+		t.SetColumnExpand(i, false)
+		t.SetColumnCustomMinimumWidth(i, w)
+	}
+	// Last column expands to fill remaining space
+	t.SetColumnExpand(numCols-1, true)
+
+	// Cache
+	if d.colWidthCache == nil {
+		d.colWidthCache = make(map[string][]int)
+	}
+	d.colWidthCache[key] = widths
+}
+
+func (d *DataGrid) colBorderHit(x float32) int {
+	// Check if x is near a column border (within 4px)
+	t := d.Super()
+	offset := 0
+	for i := 0; i < len(d.columns)-1; i++ {
+		offset += t.GetColumnWidth(i)
+		if x >= float32(offset-4) && x <= float32(offset+4) {
+			return i
+		}
+	}
+	return -1
+}
+
+func (d *DataGrid) GuiInput(event InputEvent.Instance) {
+	mb, isMouse := Object.As[InputEventMouseButton.Instance](event)
+	if isMouse {
+		if mb.ButtonIndex() == Input.MouseButtonLeft {
+			if mb.AsInputEvent().IsPressed() {
+				col := d.colBorderHit(mb.AsInputEventMouse().Position().X)
+				if col >= 0 {
+					d.dragging = true
+					d.dragCol = col
+					d.dragStartX = mb.AsInputEventMouse().Position().X
+					d.dragStartWidth = d.Super().GetColumnWidth(col)
+				}
+			} else {
+				if d.dragging {
+					d.dragging = false
+					// Save to cache
+					key := d.queryKey()
+					if d.colWidthCache == nil {
+						d.colWidthCache = make(map[string][]int)
+					}
+					widths := make([]int, len(d.columns))
+					for i := range d.columns {
+						widths[i] = d.Super().GetColumnWidth(i)
+					}
+					d.colWidthCache[key] = widths
+				}
+			}
+		}
+		return
+	}
+	mm, isMotion := Object.As[InputEventMouseMotion.Instance](event)
+	if isMotion {
+		if d.dragging {
+			delta := mm.AsInputEventMouse().Position().X - d.dragStartX
+			newWidth := d.dragStartWidth + int(delta)
+			if newWidth < 40 {
+				newWidth = 40
+			}
+			d.Super().SetColumnCustomMinimumWidth(d.dragCol, newWidth)
+		} else {
+			// Change cursor near column borders
+			col := d.colBorderHit(mm.AsInputEventMouse().Position().X)
+			if col >= 0 {
+				d.AsControl().SetMouseDefaultCursorShape(Control.CursorHsize)
+			} else {
+				d.AsControl().SetMouseDefaultCursorShape(Control.CursorArrow)
+			}
 		}
 	}
 }
