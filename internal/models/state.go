@@ -1,6 +1,9 @@
 package models
 
-import "parquet-viewer/internal/db"
+import (
+	"parquet-viewer/internal/db"
+	"strings"
+)
 
 // SortDirection for column sorting.
 type SortDirection int
@@ -26,6 +29,9 @@ type AppState struct {
 	PageSize   int
 	SortColumn string
 	SortDir    SortDirection
+
+	// Column selection (nil or empty = all columns)
+	SelectedCols []string
 
 	// Database mode (for .duckdb files)
 	IsDatabase  bool
@@ -120,7 +126,15 @@ func isSelectQuery(sql string) bool {
 
 // VirtualSQL wraps the user's query with sorting and pagination.
 func (s *AppState) VirtualSQL() string {
-	q := "SELECT * FROM (" + s.UserSQL + ") _q"
+	cols := "*"
+	if len(s.SelectedCols) > 0 && len(s.SelectedCols) < len(s.Schema) {
+		quoted := make([]string, len(s.SelectedCols))
+		for i, c := range s.SelectedCols {
+			quoted[i] = "\"" + c + "\""
+		}
+		cols = strings.Join(quoted, ", ")
+	}
+	q := "SELECT " + cols + " FROM (" + s.UserSQL + ") _q"
 	if s.SortColumn != "" && s.SortDir != SortNone {
 		dir := "ASC"
 		if s.SortDir == SortDesc {

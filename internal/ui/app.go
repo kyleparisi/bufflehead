@@ -215,11 +215,13 @@ func (t *Toolbar) Ready() {
 type SchemaPanel struct {
 	VBoxContainer.Extension[SchemaPanel] `gd:"ParquetSchemaPanel"`
 
-	searchBox      LineEdit.Instance
-	tree           Tree.Instance
-	OnTableClicked func(tableName string)
-	allCols        []db.Column
-	allTables      []db.TableInfo
+	searchBox        LineEdit.Instance
+	tree             Tree.Instance
+	OnTableClicked   func(tableName string)
+	OnColumnsChanged func(selected []string)
+	allCols          []db.Column
+	allTables        []db.TableInfo
+	checkMode        bool // true when showing parquet columns with checkboxes
 }
 
 func (s *SchemaPanel) Ready() {
@@ -254,6 +256,13 @@ func (s *SchemaPanel) Ready() {
 		}
 	})
 
+	s.tree.OnItemEdited(func() {
+		if !s.checkMode || s.OnColumnsChanged == nil {
+			return
+		}
+		s.OnColumnsChanged(s.getCheckedColumns())
+	})
+
 	s.AsNode().AddChild(s.searchBox.AsNode())
 	s.AsNode().AddChild(s.tree.AsNode())
 }
@@ -261,8 +270,52 @@ func (s *SchemaPanel) Ready() {
 func (s *SchemaPanel) SetSchema(cols []db.Column) {
 	s.allCols = cols
 	s.allTables = nil
+	s.checkMode = true
 	s.searchBox.SetText("")
 	s.filterCols("")
+}
+
+// SetCheckedColumns updates checkbox state from external source (e.g. state restore).
+func (s *SchemaPanel) SetCheckedColumns(selected []string) {
+	if !s.checkMode {
+		return
+	}
+	selSet := make(map[string]bool, len(selected))
+	for _, c := range selected {
+		selSet[c] = true
+	}
+	root := s.tree.GetRoot()
+	if root == (TreeItem.Instance{}) {
+		return
+	}
+	child := root.GetFirstChild()
+	for child != (TreeItem.Instance{}) {
+		name, _ := child.GetMetadata(0).(string)
+		if len(selected) == 0 {
+			child.SetChecked(0, true)
+		} else {
+			child.SetChecked(0, selSet[name])
+		}
+		child = child.GetNext()
+	}
+}
+
+func (s *SchemaPanel) getCheckedColumns() []string {
+	var cols []string
+	root := s.tree.GetRoot()
+	if root == (TreeItem.Instance{}) {
+		return cols
+	}
+	child := root.GetFirstChild()
+	for child != (TreeItem.Instance{}) {
+		if child.IsChecked(0) {
+			if name, ok := child.GetMetadata(0).(string); ok {
+				cols = append(cols, name)
+			}
+		}
+		child = child.GetNext()
+	}
+	return cols
 }
 
 func (s *SchemaPanel) filterCols(query string) {
@@ -279,7 +332,11 @@ func (s *SchemaPanel) filterCols(query string) {
 		if col.Nullable {
 			typeSuffix += "?"
 		}
+		item.SetCellMode(0, TreeItem.CellModeCheck)
+		item.SetChecked(0, true)
+		item.SetEditable(0, true)
 		item.SetText(0, "  "+col.Name)
+		item.SetMetadata(0, col.Name)
 		item.SetText(1, typeSuffix)
 	}
 }
@@ -287,6 +344,7 @@ func (s *SchemaPanel) filterCols(query string) {
 func (s *SchemaPanel) SetTables(tables []db.TableInfo) {
 	s.allTables = tables
 	s.allCols = nil
+	s.checkMode = false
 	s.searchBox.SetText("")
 	s.filterTables("")
 }

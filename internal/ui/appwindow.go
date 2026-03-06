@@ -320,6 +320,11 @@ func (w *AppWindow) addNewTab() {
 	selectorRow.AsNode().AddChild(historyBtn.AsNode())
 
 	ts.schema = new(SchemaPanel)
+	ts.schema.OnColumnsChanged = func(selected []string) {
+		ts.State.SelectedCols = selected
+		ts.State.PageOffset = 0
+		w.runCurrentQuery()
+	}
 	ts.historyPanel = new(HistoryPanel)
 	ts.historyPanel.OnReplay = func(sql string) {
 		ts.State.UserSQL = sql
@@ -585,6 +590,7 @@ func (w *AppWindow) onFileSelected(path string) {
 	ts.State.PageOffset = 0
 	ts.State.SortColumn = ""
 	ts.State.SortDir = models.SortNone
+	ts.State.SelectedCols = nil
 	ts.sqlPanel.SetSQL(ts.State.UserSQL)
 	w.titleBar.SetFileInfo(path)
 	w.updateTabTitle(w.activeTab)
