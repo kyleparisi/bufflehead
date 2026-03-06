@@ -43,8 +43,10 @@ type AppWindow struct {
 	statusBar  *StatusBar
 	tabBar     TabBar.Instance
 	tabBarWrap MarginContainer.Instance
-	split      HSplitContainer.Instance
-	emptyView  VBoxContainer.Instance
+	split        HSplitContainer.Instance
+	sidebarCol   VBoxContainer.Instance // left side of split, holds per-tab sidebars
+	contentCol   VBoxContainer.Instance // right side of split, holds tabbar + per-tab content
+	emptyView    VBoxContainer.Instance
 
 	// Connection rail
 	connRail      VBoxContainer.Instance
@@ -104,6 +106,22 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 	w.split.AsSplitContainer().SetSplitOffset(180)
 	w.split.AsControl().AddThemeConstantOverride("separation", 1)
 	w.split.AsControl().SetClipContents(true)
+
+	// Content column (tab bar + per-tab content) — right side of outer split
+	w.contentCol = VBoxContainer.New()
+	w.contentCol.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	w.contentCol.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
+	w.contentCol.AsControl().AddThemeConstantOverride("separation", 0)
+	w.contentCol.AsNode().AddChild(w.tabBarWrap.AsNode())
+
+	// Sidebar column: holds per-tab sidebars (show/hide)
+	w.sidebarCol = VBoxContainer.New()
+	w.sidebarCol.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
+	w.sidebarCol.AsControl().SetCustomMinimumSize(Vector2.New(120, 0))
+
+	// Split: sidebar (left) | content column (right)
+	w.split.AsNode().AddChild(w.sidebarCol.AsNode())
+	w.split.AsNode().AddChild(w.contentCol.AsNode())
 
 	// Status bar
 	statusWrap := PanelContainer.New()
@@ -219,9 +237,8 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 	contentHBox.AsNode().AddChild(w.split.AsNode())
 	contentHBox.AsNode().AddChild(w.emptyView.AsNode())
 
-	// Assemble
+	// Assemble — tab bar is added per-tab inside rightPanel now
 	outerVBox.AsNode().AddChild(w.titleBar.AsNode())
-	outerVBox.AsNode().AddChild(w.tabBarWrap.AsNode())
 	outerVBox.AsNode().AddChild(contentHBox.AsNode())
 	outerVBox.AsNode().AddChild(statusWrap.AsNode())
 
@@ -402,8 +419,9 @@ func (w *AppWindow) addNewTab() {
 	ts.outerWrap.AsNode().AddChild(ts.rightPanel.AsNode())
 	ts.outerWrap.AsNode().AddChild(ts.detailWrap.AsNode())
 
-	w.split.AsNode().AddChild(ts.sidebarWrap.AsNode())
-	w.split.AsNode().AddChild(ts.outerWrap.AsNode())
+	// Sidebar goes into sidebarCol, content goes into contentCol
+	w.sidebarCol.AsNode().AddChild(ts.sidebarWrap.AsNode())
+	w.contentCol.AsNode().AddChild(ts.outerWrap.AsNode())
 
 	w.showTabView()
 
@@ -461,8 +479,8 @@ func (w *AppWindow) closeTab(idx int) {
 	ts := w.tabs[idx]
 	ts.sidebarWrap.AsCanvasItem().SetVisible(false)
 	ts.outerWrap.AsCanvasItem().SetVisible(false)
-	w.split.AsNode().RemoveChild(ts.sidebarWrap.AsNode())
-	w.split.AsNode().RemoveChild(ts.outerWrap.AsNode())
+	w.sidebarCol.AsNode().RemoveChild(ts.sidebarWrap.AsNode())
+	w.contentCol.AsNode().RemoveChild(ts.outerWrap.AsNode())
 	ts.sidebarWrap.AsNode().QueueFree()
 	ts.outerWrap.AsNode().QueueFree()
 
@@ -659,8 +677,6 @@ func (w *AppWindow) selectConnection(idx int) {
 	// Ensure we have a tab
 	if len(w.tabs) == 0 {
 		w.addNewTab()
-	} else if ts := w.currentTab(); ts != nil && ts.State.FilePath != "" && ts.State.FilePath != conn.Path {
-		w.addNewTab()
 	}
 
 	ts := w.currentTab()
@@ -668,12 +684,12 @@ func (w *AppWindow) selectConnection(idx int) {
 		return
 	}
 
-	ts.State.FilePath = conn.Path
+	// Connection applies to current tab — set it as database mode
 	ts.State.IsDatabase = true
 	ts.connIdx = idx
 	w.titleBar.SetFileInfo(conn.Path)
-	w.updateTabTitle(w.activeTab)
 
+	// Update schema panel with this connection's tables
 	ts.schema.SetTables(conn.Tables)
 
 	// Wire table click
