@@ -45,6 +45,8 @@ type AppWindow struct {
 	statusBar  *StatusBar
 	tabBar     TabBar.Instance
 	tabBarWrap MarginContainer.Instance
+	navBackBtn Button.Instance
+	navFwdBtn  Button.Instance
 	split        HSplitContainer.Instance
 	sidebarCol   VBoxContainer.Instance // left side of split, holds per-tab sidebars
 	contentCol   VBoxContainer.Instance // right side of split, holds tabbar + per-tab content
@@ -90,6 +92,25 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 	w.tabBarWrap.AsControl().AddThemeConstantOverride("margin_top", 0)
 	w.tabBarWrap.AsControl().AddThemeConstantOverride("margin_bottom", 0)
 
+	tabRow := HBoxContainer.New()
+	tabRow.AsControl().AddThemeConstantOverride("separation", 4)
+
+	w.navBackBtn = Button.New()
+	w.navBackBtn.SetText("◀")
+	w.navBackBtn.AsControl().AddThemeFontSizeOverride("font_size", 11)
+	w.navBackBtn.AsControl().SetCustomMinimumSize(Vector2.New(24, 0))
+	applySecondaryButtonTheme(w.navBackBtn.AsControl())
+	w.navBackBtn.AsBaseButton().SetDisabled(true)
+	w.navBackBtn.AsBaseButton().OnPressed(func() { w.navBack() })
+
+	w.navFwdBtn = Button.New()
+	w.navFwdBtn.SetText("▶")
+	w.navFwdBtn.AsControl().AddThemeFontSizeOverride("font_size", 11)
+	w.navFwdBtn.AsControl().SetCustomMinimumSize(Vector2.New(24, 0))
+	applySecondaryButtonTheme(w.navFwdBtn.AsControl())
+	w.navFwdBtn.AsBaseButton().SetDisabled(true)
+	w.navFwdBtn.AsBaseButton().OnPressed(func() { w.navForward() })
+
 	w.tabBar = TabBar.New()
 	w.tabBar.SetTabCloseDisplayPolicy(TabBar.CloseButtonShowActiveOnly)
 	w.tabBar.SetClipTabs(true)
@@ -99,7 +120,11 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 
 	w.tabBar.OnTabChanged(func(tab int) { w.switchTab(tab) })
 	w.tabBar.OnTabClosePressed(func(tab int) { w.closeTab(tab) })
-	w.tabBarWrap.AsNode().AddChild(w.tabBar.AsNode())
+
+	tabRow.AsNode().AddChild(w.navBackBtn.AsNode())
+	tabRow.AsNode().AddChild(w.navFwdBtn.AsNode())
+	tabRow.AsNode().AddChild(w.tabBar.AsNode())
+	w.tabBarWrap.AsNode().AddChild(tabRow.AsNode())
 
 	// Split
 	w.split = HSplitContainer.New()
@@ -749,6 +774,7 @@ func (w *AppWindow) execQueryWithConn(ts *tabState, conn *db.DB) {
 	page := (ts.State.PageOffset / ts.State.PageSize) + 1
 	totalPages := (int(result.Total) + ts.State.PageSize - 1) / ts.State.PageSize
 	w.statusBar.SetPage(page, totalPages)
+	w.updateNavButtons()
 }
 
 func (w *AppWindow) execQuery() error {
@@ -787,7 +813,19 @@ func (w *AppWindow) execQuery() error {
 	page := (ts.State.PageOffset / ts.State.PageSize) + 1
 	totalPages := (int(result.Total) + ts.State.PageSize - 1) / ts.State.PageSize
 	w.statusBar.SetPage(page, totalPages)
+	w.updateNavButtons()
 	return nil
+}
+
+func (w *AppWindow) updateNavButtons() {
+	ts := w.currentTab()
+	if ts == nil {
+		w.navBackBtn.AsBaseButton().SetDisabled(true)
+		w.navFwdBtn.AsBaseButton().SetDisabled(true)
+		return
+	}
+	w.navBackBtn.AsBaseButton().SetDisabled(!ts.State.CanNavBack())
+	w.navFwdBtn.AsBaseButton().SetDisabled(!ts.State.CanNavForward())
 }
 
 func (w *AppWindow) navBack() {
@@ -807,6 +845,7 @@ func (w *AppWindow) navBack() {
 	ts.sqlPanel.SetSQL(entry.SQL)
 	w.runCurrentQuery()
 	ts.navigating = false
+	w.updateNavButtons()
 }
 
 func (w *AppWindow) navForward() {
@@ -826,6 +865,7 @@ func (w *AppWindow) navForward() {
 	ts.sqlPanel.SetSQL(entry.SQL)
 	w.runCurrentQuery()
 	ts.navigating = false
+	w.updateNavButtons()
 }
 
 // createSecondaryWindow creates a new OS-level window with full UI.
