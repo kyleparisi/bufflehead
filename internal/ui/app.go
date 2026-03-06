@@ -223,6 +223,8 @@ type SchemaPanel struct {
 	allCols          []db.Column
 	allTables        []db.TableInfo
 	checkMode        bool
+	selectAllRow     HBoxContainer.Instance
+	selectAllCb      CheckBox.Instance
 	checkBoxes       []CheckBox.Instance
 	checkRows        []HBoxContainer.Instance
 }
@@ -269,6 +271,42 @@ func (s *SchemaPanel) SetSchema(cols []db.Column) {
 	s.checkMode = true
 	s.searchBox.SetText("")
 	s.tree.AsCanvasItem().SetVisible(false)
+
+	// Remove old select-all row if exists
+	if s.selectAllRow != (HBoxContainer.Instance{}) {
+		s.Super().AsNode().RemoveChild(s.selectAllRow.AsNode())
+		s.selectAllRow.AsNode().QueueFree()
+	}
+
+	// Select-all header row
+	s.selectAllRow = HBoxContainer.New()
+	s.selectAllRow.AsControl().AddThemeConstantOverride("separation", 4)
+	s.selectAllRow.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+
+	s.selectAllCb = CheckBox.New()
+	s.selectAllCb.AsBaseButton().SetButtonPressed(true)
+	s.selectAllCb.AsControl().AddThemeFontSizeOverride("font_size", 12)
+	s.selectAllCb.AsBaseButton().OnToggled(func(pressed bool) {
+		for _, cb := range s.checkBoxes {
+			cb.AsBaseButton().SetPressedNoSignal(pressed)
+		}
+		if s.OnColumnsChanged != nil {
+			s.OnColumnsChanged(s.getCheckedColumns())
+		}
+	})
+
+	allLabel := Label.New()
+	allLabel.SetText("Label")
+	allLabel.AsControl().AddThemeFontSizeOverride("font_size", 12)
+	allLabel.AsControl().AddThemeColorOverride("font_color", colorTextMuted)
+
+	s.selectAllRow.AsNode().AddChild(s.selectAllCb.AsNode())
+	s.selectAllRow.AsNode().AddChild(allLabel.AsNode())
+
+	// Insert after search box (index 1, since search is 0, tree is 1)
+	s.Super().AsNode().AddChild(s.selectAllRow.AsNode())
+	s.Super().AsNode().MoveChild(s.selectAllRow.AsNode(), 1)
+
 	s.filterCols("")
 }
 
@@ -293,6 +331,7 @@ func (s *SchemaPanel) selectOnly(target CheckBox.Instance) {
 		cb.AsBaseButton().SetPressedNoSignal(false)
 	}
 	target.AsBaseButton().SetPressedNoSignal(true)
+	s.selectAllCb.AsBaseButton().SetPressedNoSignal(false)
 	if s.OnColumnsChanged != nil {
 		s.OnColumnsChanged(s.getCheckedColumns())
 	}
@@ -409,7 +448,12 @@ func (s *SchemaPanel) SetTables(tables []db.TableInfo) {
 	s.allCols = nil
 	s.checkMode = false
 	s.searchBox.SetText("")
-	// Clear checkbox rows
+	// Clear checkbox rows + select-all
+	if s.selectAllRow != (HBoxContainer.Instance{}) {
+		s.Super().AsNode().RemoveChild(s.selectAllRow.AsNode())
+		s.selectAllRow.AsNode().QueueFree()
+		s.selectAllRow = HBoxContainer.Instance{}
+	}
 	for _, row := range s.checkRows {
 		s.Super().AsNode().RemoveChild(row.AsNode())
 		row.AsNode().QueueFree()
