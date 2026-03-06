@@ -66,17 +66,17 @@ func (d *DB) Schema(path string) ([]Column, error) {
 	return cols, rows.Err()
 }
 
-// Query runs arbitrary SQL against the loaded parquet file.
-// offset/limit drive virtual scrolling in the UI.
-func (d *DB) Query(sql string, offset, limit int) (*QueryResult, error) {
-	// Count total rows for the scrollbar.
-	countQ := fmt.Sprintf("SELECT COUNT(*) FROM (%s) _q", sql)
+// Query runs a virtual SQL query (already wrapped with ORDER BY if needed).
+// offset/limit drive pagination.
+func (d *DB) Query(virtualSQL string, offset, limit int) (*QueryResult, error) {
+	// Count total rows.
+	countQ := fmt.Sprintf("SELECT COUNT(*) FROM (%s) _c", virtualSQL)
 	var total int64
 	if err := d.conn.QueryRow(countQ).Scan(&total); err != nil {
 		return nil, fmt.Errorf("count: %w", err)
 	}
 
-	pagedQ := fmt.Sprintf("%s LIMIT %d OFFSET %d", sql, limit, offset)
+	pagedQ := fmt.Sprintf("%s LIMIT %d OFFSET %d", virtualSQL, limit, offset)
 	rows, err := d.conn.Query(pagedQ)
 	if err != nil {
 		return nil, fmt.Errorf("query: %w", err)

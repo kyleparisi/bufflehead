@@ -100,6 +100,12 @@ func applyTreeTheme(c Control.Instance) {
 	c.AddThemeColorOverride("title_button_color", colorTextMuted)
 	c.AddThemeFontSizeOverride("font_size", 13)
 
+	// Row hover
+	hover := makeStyleBox(Color.RGBA{R: 0.14, G: 0.22, B: 0.32, A: 1}, 0, 0, colorBorder) // subtle blue tint
+	hover.AsStyleBox().SetContentMarginAll(2)
+	c.AddThemeStyleboxOverride("hover", hover.AsStyleBox())
+	c.AddThemeStyleboxOverride("hovered", hover.AsStyleBox())
+
 	// Minimal scrollbar
 	empty := StyleBoxEmpty.New()
 	c.AddThemeStyleboxOverride("scroll_focus", empty.AsStyleBox())

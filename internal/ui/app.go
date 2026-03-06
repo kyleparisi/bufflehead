@@ -57,38 +57,41 @@ func (t *TitleBar) Ready() {
 	margin.AsControl().AddThemeConstantOverride("margin_bottom", 6)
 
 	row := HBoxContainer.New()
-	row.AsControl().AddThemeConstantOverride("separation", 10)
+	row.AsControl().AddThemeConstantOverride("separation", 0)
 
-	// App name
-	appName := Label.New()
-	appName.SetText("Parquet Viewer")
-	appName.AsControl().AddThemeColorOverride("font_color", colorTextBright)
-	appName.AsControl().AddThemeFontSizeOverride("font_size", 13)
+	// Left spacer (25%)
+	leftSpacer := Control.New()
+	leftSpacer.SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	leftSpacer.AsControl().SetSizeFlagsStretchRatio(1)
 
-	// Spacer
-	spacer := Control.New()
-	spacer.SetSizeFlagsHorizontal(Control.SizeExpandFill)
-
-	// Connection info pill
+	// Connection info pill (centered, 50%)
 	pill := PanelContainer.New()
 	applyPillTheme(pill.AsControl())
+	pill.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	pill.AsControl().AsControl().SetSizeFlagsStretchRatio(2)
 	t.infoLabel = Label.New()
 	t.infoLabel.SetText("DuckDB  ·  In-Memory  ·  No file loaded")
 	t.infoLabel.AsControl().AddThemeColorOverride("font_color", colorText)
 	t.infoLabel.AsControl().AddThemeFontSizeOverride("font_size", 13)
+	t.infoLabel.SetHorizontalAlignment(1) // center
 	pill.AsNode().AddChild(t.infoLabel.AsNode())
+
+	// Right spacer (25%)
+	rightSpacer := Control.New()
+	rightSpacer.SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	rightSpacer.AsControl().SetSizeFlagsStretchRatio(1)
 
 	// Let all children pass mouse events through to the title bar for dragging
 	margin.AsControl().SetMouseFilter(Control.MouseFilterPass)
 	row.AsControl().SetMouseFilter(Control.MouseFilterPass)
-	appName.AsControl().SetMouseFilter(Control.MouseFilterPass)
-	spacer.SetMouseFilter(Control.MouseFilterPass)
+	leftSpacer.SetMouseFilter(Control.MouseFilterPass)
 	pill.AsControl().SetMouseFilter(Control.MouseFilterPass)
 	t.infoLabel.AsControl().SetMouseFilter(Control.MouseFilterPass)
+	rightSpacer.SetMouseFilter(Control.MouseFilterPass)
 
-	row.AsNode().AddChild(appName.AsNode())
-	row.AsNode().AddChild(spacer.AsNode())
+	row.AsNode().AddChild(leftSpacer.AsNode())
 	row.AsNode().AddChild(pill.AsNode())
+	row.AsNode().AddChild(rightSpacer.AsNode())
 
 	margin.AsNode().AddChild(row.AsNode())
 	t.AsNode().AddChild(margin.AsNode())
@@ -233,20 +236,47 @@ func (s *SQLPanel) SetSQL(sql string) {
 
 type DataGrid struct {
 	Tree.Extension[DataGrid] `gd:"ParquetDataGrid"`
+
+	OnColumnClicked func(column int)
+	columns         []string // track current column names
 }
 
 func (d *DataGrid) Ready() {
 	d.Super().SetColumns(1)
 	d.Super().SetColumnTitlesVisible(true)
 	d.Super().SetHideRoot(true)
+	d.Super().SetSelectMode(Tree.SelectRow)
 	d.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
 	applyTreeTheme(d.AsControl())
+
+	d.Super().OnColumnTitleClicked(func(column int, mouseButton int) {
+		if d.OnColumnClicked != nil {
+			d.OnColumnClicked(column)
+		}
+	})
+}
+
+func (d *DataGrid) UpdateColumnTitles(columns []string, sortCol string, sortDir models.SortDirection) {
+	t := d.Super()
+	for i, col := range columns {
+		title := col
+		if col == sortCol {
+			switch sortDir {
+			case models.SortAsc:
+				title += " ▲"
+			case models.SortDesc:
+				title += " ▼"
+			}
+		}
+		t.SetColumnTitle(i, title)
+	}
 }
 
 func (d *DataGrid) SetResult(r *db.QueryResult) {
 	if r == nil {
 		return
 	}
+	d.columns = r.Columns
 	t := d.Super()
 	t.Clear()
 	t.SetColumns(len(r.Columns))
@@ -378,7 +408,10 @@ func (a *App) Ready() {
 
 	a.sqlPanel = new(SQLPanel)
 	a.sqlPanel.OnRunQuery = func(sql string) {
-		a.State.CurrentSQL = sql
+		a.State.UserSQL = sql
+		a.State.PageOffset = 0 // reset pagination on new query
+		a.State.SortColumn = ""
+		a.State.SortDir = models.SortNone
 		a.execQuery()
 	}
 
@@ -391,6 +424,29 @@ func (a *App) Ready() {
 	sqlWrap.AsNode().AddChild(a.sqlPanel.AsNode())
 
 	a.dataGrid = new(DataGrid)
+	a.dataGrid.OnColumnClicked = func(column int) {
+		if a.State.Result == nil || column >= len(a.State.Result.Columns) {
+			return
+		}
+		colName := a.State.Result.Columns[column]
+		if a.State.SortColumn == colName {
+			// Cycle: asc → desc → none
+			switch a.State.SortDir {
+			case models.SortAsc:
+				a.State.SortDir = models.SortDesc
+			case models.SortDesc:
+				a.State.SortColumn = ""
+				a.State.SortDir = models.SortNone
+			default:
+				a.State.SortDir = models.SortAsc
+			}
+		} else {
+			a.State.SortColumn = colName
+			a.State.SortDir = models.SortAsc
+		}
+		a.State.PageOffset = 0
+		a.execQuery()
+	}
 
 	rightPanel.AsNode().AddChild(sqlWrap.AsNode())
 	rightPanel.AsNode().AddChild(a.dataGrid.AsNode())
@@ -423,8 +479,11 @@ func (a *App) Ready() {
 
 func (a *App) onFileSelected(path string) {
 	a.State.FilePath = path
-	a.State.CurrentSQL = db.DefaultQuery(path)
-	a.sqlPanel.SetSQL(a.State.CurrentSQL)
+	a.State.UserSQL = db.DefaultQuery(path)
+	a.State.PageOffset = 0
+	a.State.SortColumn = ""
+	a.State.SortDir = models.SortNone
+	a.sqlPanel.SetSQL(a.State.UserSQL)
 	a.titleBar.SetFileInfo(path)
 
 	cols, err := a.Duck.Schema(path)
@@ -443,13 +502,14 @@ func (a *App) onFileSelected(path string) {
 
 func (a *App) execQuery() {
 	a.statusBar.SetStatus("Running…")
-	result, err := a.Duck.Query(a.State.CurrentSQL, a.State.PageOffset, a.State.PageSize)
+	result, err := a.Duck.Query(a.State.VirtualSQL(), a.State.PageOffset, a.State.PageSize)
 	if err != nil {
 		a.statusBar.SetStatus("Error: " + err.Error())
 		return
 	}
 	a.State.Result = result
 	a.dataGrid.SetResult(result)
+	a.dataGrid.UpdateColumnTitles(result.Columns, a.State.SortColumn, a.State.SortDir)
 	a.statusBar.SetStatus(fmt.Sprintf("1–%d of %d rows", len(result.Rows), result.Total))
 }
 
