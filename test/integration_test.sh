@@ -239,8 +239,7 @@ RESULT=$(curl -s -X POST "$URL/open" -d "{\"path\":\"$DUCKDB\"}")
 assert_eq "duckdb open ok" "True" "$(echo "$RESULT" | json_get '["ok"]')"
 sleep 0.5
 STATE=$(curl -s "$URL/state")
-assert_eq "duckdb has rows" "True" "$(echo "$STATE" | python3 -c "import sys,json; print(json.load(sys.stdin)['rowCount'] > 0)")"
-assert_eq "duckdb has columns" "True" "$(echo "$STATE" | python3 -c "import sys,json; print(len(json.load(sys.stdin)['columns']) > 0)")"
+assert_eq "duckdb no auto rows" "0" "$(echo "$STATE" | json_get '["rowCount"]')"
 
 echo "Test: Query DuckDB table"
 curl -s -X POST "$URL/query" -d '{"sql":"SELECT * FROM users"}' >/dev/null

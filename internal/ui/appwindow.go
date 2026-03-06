@@ -103,7 +103,7 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 	w.split = HSplitContainer.New()
 	w.split.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	w.split.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
-	w.split.AsSplitContainer().SetSplitOffset(180)
+	w.split.AsSplitContainer().SetSplitOffset(140)
 	w.split.AsControl().AddThemeConstantOverride("separation", 1)
 	w.split.AsControl().SetClipContents(true)
 
@@ -112,12 +112,13 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 	w.contentCol.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	w.contentCol.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
 	w.contentCol.AsControl().AddThemeConstantOverride("separation", 0)
+	w.contentCol.AsControl().SetClipContents(true)
 	w.contentCol.AsNode().AddChild(w.tabBarWrap.AsNode())
 
 	// Sidebar column: holds per-tab sidebars (show/hide)
 	w.sidebarCol = VBoxContainer.New()
 	w.sidebarCol.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
-	w.sidebarCol.AsControl().SetCustomMinimumSize(Vector2.New(120, 0))
+	w.sidebarCol.AsControl().SetCustomMinimumSize(Vector2.New(100, 0))
 
 	// Split: sidebar (left) | content column (right)
 	w.split.AsNode().AddChild(w.sidebarCol.AsNode())
@@ -208,7 +209,7 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 	// Connection rail (far-left column)
 	w.connRailWrap = PanelContainer.New()
 	w.connRailWrap.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
-	w.connRailWrap.AsControl().SetCustomMinimumSize(Vector2.New(44, 0))
+	w.connRailWrap.AsControl().SetCustomMinimumSize(Vector2.New(36, 0))
 	applyPanelBg(w.connRailWrap.AsControl(), colorBgDarker)
 
 	railMargin := MarginContainer.New()
@@ -268,7 +269,7 @@ func (w *AppWindow) addNewTab() {
 	// Sidebar
 	ts.sidebarWrap = PanelContainer.New()
 	ts.sidebarWrap.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
-	ts.sidebarWrap.AsControl().SetCustomMinimumSize(Vector2.New(120, 0))
+	ts.sidebarWrap.AsControl().SetCustomMinimumSize(Vector2.New(100, 0))
 	applyPanelBg(ts.sidebarWrap.AsControl(), colorBgSidebar)
 	sidebarMargin := MarginContainer.New()
 	sidebarMargin.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
@@ -339,7 +340,8 @@ func (w *AppWindow) addNewTab() {
 	ts.rightPanel.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	ts.rightPanel.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
 	ts.rightPanel.AsControl().AddThemeConstantOverride("separation", 1)
-	ts.rightPanel.AsControl().SetCustomMinimumSize(Vector2.New(300, 0)) // min width for data grid
+	ts.rightPanel.AsControl().SetCustomMinimumSize(Vector2.New(200, 0)) // min width for data grid
+	ts.rightPanel.AsControl().SetClipContents(true)
 
 	ts.sqlPanel = new(SQLPanel)
 	ts.sqlPanel.OnRunQuery = func(sql string) {
@@ -394,7 +396,7 @@ func (w *AppWindow) addNewTab() {
 	applyPanelBg(ts.detailWrap.AsControl(), colorBgSidebar)
 	ts.detailWrap.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
 	ts.detailWrap.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
-	ts.detailWrap.AsControl().SetCustomMinimumSize(Vector2.New(200, 0)) // min width for detail
+	ts.detailWrap.AsControl().SetCustomMinimumSize(Vector2.New(150, 0)) // min width for detail
 	detailMargin := MarginContainer.New()
 	detailMargin.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	detailMargin.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
@@ -415,7 +417,7 @@ func (w *AppWindow) addNewTab() {
 	ts.outerWrap.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
 	ts.outerWrap.AsControl().AddThemeConstantOverride("separation", 1)
 	ts.outerWrap.AsControl().SetClipContents(true)
-	ts.outerWrap.AsSplitContainer().SetSplitOffset(-280) // negative = from right edge
+	ts.outerWrap.AsSplitContainer().SetSplitOffset(-200) // negative = from right edge
 	ts.outerWrap.AsNode().AddChild(ts.rightPanel.AsNode())
 	ts.outerWrap.AsNode().AddChild(ts.detailWrap.AsNode())
 
@@ -703,9 +705,6 @@ func (w *AppWindow) selectConnection(idx int) {
 		w.runCurrentQuery()
 	}
 
-	if len(conn.Tables) > 0 {
-		ts.schema.OnTableClicked(conn.Tables[0].Name)
-	}
 }
 
 // execQueryWithConn runs a query using a specific database connection.
@@ -785,7 +784,7 @@ func createSecondaryWindow(duck *db.DB, history *models.QueryHistory, onNewWindo
 	win := Window.New()
 	win.SetTitle("Parquet Viewer")
 	win.SetSize(Vector2i.New(1440, 900))
-	win.SetContentScaleFactor(2.0)
+	// Retina handled by Godot's native HiDPI
 	win.SetExtendToTitle(true)
 
 	aw := &AppWindow{

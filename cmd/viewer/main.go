@@ -30,7 +30,8 @@ func main() {
 	if tree, ok := Object.As[SceneTree.Instance](Engine.GetMainLoop()); ok {
 		if root := tree.Root(); root != Window.Nil {
 			root.SetTitle("Parquet Viewer")
-			root.SetContentScaleFactor(2.0)
+			// Retina: let Godot handle HiDPI natively via display server
+			// root.SetContentScaleFactor(2.0) — removed: halves logical resolution
 		}
 	}
 
