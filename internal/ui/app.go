@@ -349,6 +349,7 @@ func (p *RowDetailPanel) Ready() {
 	p.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
 	p.AsControl().AddThemeConstantOverride("separation", 0)
 	p.AsControl().SetCustomMinimumSize(Vector2.New(250, 0))
+	p.AsControl().SetClipContents(true)
 
 	// Search input
 	p.searchBox = LineEdit.New()

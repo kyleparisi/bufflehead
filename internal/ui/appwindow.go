@@ -260,7 +260,15 @@ func (w *AppWindow) addNewTab() {
 	ts.detailWrap = PanelContainer.New()
 	applyPanelBg(ts.detailWrap.AsControl(), colorBgSidebar)
 	ts.detailWrap.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
-	ts.detailWrap.AsNode().AddChild(ts.detailPanel.AsNode())
+	detailMargin := MarginContainer.New()
+	detailMargin.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	detailMargin.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
+	detailMargin.AsControl().AddThemeConstantOverride("margin_top", 6)
+	detailMargin.AsControl().AddThemeConstantOverride("margin_left", 6)
+	detailMargin.AsControl().AddThemeConstantOverride("margin_right", 6)
+	detailMargin.AsControl().AddThemeConstantOverride("margin_bottom", 4)
+	detailMargin.AsNode().AddChild(ts.detailPanel.AsNode())
+	ts.detailWrap.AsNode().AddChild(detailMargin.AsNode())
 	ts.detailWrap.AsCanvasItem().SetVisible(false) // hidden until row clicked
 
 	ts.rightPanel.AsNode().AddChild(sqlWrap.AsNode())
