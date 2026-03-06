@@ -26,6 +26,14 @@ var (
 	colorSelected   = Color.RGBA{R: 0.12, G: 0.23, B: 0.37, A: 1} // #1e3a5f
 	colorBtnNormal  = Color.RGBA{R: 0.16, G: 0.16, B: 0.16, A: 1} // #2a2a2a
 	colorBtnHover   = Color.RGBA{R: 0.20, G: 0.20, B: 0.20, A: 1} // #333333
+
+	// SQL syntax highlighting
+	colorSQLKeyword  = Color.RGBA{R: 0.40, G: 0.60, B: 0.90, A: 1} // #6699e6 — blue
+	colorSQLString   = Color.RGBA{R: 0.80, G: 0.58, B: 0.36, A: 1} // #cc9460 — warm orange
+	colorSQLNumber   = Color.RGBA{R: 0.70, G: 0.85, B: 0.55, A: 1} // #b3d98c — green
+	colorSQLComment  = Color.RGBA{R: 0.45, G: 0.50, B: 0.45, A: 1} // #738073 — muted green
+	colorSQLSymbol   = Color.RGBA{R: 0.65, G: 0.65, B: 0.65, A: 1} // #a6a6a6 — gray
+	colorSQLFunction = Color.RGBA{R: 0.85, G: 0.75, B: 0.50, A: 1} // #d9bf80 — gold
 )
 
 func makeStyleBox(bg Color.RGBA, radius int, border int, borderColor Color.RGBA) StyleBoxFlat.Instance {

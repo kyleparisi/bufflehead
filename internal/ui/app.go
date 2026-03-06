@@ -25,7 +25,7 @@ import (
 	"graphics.gd/classdb/MarginContainer"
 	"graphics.gd/classdb/PanelContainer"
 	"graphics.gd/classdb/SceneTree"
-	"graphics.gd/classdb/TextEdit"
+	"graphics.gd/classdb/CodeEdit"
 	"graphics.gd/classdb/Tree"
 	"graphics.gd/classdb/TreeItem"
 	"graphics.gd/classdb/VBoxContainer"
@@ -198,7 +198,7 @@ func (s *SchemaPanel) SetSchema(cols []db.Column) {
 type SQLPanel struct {
 	VBoxContainer.Extension[SQLPanel] `gd:"ParquetSQLPanel"`
 
-	editor     TextEdit.Instance
+	editor     CodeEdit.Instance
 	OnRunQuery func(sql string)
 }
 
@@ -219,23 +219,30 @@ func (s *SQLPanel) Ready() {
 	applyButtonTheme(runBtn.AsControl())
 	runBtn.AsBaseButton().OnPressed(func() {
 		if s.OnRunQuery != nil {
-			s.OnRunQuery(s.editor.Text())
+			s.OnRunQuery(s.editor.AsTextEdit().Text())
 		}
 	})
 
 	row.AsNode().AddChild(label.AsNode())
 	row.AsNode().AddChild(runBtn.AsNode())
 
-	s.editor = TextEdit.New()
+	s.editor = CodeEdit.New()
 	s.editor.AsControl().SetCustomMinimumSize(Vector2.New(0, 80))
+	s.editor.SetGuttersDrawExecutingLines(false)
+	s.editor.SetGuttersDrawLineNumbers(false)
+	s.editor.SetGuttersDrawBreakpointsGutter(false)
+	s.editor.SetGuttersDrawBookmarks(false)
 	applyTextEditTheme(s.editor.AsControl())
+
+	// SQL syntax highlighting
+	setupSQLHighlighter(s.editor)
 
 	s.AsNode().AddChild(row.AsNode())
 	s.AsNode().AddChild(s.editor.AsNode())
 }
 
 func (s *SQLPanel) SetSQL(sql string) {
-	s.editor.SetText(sql)
+	s.editor.AsTextEdit().SetText(sql)
 }
 
 // ── Data grid ──────────────────────────────────────────────────────────────
