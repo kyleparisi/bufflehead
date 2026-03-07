@@ -1459,6 +1459,10 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 	}()
 
 	w := a.activeWindow()
+	if w == nil {
+		cmd.Respond(control.Result{Error: "no active window"})
+		return
+	}
 
 	switch cmd.Action {
 	case "open":
