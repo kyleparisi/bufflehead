@@ -16,12 +16,12 @@ run/low_processor_mode=true
 run/low_processor_mode_sleep_usec=16000
 
 [display]
-window/size/viewport_width=1440
-window/size/viewport_height=900
-window/size/window_width_override=1440
-window/size/window_height_override=900
-window/size/resizable=true
-window/size/extend_to_title=true
+window/size/viewport_width=1
+window/size/viewport_height=1
+window/size/window_width_override=1
+window/size/window_height_override=1
+window/size/resizable=false
+window/size/borderless=true
 window/subwindows/embed_subwindows=false
 
 

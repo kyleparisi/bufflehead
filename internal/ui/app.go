@@ -35,7 +35,7 @@ import (
 	"graphics.gd/classdb/Tree"
 	"graphics.gd/classdb/TreeItem"
 	"graphics.gd/classdb/VBoxContainer"
-	"graphics.gd/classdb/Window"
+
 	"graphics.gd/variant/Float"
 	"graphics.gd/variant/Object"
 	"graphics.gd/variant/Vector2"
@@ -1200,54 +1200,81 @@ type App struct {
 	// Legacy accessor — points to active window's active tab state
 	State *models.AppState `gd:"-"`
 
-	mainWin    *AppWindow     `gd:"-"`
-	secondWins []*AppWindow   `gd:"-"`
-	appMenu    *AppMenu       `gd:"-"`
+	mainWin     *AppWindow              `gd:"-"`
+	secondWins  []*AppWindow             `gd:"-"`
+	appMenu     *AppMenu                 `gd:"-"`
+	history     *models.QueryHistory     `gd:"-"`
+	pendingInit bool                     `gd:"-"`
 }
 
 func (a *App) activeWindow() *AppWindow {
-	return a.mainWin // TODO: track focused window
+	if a.mainWin != nil {
+		return a.mainWin
+	}
+	if len(a.secondWins) > 0 {
+		return a.secondWins[0]
+	}
+	return nil
 }
 
 func (a *App) Ready() {
-	a.AsControl().SetAnchorsAndOffsetsPreset(Control.PresetFullRect)
-
-	// Build main window UI
-	history := models.NewQueryHistory()
-	a.mainWin = &AppWindow{
-		isMain:  true,
-		duck:    a.Duck,
-		history: history,
-	}
-	a.mainWin.onNewWindow = func() { a.newWindow() }
-
-	ui := a.mainWin.buildUI()
-	a.AsNode().AddChild(ui.AsNode())
-
-	// Now create the initial tab (after UI is in tree so Ready() has been called)
-	a.mainWin.addNewTab()
-
-	// Setup file drag & drop on main window
+	// Root viewport is a hidden 1x1 "server" — all UI lives in secondary windows.
 	if tree, ok := Object.As[SceneTree.Instance](Engine.GetMainLoop()); ok {
-		if root := tree.Root(); root != Window.Nil {
-			root.OnFilesDropped(func(files []string) {
-				for _, f := range files {
-					if len(f) > 8 && f[len(f)-8:] == ".parquet" {
-						a.mainWin.onFileSelected(f)
-						return
-					}
+		root := tree.Root().AsWindow()
+		root.SetContentScaleFactor(1.0)
+		root.SetPosition(Vector2i.New(-32000, -32000))
+	}
+
+	a.history = models.NewQueryHistory()
+	a.pendingInit = true
+}
+
+func (a *App) initMainWindow() {
+	a.mainWin = createSecondaryWindow(a.Duck, a.history, func() { a.newWindow() })
+	a.mainWin.isMain = true
+
+	if tree, ok := Object.As[SceneTree.Instance](Engine.GetMainLoop()); ok {
+		root := tree.Root()
+		root.AsNode().AddChild(a.mainWin.window.AsNode())
+		a.mainWin.window.Show()
+		a.mainWin.window.MoveToCenter()
+		a.mainWin.titleBar.WindowID = a.mainWin.window.GetWindowId()
+		a.mainWin.addNewTab()
+
+		// Handle close
+		a.mainWin.window.OnCloseRequested(func() {
+			a.mainWin.window.AsNode().QueueFree()
+			a.mainWin = nil
+			if len(a.secondWins) == 0 {
+				tree.Quit()
+			}
+		})
+
+		// File drag & drop
+		a.mainWin.window.OnFilesDropped(func(files []string) {
+			w := a.activeWindow()
+			if w == nil {
+				return
+			}
+			for _, f := range files {
+				if len(f) > 8 && f[len(f)-8:] == ".parquet" {
+					w.onFileSelected(f)
+					return
 				}
-				if len(files) > 0 {
-					a.mainWin.onFileSelected(files[0])
-				}
-			})
-		}
+			}
+			if len(files) > 0 {
+				w.onFileSelected(files[0])
+			}
+		})
 	}
 
 	// Setup native menu bar
 	a.appMenu = &AppMenu{
 		OnOpenFile: func() {
 			w := a.activeWindow()
+			if w == nil {
+				return
+			}
 			DisplayServer.FileDialogShow(
 				"Open Parquet File",
 				"",
@@ -1264,14 +1291,19 @@ func (a *App) Ready() {
 			)
 		},
 		OnOpenRecent: func(path string) {
-			a.activeWindow().onFileSelected(path)
+			if w := a.activeWindow(); w != nil {
+				w.onFileSelected(path)
+			}
 		},
 		OnNewTab: func() {
-			a.activeWindow().addNewTab()
+			if w := a.activeWindow(); w != nil {
+				w.addNewTab()
+			}
 		},
 		OnCloseTab: func() {
-			w := a.activeWindow()
-			w.closeTab(w.activeTab)
+			if w := a.activeWindow(); w != nil {
+				w.closeTab(w.activeTab)
+			}
 		},
 		OnNewWindow: func() {
 			a.newWindow()
@@ -1279,17 +1311,20 @@ func (a *App) Ready() {
 	}
 	a.appMenu.Setup()
 
-	// Update State pointer for control server compatibility
-	a.State = a.mainWin.currentState()
-
 	// Wire up control server state provider
 	if a.ControlServer != nil {
 		a.ControlServer.SetStateProvider(func() (json.RawMessage, error) {
 			w := a.activeWindow()
+			if w == nil {
+				return json.Marshal(map[string]any{"tabCount": 0})
+			}
 			state := map[string]any{
 				"tabCount":    len(w.tabs),
 				"activeTab":   w.activeTab,
-				"windowCount": 1 + len(a.secondWins),
+				"windowCount": len(a.secondWins),
+			}
+			if a.mainWin != nil {
+				state["windowCount"] = 1 + len(a.secondWins)
 			}
 			if s := w.currentState(); s != nil {
 				state["filePath"] = s.FilePath
@@ -1320,24 +1355,36 @@ func (a *App) Ready() {
 }
 
 func (a *App) newWindow() {
-	aw := createSecondaryWindow(a.Duck, a.mainWin.history, func() { a.newWindow() })
+	aw := createSecondaryWindow(a.Duck, a.history, func() { a.newWindow() })
 	a.secondWins = append(a.secondWins, aw)
 
-	// Add the window to the scene tree
 	if tree, ok := Object.As[SceneTree.Instance](Engine.GetMainLoop()); ok {
 		root := tree.Root()
 		root.AsNode().AddChild(aw.window.AsNode())
 		aw.window.Show()
 		aw.window.MoveToCenter()
-		// Cascade offset so windows don't stack exactly
 		pos := aw.window.Position()
 		offset := int32(len(a.secondWins) * 30)
 		aw.window.SetPosition(Vector2i.New(int(pos.X+offset), int(pos.Y+offset)))
 		aw.titleBar.WindowID = aw.window.GetWindowId()
 		aw.window.GrabFocus()
-		aw.window.MoveToForeground()
 		aw.window.RequestAttention()
 		aw.addNewTab()
+
+		// Handle close
+		aw.window.OnCloseRequested(func() {
+			for i, w := range a.secondWins {
+				if w == aw {
+					a.secondWins = append(a.secondWins[:i], a.secondWins[i+1:]...)
+					break
+				}
+			}
+			aw.window.AsNode().QueueFree()
+			// Quit if no windows left
+			if a.mainWin == nil && len(a.secondWins) == 0 {
+				tree.Quit()
+			}
+		})
 	}
 }
 
@@ -1355,24 +1402,37 @@ func (a *App) UnhandledKeyInput(event InputEvent.Instance) {
 		a.newWindow()
 	case Input.KeyT:
 		fmt.Println("[input] Cmd+T → new tab")
-		a.activeWindow().addNewTab()
+		if w := a.activeWindow(); w != nil {
+			w.addNewTab()
+		}
 	case Input.KeyW:
 		fmt.Println("[input] Cmd+W → close tab")
-		w := a.activeWindow()
-		w.closeTab(w.activeTab)
+		if w := a.activeWindow(); w != nil {
+			w.closeTab(w.activeTab)
+		}
 	case Input.KeyO:
 		fmt.Println("[input] Cmd+O → open file")
 		if a.appMenu != nil && a.appMenu.OnOpenFile != nil {
 			a.appMenu.OnOpenFile()
 		}
 	case Input.KeyBracketleft:
-		a.activeWindow().navBack()
+		if w := a.activeWindow(); w != nil {
+			w.navBack()
+		}
 	case Input.KeyBracketright:
-		a.activeWindow().navForward()
+		if w := a.activeWindow(); w != nil {
+			w.navForward()
+		}
 	}
 }
 
 func (a *App) Process(delta Float.X) {
+	// Deferred init — create main window after scene tree is ready
+	if a.pendingInit {
+		a.pendingInit = false
+		a.initMainWindow()
+	}
+
 	// Update State pointer
 	if w := a.activeWindow(); w != nil {
 		a.State = w.currentState()
