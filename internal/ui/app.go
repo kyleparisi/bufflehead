@@ -23,7 +23,6 @@ import (
 	"graphics.gd/classdb/HSplitContainer"
 	"graphics.gd/classdb/Input"
 	"graphics.gd/classdb/InputEvent"
-	"graphics.gd/classdb/InputEventKey"
 	"graphics.gd/classdb/InputEventMouseButton"
 	"graphics.gd/classdb/InputEventMouseMotion"
 	"graphics.gd/classdb/Label"
@@ -1205,6 +1204,7 @@ type App struct {
 	appMenu     *AppMenu                 `gd:"-"`
 	history     *models.QueryHistory     `gd:"-"`
 	pendingInit bool                     `gd:"-"`
+	prevKeys    map[Input.Key]bool       `gd:"-"`
 }
 
 func (a *App) activeWindow() *AppWindow {
@@ -1381,53 +1381,82 @@ func (a *App) newWindow() {
 	}
 }
 
-func (a *App) UnhandledKeyInput(event InputEvent.Instance) {
-	key, ok := Object.As[InputEventKey.Instance](event)
-	if !ok || !key.AsInputEvent().IsPressed() {
-		return
-	}
-	if !key.AsInputEventWithModifiers().IsCommandOrControlPressed() {
-		return
-	}
-	switch key.Keycode() {
+// handleShortcut is called from input polling
+func (a *App) handleShortcut(key Input.Key, w *AppWindow) {
+	switch key {
 	case Input.KeyQ:
 		if tree, ok := Object.As[SceneTree.Instance](Engine.GetMainLoop()); ok {
 			tree.Quit()
 		}
 	case Input.KeyN:
-		fmt.Println("[input] Cmd+N → new window")
 		a.newWindow()
 	case Input.KeyT:
-		fmt.Println("[input] Cmd+T → new tab")
-		if w := a.activeWindow(); w != nil {
+		if w != nil {
 			w.addNewTab()
 		}
 	case Input.KeyW:
-		fmt.Println("[input] Cmd+W → close tab")
-		if w := a.activeWindow(); w != nil {
-			w.closeTab(w.activeTab)
+		if w != nil {
+			if len(w.tabs) <= 1 {
+				// Close the window
+				if w == a.mainWin {
+					w.window.AsNode().QueueFree()
+					a.mainWin = nil
+				} else {
+					for i, sw := range a.secondWins {
+						if sw == w {
+							a.secondWins = append(a.secondWins[:i], a.secondWins[i+1:]...)
+							break
+						}
+					}
+					w.window.AsNode().QueueFree()
+				}
+			} else {
+				w.closeTab(w.activeTab)
+			}
 		}
 	case Input.KeyO:
-		fmt.Println("[input] Cmd+O → open file")
 		if a.appMenu != nil && a.appMenu.OnOpenFile != nil {
 			a.appMenu.OnOpenFile()
 		}
 	case Input.KeyBracketleft:
-		if w := a.activeWindow(); w != nil {
+		if w != nil {
 			w.navBack()
 		}
 	case Input.KeyBracketright:
-		if w := a.activeWindow(); w != nil {
+		if w != nil {
 			w.navForward()
 		}
 	}
+}
+
+func (a *App) justPressed(key Input.Key) bool {
+	pressed := Input.IsKeyPressed(key)
+	was := a.prevKeys[key]
+	a.prevKeys[key] = pressed
+	return pressed && !was
 }
 
 func (a *App) Process(delta Float.X) {
 	// Deferred init — create main window after scene tree is ready
 	if a.pendingInit {
 		a.pendingInit = false
+		a.prevKeys = make(map[Input.Key]bool)
 		a.initMainWindow()
+	}
+
+	// Poll keyboard shortcuts (works across all windows)
+	if Input.IsKeyPressed(Input.KeyMeta) || Input.IsKeyPressed(Input.KeyCtrl) {
+		shortcuts := []Input.Key{Input.KeyQ, Input.KeyN, Input.KeyT, Input.KeyW, Input.KeyO, Input.KeyBracketleft, Input.KeyBracketright}
+		for _, k := range shortcuts {
+			if a.justPressed(k) {
+				a.handleShortcut(k, a.activeWindow())
+			}
+		}
+	} else {
+		// Clear all tracked keys when cmd isn't held
+		for k := range a.prevKeys {
+			a.prevKeys[k] = false
+		}
 	}
 
 	// Update State pointer

@@ -22,6 +22,8 @@ window/size/window_width_override=1
 window/size/window_height_override=1
 window/size/resizable=false
 window/size/borderless=true
+window/size/initial_position_type=0
+window/size/initial_position=Vector2i(-32000, -32000)
 window/subwindows/embed_subwindows=false
 
 

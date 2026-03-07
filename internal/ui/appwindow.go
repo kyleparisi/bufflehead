@@ -935,6 +935,8 @@ func createSecondaryWindow(duck *db.DB, history *models.QueryHistory, onNewWindo
 	root.AsNode().AddChild(ui.AsNode())
 	win.AsNode().AddChild(root.AsNode())
 
+
+
 	// Note: caller must call aw.addNewTab() after adding window to scene tree
 
 	// Setup drag & drop for this window
