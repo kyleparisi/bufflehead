@@ -1220,9 +1220,15 @@ func (a *App) activeWindow() *AppWindow {
 func (a *App) Ready() {
 	// Root viewport is a hidden 1x1 "server" — all UI lives in secondary windows.
 	if tree, ok := Object.As[SceneTree.Instance](Engine.GetMainLoop()); ok {
-		root := tree.Root().AsWindow()
-		root.SetContentScaleFactor(1.0)
-		root.SetPosition(Vector2i.New(-32000, -32000))
+		root := tree.Root()
+		win := root.AsWindow()
+		win.SetContentScaleFactor(1.0)
+		win.SetPosition(Vector2i.New(-32000, -32000))
+
+		// Minimize root viewport overhead
+		root.AsViewport().SetDisable3d(true)
+		root.AsViewport().SetPhysicsObjectPicking(false)
+		root.AsViewport().SetGuiDisableInput(true)
 	}
 
 	a.history = models.NewQueryHistory()

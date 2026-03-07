@@ -30,3 +30,11 @@ window/subwindows/embed_subwindows=false
 [rendering]
 renderer/rendering_method="gl_compatibility"
 textures/vram_compression/import_etc2_astc=true
+viewport/transparent_background=true
+environment/defaults/default_clear_color=Color(0, 0, 0, 0)
+
+[physics]
+common/physics_ticks_per_second=1
+common/enable_pause_aware_picking=false
+2d/run_on_separate_thread=false
+3d/run_on_separate_thread=false
