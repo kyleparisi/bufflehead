@@ -34,6 +34,7 @@ import (
 	"graphics.gd/classdb/Tree"
 	"graphics.gd/classdb/TreeItem"
 	"graphics.gd/classdb/VBoxContainer"
+	"graphics.gd/classdb/Window"
 
 	"graphics.gd/variant/Float"
 	"graphics.gd/variant/Object"
@@ -1632,15 +1633,13 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 		cmd.Respond(control.Result{OK: true})
 
 	case "screenshot":
-		viewport := Engine.GetMainLoop()
-		if tree, ok := Object.As[SceneTree.Instance](viewport); ok {
-			root := tree.Root()
-			tex := root.AsViewport().GetTexture()
+		if w.window != (Window.Nil) {
+			tex := w.window.AsViewport().GetTexture()
 			img := tex.AsTexture2D().GetImage()
 			pngBytes := img.SavePngToBuffer()
 			cmd.Respond(control.Result{OK: true, RawBytes: pngBytes})
 		} else {
-			cmd.Respond(control.Result{Error: "could not get viewport"})
+			cmd.Respond(control.Result{Error: "no active window"})
 		}
 
 	default:
