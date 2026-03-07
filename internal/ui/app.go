@@ -1241,13 +1241,10 @@ func (a *App) initMainWindow() {
 		a.mainWin.titleBar.WindowID = a.mainWin.window.GetWindowId()
 		a.mainWin.addNewTab()
 
-		// Handle close
+		// Handle close — destroy window, app stays alive
 		a.mainWin.window.OnCloseRequested(func() {
 			a.mainWin.window.AsNode().QueueFree()
 			a.mainWin = nil
-			if len(a.secondWins) == 0 {
-				tree.Quit()
-			}
 		})
 
 		// File drag & drop
@@ -1371,7 +1368,7 @@ func (a *App) newWindow() {
 		aw.window.RequestAttention()
 		aw.addNewTab()
 
-		// Handle close
+		// Handle close — destroy window, app stays alive
 		aw.window.OnCloseRequested(func() {
 			for i, w := range a.secondWins {
 				if w == aw {
@@ -1380,10 +1377,6 @@ func (a *App) newWindow() {
 				}
 			}
 			aw.window.AsNode().QueueFree()
-			// Quit if no windows left
-			if a.mainWin == nil && len(a.secondWins) == 0 {
-				tree.Quit()
-			}
 		})
 	}
 }
@@ -1397,6 +1390,10 @@ func (a *App) UnhandledKeyInput(event InputEvent.Instance) {
 		return
 	}
 	switch key.Keycode() {
+	case Input.KeyQ:
+		if tree, ok := Object.As[SceneTree.Instance](Engine.GetMainLoop()); ok {
+			tree.Quit()
+		}
 	case Input.KeyN:
 		fmt.Println("[input] Cmd+N → new window")
 		a.newWindow()
