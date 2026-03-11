@@ -40,6 +40,5 @@ func setupSQLHighlighter(editor CodeEdit.Instance) {
 	hl.MoreArgs().AddColorRegion("--", "", colorSQLComment, true)
 	hl.AddColorRegion("/*", "*/", colorSQLComment)
 
-	// Use patched Instance-level SetSyntaxHighlighter
-	editor.AsTextEdit().SetSyntaxHighlighter(hl)
+	hl.AsSyntaxHighlighter().Set(editor.AsTextEdit())
 }

@@ -61,9 +61,9 @@ func TestSchema(t *testing.T) {
 		name     string
 		dataType string
 	}{
-		{"id", "INT32"},
-		{"name", "BYTE_ARRAY"},
-		{"age", "INT32"},
+		{"id", "INTEGER"},
+		{"name", "VARCHAR"},
+		{"age", "INTEGER"},
 	}
 
 	for i, e := range expected {

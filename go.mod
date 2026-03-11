@@ -7,8 +7,6 @@ require (
 	graphics.gd v0.0.0-20260301004336-07bec6a0140d
 )
 
-replace graphics.gd => /Users/openclaw/.openclaw/workspace/graphics-gd-src
-
 require (
 	github.com/apache/arrow-go/v18 v18.1.0 // indirect
 	github.com/go-viper/mapstructure/v2 v2.2.1 // indirect
