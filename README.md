@@ -1,6 +1,10 @@
-# parquet-viewer
+# Bufflehead
 
-A native cross-platform Parquet viewer built with Go + DuckDB + graphics.gd (Godot 4.6).
+<p align="center">
+  <img src="graphics/icon.png" width="128" alt="Bufflehead logo">
+</p>
+
+A native cross-platform Parquet viewer built with Go + DuckDB + graphics.gd (Godot 4.6). Named after the [Bufflehead](https://en.wikipedia.org/wiki/Bufflehead), a small diving duck — a nod to the DuckDB engine under the hood.
 
 ## Features
 
