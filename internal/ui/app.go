@@ -1451,6 +1451,11 @@ func (a *App) justPressed(key Input.Key) bool {
 }
 
 func (a *App) Notification(what Object.Notification) {
+	// Log all notifications above 2000 (application-level)
+	if what >= 2000 {
+		fmt.Println("[bufflehead] notification:", what, "mainWin:", a.mainWin != nil, "secondWins:", len(a.secondWins))
+	}
+
 	// macOS dock click: focus existing window or create a new one
 	const notificationApplicationFocusIn Object.Notification = 2016
 	if what == notificationApplicationFocusIn {
