@@ -1204,8 +1204,9 @@ type App struct {
 	secondWins  []*AppWindow             `gd:"-"`
 	appMenu     *AppMenu                 `gd:"-"`
 	history     *models.QueryHistory     `gd:"-"`
-	pendingInit bool                     `gd:"-"`
-	prevKeys    map[Input.Key]bool       `gd:"-"`
+	pendingInit   bool                   `gd:"-"`
+	pendingReopen bool                   `gd:"-"`
+	prevKeys      map[Input.Key]bool     `gd:"-"`
 }
 
 func (a *App) activeWindow() *AppWindow {
@@ -1447,7 +1448,6 @@ func (a *App) Notification(what Object.Notification) {
 	// macOS dock click: focus existing window or create a new one
 	const notificationApplicationFocusIn Object.Notification = 2016
 	if what == notificationApplicationFocusIn {
-		fmt.Println("[bufflehead] focus-in notification, mainWin:", a.mainWin != nil, "secondWins:", len(a.secondWins))
 		if w := a.activeWindow(); w != nil {
 			// Un-minimize if needed
 			wid := DisplayServer.Window(w.window.GetWindowId())
@@ -1458,7 +1458,8 @@ func (a *App) Notification(what Object.Notification) {
 			w.window.MoveToForeground()
 			w.window.GrabFocus()
 		} else {
-			a.initMainWindow()
+			// Can't add children during notification — defer to next frame
+			a.pendingReopen = true
 		}
 	}
 }
@@ -1468,6 +1469,12 @@ func (a *App) Process(delta Float.X) {
 	if a.pendingInit {
 		a.pendingInit = false
 		a.prevKeys = make(map[Input.Key]bool)
+		a.initMainWindow()
+	}
+
+	// Deferred reopen — dock icon clicked with no windows open
+	if a.pendingReopen {
+		a.pendingReopen = false
 		a.initMainWindow()
 	}
 
