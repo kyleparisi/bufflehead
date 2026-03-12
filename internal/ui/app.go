@@ -1443,6 +1443,19 @@ func (a *App) justPressed(key Input.Key) bool {
 	return pressed && !was
 }
 
+func (a *App) Notification(what Object.Notification) {
+	// macOS dock click: focus existing window or create a new one
+	const notificationApplicationFocusIn = 2016
+	if what == notificationApplicationFocusIn {
+		if w := a.activeWindow(); w != nil {
+			w.window.GrabFocus()
+			w.window.RequestAttention()
+		} else {
+			a.initMainWindow()
+		}
+	}
+}
+
 func (a *App) Process(delta Float.X) {
 	// Deferred init — create main window after scene tree is ready
 	if a.pendingInit {
