@@ -1445,11 +1445,18 @@ func (a *App) justPressed(key Input.Key) bool {
 
 func (a *App) Notification(what Object.Notification) {
 	// macOS dock click: focus existing window or create a new one
-	const notificationApplicationFocusIn = 2016
+	const notificationApplicationFocusIn Object.Notification = 2016
 	if what == notificationApplicationFocusIn {
+		fmt.Println("[bufflehead] focus-in notification, mainWin:", a.mainWin != nil, "secondWins:", len(a.secondWins))
 		if w := a.activeWindow(); w != nil {
+			// Un-minimize if needed
+			wid := DisplayServer.Window(w.window.GetWindowId())
+			if DisplayServer.WindowGetMode(wid) == DisplayServer.WindowModeMinimized {
+				DisplayServer.WindowSetMode(DisplayServer.WindowModeWindowed, wid)
+			}
+			w.window.Show()
+			w.window.MoveToForeground()
 			w.window.GrabFocus()
-			w.window.RequestAttention()
 		} else {
 			a.initMainWindow()
 		}
