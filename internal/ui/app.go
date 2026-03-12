@@ -1250,9 +1250,15 @@ func (a *App) initMainWindow() {
 		a.mainWin.addNewTab()
 
 		// Handle close — destroy window, app stays alive
+		closingWin := a.mainWin
 		a.mainWin.window.OnCloseRequested(func() {
-			a.mainWin.window.AsNode().QueueFree()
-			a.mainWin = nil
+			if closingWin == nil || closingWin.window == (Window.Instance{}) {
+				return
+			}
+			closingWin.window.AsNode().QueueFree()
+			if a.mainWin == closingWin {
+				a.mainWin = nil
+			}
 		})
 
 		// File drag & drop
@@ -1455,7 +1461,6 @@ func (a *App) Notification(what Object.Notification) {
 				DisplayServer.WindowSetMode(DisplayServer.WindowModeWindowed, wid)
 			}
 			w.window.Show()
-			w.window.MoveToForeground()
 			w.window.GrabFocus()
 		} else {
 			// Can't add children during notification — defer to next frame
