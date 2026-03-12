@@ -6,9 +6,9 @@ import (
 	"os"
 	"strings"
 
-	"parquet-viewer/internal/control"
-	"parquet-viewer/internal/db"
-	"parquet-viewer/internal/models"
+	"bufflehead/internal/control"
+	"bufflehead/internal/db"
+	"bufflehead/internal/models"
 
 	"graphics.gd/classdb"
 	"graphics.gd/classdb/BoxContainer"
@@ -45,7 +45,7 @@ import (
 // ── Title bar ──────────────────────────────────────────────────────────────
 
 type TitleBar struct {
-	PanelContainer.Extension[TitleBar] `gd:"ParquetTitleBar"`
+	PanelContainer.Extension[TitleBar] `gd:"TitleBar"`
 
 	infoLabel  Label.Instance
 	NavBackBtn Button.Instance
@@ -170,7 +170,7 @@ func (t *TitleBar) SetFileInfo(path string) {
 // ── Toolbar ────────────────────────────────────────────────────────────────
 
 type Toolbar struct {
-	HBoxContainer.Extension[Toolbar] `gd:"ParquetToolbar"`
+	HBoxContainer.Extension[Toolbar] `gd:"Toolbar"`
 
 	fileLabel LineEdit.Instance
 
@@ -217,7 +217,7 @@ func (t *Toolbar) Ready() {
 // ── Schema sidebar ─────────────────────────────────────────────────────────
 
 type SchemaPanel struct {
-	VBoxContainer.Extension[SchemaPanel] `gd:"ParquetSchemaPanel"`
+	VBoxContainer.Extension[SchemaPanel] `gd:"SchemaPanel"`
 
 	searchBox        LineEdit.Instance
 	tree             Tree.Instance
@@ -550,7 +550,7 @@ func (s *SchemaPanel) addTableItem(parent TreeItem.Instance, t db.TableInfo) {
 // ── History panel ──────────────────────────────────────────────────────────
 
 type HistoryPanel struct {
-	VBoxContainer.Extension[HistoryPanel] `gd:"ParquetHistoryPanel"`
+	VBoxContainer.Extension[HistoryPanel] `gd:"HistoryPanel"`
 
 	tree      Tree.Instance
 	OnReplay  func(sql string) // callback when user clicks a history entry
@@ -603,7 +603,7 @@ func (h *HistoryPanel) SetHistory(entries []models.HistoryEntry) {
 // ── SQL editor ─────────────────────────────────────────────────────────────
 
 type SQLPanel struct {
-	VBoxContainer.Extension[SQLPanel] `gd:"ParquetSQLPanel"`
+	VBoxContainer.Extension[SQLPanel] `gd:"SQLPanel"`
 
 	editor     CodeEdit.Instance
 	OnRunQuery func(sql string)
@@ -655,7 +655,7 @@ func (s *SQLPanel) SetSQL(sql string) {
 // ── Data grid ──────────────────────────────────────────────────────────────
 
 type DataGrid struct {
-	Tree.Extension[DataGrid] `gd:"ParquetDataGrid"`
+	Tree.Extension[DataGrid] `gd:"DataGrid"`
 
 	OnColumnClicked func(column int)
 	OnRowSelected   func(rowIndex int)
@@ -920,7 +920,7 @@ func debugLog(msg string) {
 // ── Row detail panel ───────────────────────────────────────────────────────
 
 type RowDetailPanel struct {
-	VBoxContainer.Extension[RowDetailPanel] `gd:"ParquetRowDetail"`
+	VBoxContainer.Extension[RowDetailPanel] `gd:"RowDetail"`
 
 	searchBox    LineEdit.Instance
 	scrollBox    ScrollContainer.Instance
@@ -1066,7 +1066,7 @@ func (p *RowDetailPanel) filterFields(query string) {
 // ── Status bar ─────────────────────────────────────────────────────────────
 
 type StatusBar struct {
-	HBoxContainer.Extension[StatusBar] `gd:"ParquetStatusBar"`
+	HBoxContainer.Extension[StatusBar] `gd:"StatusBar"`
 
 	rowCount  Label.Instance
 	pageLabel Label.Instance
@@ -1192,7 +1192,7 @@ type tabState struct {
 // ── App root ───────────────────────────────────────────────────────────────
 
 type App struct {
-	MarginContainer.Extension[App] `gd:"ParquetViewer"`
+	MarginContainer.Extension[App] `gd:"Bufflehead"`
 
 	Duck          *db.DB          `gd:"-"`
 	ControlServer *control.Server `gd:"-"`

@@ -3,9 +3,9 @@ package main
 import (
 	"log"
 
-	"parquet-viewer/internal/control"
-	"parquet-viewer/internal/db"
-	"parquet-viewer/internal/ui"
+	"bufflehead/internal/control"
+	"bufflehead/internal/db"
+	"bufflehead/internal/ui"
 
 	"graphics.gd/classdb/DisplayServer"
 	"graphics.gd/classdb/Engine"

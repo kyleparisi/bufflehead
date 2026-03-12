@@ -81,12 +81,12 @@ func historyPath() string {
 	switch runtime.GOOS {
 	case "darwin":
 		home, _ := os.UserHomeDir()
-		base = filepath.Join(home, "Library", "Application Support", "ParquetViewer")
+		base = filepath.Join(home, "Library", "Application Support", "Bufflehead")
 	case "windows":
-		base = filepath.Join(os.Getenv("APPDATA"), "ParquetViewer")
+		base = filepath.Join(os.Getenv("APPDATA"), "Bufflehead")
 	default:
 		home, _ := os.UserHomeDir()
-		base = filepath.Join(home, ".config", "parquet-viewer")
+		base = filepath.Join(home, ".config", "bufflehead")
 	}
 	return filepath.Join(base, "history.json")
 }

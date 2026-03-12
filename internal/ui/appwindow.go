@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"parquet-viewer/internal/db"
-	"parquet-viewer/internal/models"
+	"bufflehead/internal/db"
+	"bufflehead/internal/models"
 
 	"graphics.gd/classdb/BoxContainer"
 	"graphics.gd/classdb/Button"
@@ -194,7 +194,7 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 	emptyIcon.SetHorizontalAlignment(1)
 
 	emptyTitle := Label.New()
-	emptyTitle.SetText("Parquet Viewer")
+	emptyTitle.SetText("Bufflehead")
 	emptyTitle.AsControl().AddThemeFontSizeOverride("font_size", 18)
 	emptyTitle.AsControl().AddThemeColorOverride("font_color", colorText)
 	emptyTitle.SetHorizontalAlignment(1)
@@ -911,7 +911,7 @@ func schemaColTypes(schema []db.Column, resultCols []string) []string {
 // createSecondaryWindow creates a new OS-level window with full UI.
 func createSecondaryWindow(duck *db.DB, history *models.QueryHistory, onNewWindow func()) *AppWindow {
 	win := Window.New()
-	win.SetTitle("Parquet Viewer")
+	win.SetTitle("Bufflehead")
 	win.SetSize(Vector2i.New(1440, 900))
 	// Scale to match screen DPI
 	scale := float64(DisplayServer.ScreenGetScale())

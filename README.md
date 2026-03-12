@@ -57,7 +57,7 @@ GOOS=web gd build ./cmd/viewer
 ## Project Structure
 
 ```
-parquet-viewer/
+bufflehead/
 ├── cmd/viewer/
 │   └── main.go          # Entrypoint
 ├── internal/

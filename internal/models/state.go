@@ -1,7 +1,7 @@
 package models
 
 import (
-	"parquet-viewer/internal/db"
+	"bufflehead/internal/db"
 	"strings"
 )
 

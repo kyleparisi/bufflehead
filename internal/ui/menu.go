@@ -122,14 +122,14 @@ func (m *AppMenu) rebuildRecentMenu() {
 }
 
 func (m *AppMenu) recentFilePath() string {
-	// macOS: ~/Library/Application Support/ParquetViewer/
-	// Linux: ~/.local/share/ParquetViewer/
-	// Windows: %APPDATA%/ParquetViewer/
+	// macOS: ~/Library/Application Support/Bufflehead/
+	// Linux: ~/.local/share/Bufflehead/
+	// Windows: %APPDATA%/Bufflehead/
 	dir, err := os.UserConfigDir()
 	if err != nil {
 		dir, _ = os.UserHomeDir()
 	}
-	appDir := filepath.Join(dir, "ParquetViewer")
+	appDir := filepath.Join(dir, "Bufflehead")
 	os.MkdirAll(appDir, 0755)
 	return filepath.Join(appDir, "recent.json")
 }

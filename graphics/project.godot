@@ -9,7 +9,7 @@
 config_version=5
 
 [application]
-config/name="parquet-viewer"
+config/name="Bufflehead"
 config/icon="res://icon.png"
 run/main_scene="res://main.tscn"
 run/main_loop_type="GoMainLoop"

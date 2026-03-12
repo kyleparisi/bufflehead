@@ -1,4 +1,4 @@
-module parquet-viewer
+module bufflehead
 
 go 1.26.0
 
