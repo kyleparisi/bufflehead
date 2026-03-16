@@ -65,15 +65,18 @@ func (t *TitleBar) Ready() {
 	applyTitleBarTheme(t.AsControl())
 	t.AsControl().SetMouseFilter(Control.MouseFilterStop)
 	t.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	t.AsControl().SetCustomMinimumSize(Vector2.New(0, 42))
 
 	margin := MarginContainer.New()
 	margin.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	margin.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
 	margin.AsControl().AddThemeConstantOverride("margin_top", 6)
 	margin.AsControl().AddThemeConstantOverride("margin_left", 78) // clear macOS traffic lights
 	margin.AsControl().AddThemeConstantOverride("margin_right", 8)
 	margin.AsControl().AddThemeConstantOverride("margin_bottom", 6)
 
 	row := HBoxContainer.New()
+	row.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	row.AsControl().AddThemeConstantOverride("separation", 6)
 
 	// Nav buttons
@@ -610,10 +613,12 @@ type SQLPanel struct {
 }
 
 func (s *SQLPanel) Ready() {
+	s.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	s.AsControl().AddThemeConstantOverride("separation", 4)
 
 	// Top row: label + run button
 	row := HBoxContainer.New()
+	row.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	row.AsControl().AddThemeConstantOverride("separation", 6)
 
 	label := Label.New()
@@ -634,6 +639,7 @@ func (s *SQLPanel) Ready() {
 	row.AsNode().AddChild(runBtn.AsNode())
 
 	s.editor = CodeEdit.New()
+	s.editor.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	s.editor.AsControl().SetCustomMinimumSize(Vector2.New(0, 80))
 	s.editor.SetGuttersDrawExecutingLines(false)
 	s.editor.SetGuttersDrawLineNumbers(false)

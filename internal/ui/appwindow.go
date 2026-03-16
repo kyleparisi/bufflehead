@@ -10,7 +10,6 @@ import (
 	"graphics.gd/classdb/BoxContainer"
 	"graphics.gd/classdb/Button"
 	"graphics.gd/classdb/Control"
-	"graphics.gd/classdb/DisplayServer"
 	"graphics.gd/classdb/HBoxContainer"
 	"graphics.gd/classdb/HSplitContainer"
 	"graphics.gd/classdb/Label"
@@ -76,6 +75,7 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 	applyPanelBg(bg.AsControl(), colorBg)
 
 	outerVBox := VBoxContainer.New()
+	outerVBox.AsControl().SetAnchorsAndOffsetsPreset(Control.PresetFullRect)
 	outerVBox.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	outerVBox.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
 	outerVBox.AsControl().AddThemeConstantOverride("separation", 0)
@@ -87,6 +87,7 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 
 	// Tab bar
 	w.tabBarWrap = MarginContainer.New()
+	w.tabBarWrap.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	w.tabBarWrap.AsControl().AddThemeConstantOverride("margin_left", 8)
 	w.tabBarWrap.AsControl().AddThemeConstantOverride("margin_right", 8)
 	w.tabBarWrap.AsControl().AddThemeConstantOverride("margin_top", 0)
@@ -255,6 +256,7 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 
 	// Content area (rail | main)
 	contentHBox := HBoxContainer.New()
+	contentHBox.AsControl().SetAnchorsAndOffsetsPreset(Control.PresetFullRect)
 	contentHBox.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	contentHBox.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
 	contentHBox.AsControl().AddThemeConstantOverride("separation", 0)
@@ -913,12 +915,15 @@ func createSecondaryWindow(duck *db.DB, history *models.QueryHistory, onNewWindo
 	win := Window.New()
 	win.SetTitle("Bufflehead")
 	win.SetSize(Vector2i.New(1440, 900))
-	// Scale to match screen DPI
-	scale := float64(DisplayServer.ScreenGetScale())
-	if scale > 0 {
-		win.SetContentScaleFactor(Float.X(scale))
-	}
-	win.SetExtendToTitle(true)
+	win.SetMinSize(Vector2i.New(1100, 720))
+	// Let Godot/macOS handle per-display DPI. Manually multiplying by
+	// ScreenGetScale() makes the entire UI oversized on some displays
+	// (for example "looks like 1920x1080" setups), which can push the
+	// title pill off-screen and effectively clip the main content.
+	win.SetContentScaleFactor(Float.X(1.0))
+	// Custom title-bar extension behaves inconsistently across Macs.
+	// Keep a normal native title bar for now and render our app chrome below it.
+	win.SetExtendToTitle(false)
 
 	aw := &AppWindow{
 		window:      win,
@@ -932,6 +937,7 @@ func createSecondaryWindow(duck *db.DB, history *models.QueryHistory, onNewWindo
 	// Need a Control root to anchor the UI
 	root := Control.New()
 	root.SetAnchorsAndOffsetsPreset(Control.PresetFullRect)
+	ui.AsControl().SetAnchorsAndOffsetsPreset(Control.PresetFullRect)
 	root.AsNode().AddChild(ui.AsNode())
 	win.AsNode().AddChild(root.AsNode())
 
