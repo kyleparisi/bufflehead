@@ -124,6 +124,7 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 	w.sidebarCol = VBoxContainer.New()
 	w.sidebarCol.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
 	w.sidebarCol.AsControl().SetCustomMinimumSize(Vector2.New(100, 0))
+	w.sidebarCol.AsControl().SetClipContents(true)
 
 	// Split: sidebar (left) | content column (right)
 	w.split.AsNode().AddChild(w.sidebarCol.AsNode())
@@ -307,7 +308,9 @@ func (w *AppWindow) addNewTab() {
 	// Sidebar
 	ts.sidebarWrap = PanelContainer.New()
 	ts.sidebarWrap.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
+	ts.sidebarWrap.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	ts.sidebarWrap.AsControl().SetCustomMinimumSize(Vector2.New(100, 0))
+	ts.sidebarWrap.AsControl().SetClipContents(true)
 	applyPanelBg(ts.sidebarWrap.AsControl(), colorBgSidebar)
 	sidebarMargin := MarginContainer.New()
 	sidebarMargin.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"sync"
 )
 
@@ -40,6 +41,13 @@ type QueryData struct {
 // PageData is the payload for the "page" action.
 type PageData struct {
 	Offset int `json:"offset"`
+}
+
+// ResizeData is the payload for the "ui_tree" action (optional resize before capture).
+type ResizeData struct {
+	Width  int     `json:"width,omitempty"`
+	Height int     `json:"height,omitempty"`
+	Scale  float64 `json:"scale,omitempty"`
 }
 
 // StateProvider returns the current app state as JSON.
@@ -160,6 +168,36 @@ func (s *Server) Start() {
 			return
 		}
 		w.Header().Set("Content-Type", "image/png")
+		w.Write(res.RawBytes)
+	})
+
+	mux.HandleFunc("GET /ui-tree", func(w http.ResponseWriter, r *http.Request) {
+		var rd ResizeData
+		if ws := r.URL.Query().Get("width"); ws != "" {
+			rd.Width, _ = strconv.Atoi(ws)
+		}
+		if hs := r.URL.Query().Get("height"); hs != "" {
+			rd.Height, _ = strconv.Atoi(hs)
+		}
+		if ss := r.URL.Query().Get("scale"); ss != "" {
+			rd.Scale, _ = strconv.ParseFloat(ss, 64)
+		}
+		var data json.RawMessage
+		if rd.Width > 0 || rd.Height > 0 || rd.Scale > 0 {
+			data, _ = json.Marshal(rd)
+		}
+		cmd := &Command{
+			Action: "ui_tree",
+			Data:   data,
+			result: make(chan Result, 1),
+		}
+		s.commands <- cmd
+		res := <-cmd.result
+		if !res.OK {
+			http.Error(w, res.Error, 500)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.Write(res.RawBytes)
 	})
 

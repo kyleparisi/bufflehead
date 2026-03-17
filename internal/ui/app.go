@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"graphics.gd/classdb"
 	"graphics.gd/classdb/BoxContainer"
 	"graphics.gd/classdb/Button"
+	"graphics.gd/classdb/CanvasItem"
 	"graphics.gd/classdb/CheckBox"
 	"graphics.gd/classdb/CodeEdit"
 	"graphics.gd/classdb/Control"
@@ -28,6 +30,7 @@ import (
 	"graphics.gd/classdb/Label"
 	"graphics.gd/classdb/LineEdit"
 	"graphics.gd/classdb/MarginContainer"
+	"graphics.gd/classdb/Node"
 	"graphics.gd/classdb/PanelContainer"
 	"graphics.gd/classdb/SceneTree"
 	"graphics.gd/classdb/ScrollContainer"
@@ -224,6 +227,8 @@ type SchemaPanel struct {
 
 	searchBox        LineEdit.Instance
 	tree             Tree.Instance
+	scrollBox        ScrollContainer.Instance
+	colsList         VBoxContainer.Instance
 	OnTableClicked   func(tableName string)
 	OnColumnsChanged func(selected []string)
 	allCols          []db.Column
@@ -237,6 +242,7 @@ type SchemaPanel struct {
 }
 
 func (s *SchemaPanel) Ready() {
+	s.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
 	s.AsControl().AddThemeConstantOverride("separation", 4)
 
 	// Search input
@@ -268,7 +274,19 @@ func (s *SchemaPanel) Ready() {
 		}
 	})
 
+	// Scrollable column list (for parquet check-mode)
+	s.scrollBox = ScrollContainer.New()
+	s.scrollBox.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	s.scrollBox.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
+	s.scrollBox.AsCanvasItem().SetVisible(false)
+
+	s.colsList = VBoxContainer.New()
+	s.colsList.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	s.colsList.AsControl().AddThemeConstantOverride("separation", 4)
+	s.scrollBox.AsNode().AddChild(s.colsList.AsNode())
+
 	s.AsNode().AddChild(s.searchBox.AsNode())
+	s.AsNode().AddChild(s.scrollBox.AsNode())
 	s.AsNode().AddChild(s.tree.AsNode())
 }
 
@@ -278,14 +296,15 @@ func (s *SchemaPanel) SetSchema(cols []db.Column) {
 	s.checkMode = true
 	s.searchBox.SetText("")
 	s.tree.AsCanvasItem().SetVisible(false)
+	s.scrollBox.AsCanvasItem().SetVisible(true)
 
 	// Remove old select-all row + divider if exists
 	if s.selectAllRow != (HBoxContainer.Instance{}) {
-		s.Super().AsNode().RemoveChild(s.selectAllRow.AsNode())
+		s.colsList.AsNode().RemoveChild(s.selectAllRow.AsNode())
 		s.selectAllRow.AsNode().QueueFree()
 	}
 	if s.selectAllDivider != (PanelContainer.Instance{}) {
-		s.Super().AsNode().RemoveChild(s.selectAllDivider.AsNode())
+		s.colsList.AsNode().RemoveChild(s.selectAllDivider.AsNode())
 		s.selectAllDivider.AsNode().QueueFree()
 	}
 
@@ -318,13 +337,12 @@ func (s *SchemaPanel) SetSchema(cols []db.Column) {
 	// Divider below header
 	s.selectAllDivider = PanelContainer.New()
 	s.selectAllDivider.AsControl().SetCustomMinimumSize(Vector2.New(0, 1))
+	s.selectAllDivider.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	applyPanelBg(s.selectAllDivider.AsControl(), colorBorder)
 
-	// Insert after search box
-	s.Super().AsNode().AddChild(s.selectAllRow.AsNode())
-	s.Super().AsNode().MoveChild(s.selectAllRow.AsNode(), 1)
-	s.Super().AsNode().AddChild(s.selectAllDivider.AsNode())
-	s.Super().AsNode().MoveChild(s.selectAllDivider.AsNode(), 2)
+	// Insert header and divider at the top of the scrollable column list
+	s.colsList.AsNode().AddChild(s.selectAllRow.AsNode())
+	s.colsList.AsNode().AddChild(s.selectAllDivider.AsNode())
 
 	s.filterCols("")
 }
@@ -370,7 +388,7 @@ func (s *SchemaPanel) filterCols(query string) {
 	q := strings.ToLower(query)
 	// Clear existing rows
 	for _, row := range s.checkRows {
-		s.Super().AsNode().RemoveChild(row.AsNode())
+		s.colsList.AsNode().RemoveChild(row.AsNode())
 		row.AsNode().QueueFree()
 	}
 	s.checkBoxes = nil
@@ -412,11 +430,6 @@ func (s *SchemaPanel) filterCols(query string) {
 		typeLabel.AsControl().AddThemeColorOverride("font_color", colorTextDim)
 		typeLabel.AsControl().SetMouseFilter(Control.MouseFilterPass)
 
-		// Spacer pushes "only" to the right
-		spacer := Control.New()
-		spacer.SetSizeFlagsHorizontal(Control.SizeExpandFill)
-		spacer.SetMouseFilter(Control.MouseFilterPass)
-
 		// "only" link — hidden until hover
 		onlyLabel := Label.New()
 		onlyLabel.SetText("only")
@@ -454,9 +467,8 @@ func (s *SchemaPanel) filterCols(query string) {
 		row.AsNode().AddChild(cb.AsNode())
 		row.AsNode().AddChild(nameLabel.AsNode())
 		row.AsNode().AddChild(typeLabel.AsNode())
-		row.AsNode().AddChild(spacer.AsNode())
 		row.AsNode().AddChild(onlyLabel.AsNode())
-		s.Super().AsNode().AddChild(row.AsNode())
+		s.colsList.AsNode().AddChild(row.AsNode())
 		s.checkBoxes = append(s.checkBoxes, cb)
 		s.checkRows = append(s.checkRows, row)
 	}
@@ -469,21 +481,22 @@ func (s *SchemaPanel) SetTables(tables []db.TableInfo) {
 	s.searchBox.SetText("")
 	// Clear checkbox rows + select-all
 	if s.selectAllRow != (HBoxContainer.Instance{}) {
-		s.Super().AsNode().RemoveChild(s.selectAllRow.AsNode())
+		s.colsList.AsNode().RemoveChild(s.selectAllRow.AsNode())
 		s.selectAllRow.AsNode().QueueFree()
 		s.selectAllRow = HBoxContainer.Instance{}
 	}
 	if s.selectAllDivider != (PanelContainer.Instance{}) {
-		s.Super().AsNode().RemoveChild(s.selectAllDivider.AsNode())
+		s.colsList.AsNode().RemoveChild(s.selectAllDivider.AsNode())
 		s.selectAllDivider.AsNode().QueueFree()
 		s.selectAllDivider = PanelContainer.Instance{}
 	}
 	for _, row := range s.checkRows {
-		s.Super().AsNode().RemoveChild(row.AsNode())
+		s.colsList.AsNode().RemoveChild(row.AsNode())
 		row.AsNode().QueueFree()
 	}
 	s.checkBoxes = nil
 	s.checkRows = nil
+	s.scrollBox.AsCanvasItem().SetVisible(false)
 	s.tree.AsCanvasItem().SetVisible(true)
 	s.filterTables("")
 }
@@ -1675,6 +1688,22 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 		w.navForward()
 		cmd.Respond(control.Result{OK: true})
 
+	case "ui_tree":
+		// Optional resize before capturing the tree
+		if len(cmd.Data) > 0 {
+			var rd control.ResizeData
+			if err := json.Unmarshal(cmd.Data, &rd); err == nil {
+				if rd.Width > 0 && rd.Height > 0 {
+					w.window.SetSize(Vector2i.New(rd.Width, rd.Height))
+				}
+				if rd.Scale > 0 {
+					w.window.SetContentScaleFactor(Float.X(rd.Scale))
+				}
+			}
+		}
+		tscn := writeTSCN(w.window.AsNode())
+		cmd.Respond(control.Result{OK: true, RawBytes: tscn})
+
 	case "screenshot":
 		if w.window != (Window.Nil) {
 			tex := w.window.AsViewport().GetTexture()
@@ -1687,6 +1716,56 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 
 	default:
 		cmd.Respond(control.Result{Error: "unknown action: " + cmd.Action})
+	}
+}
+
+// writeTSCN serializes a Godot node tree to .tscn text format.
+func writeTSCN(root Node.Instance) []byte {
+	var buf bytes.Buffer
+	buf.WriteString("[gd_scene format=3]\n")
+	walkNode(&buf, root, "")
+	return buf.Bytes()
+}
+
+func walkNode(buf *bytes.Buffer, node Node.Instance, parentPath string) {
+	name := node.Name()
+	className := Object.Instance(node.AsObject()).ClassName()
+
+	buf.WriteString("\n[node")
+	fmt.Fprintf(buf, " name=%q type=%q", name, className)
+	if parentPath != "" {
+		fmt.Fprintf(buf, " parent=%q", parentPath)
+	}
+	buf.WriteString("]\n")
+
+	// Emit properties for CanvasItem nodes
+	if ci, ok := Object.As[CanvasItem.Instance](node); ok {
+		fmt.Fprintf(buf, "visible = %v\n", ci.Visible())
+	}
+	if ctrl, ok := Object.As[Control.Instance](node); ok {
+		size := ctrl.Size()
+		fmt.Fprintf(buf, "size = Vector2(%v, %v)\n", size.X, size.Y)
+	}
+
+	// Emit type-specific properties
+	if sc, ok := Object.As[ScrollContainer.Instance](node); ok {
+		fmt.Fprintf(buf, "horizontal_scroll_mode = %d\n", int(sc.HorizontalScrollMode()))
+		fmt.Fprintf(buf, "vertical_scroll_mode = %d\n", int(sc.VerticalScrollMode()))
+	}
+
+	// Recurse children with correct parent path
+	var childParent string
+	switch parentPath {
+	case "":
+		childParent = "."
+	case ".":
+		childParent = name
+	default:
+		childParent = parentPath + "/" + name
+	}
+
+	for i := 0; i < node.GetChildCount(); i++ {
+		walkNode(buf, node.GetChild(i), childParent)
 	}
 }
 

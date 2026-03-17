@@ -1,26 +1,20 @@
 #!/bin/bash
-# Integration test — runs the app headless and drives it via the control API.
+# Integration test — builds the dylib, launches Godot headless, runs pytest.
 # Usage: ./test/integration_test.sh
 set -e
 
 GODOT="/Users/openclaw/gd/bin/Godot.app/Contents/MacOS/Godot"
 PROJECT_DIR="$(cd "$(dirname "$0")/../graphics" && pwd)"
-TESTDATA="$(cd "$(dirname "$0")/../testdata" && pwd)"
-SAMPLE="$TESTDATA/sample.parquet"
 PORT=9900
-URL="http://127.0.0.1:$PORT"
-PASS=0
-FAIL=0
 
 # Kill any stale Godot processes holding port 9900
 pkill -9 -if godot 2>/dev/null || true
-# Wait for port to free
 for i in $(seq 1 10); do
-    curl -s http://127.0.0.1:9900/state >/dev/null 2>&1 || break
+    curl -s http://127.0.0.1:$PORT/state >/dev/null 2>&1 || break
     sleep 1
 done
 
-# Build the dylib first
+# Build the dylib
 cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
 PATH="$PATH:/Users/openclaw/go/bin"
@@ -38,254 +32,9 @@ sleep 3
 cleanup() {
     kill $PID 2>/dev/null || true
     wait $PID 2>/dev/null || true
-    echo ""
-    echo "Results: $PASS passed, $FAIL failed"
-    [ $FAIL -eq 0 ] && exit 0 || exit 1
 }
 trap cleanup EXIT
 
-assert_eq() {
-    local desc="$1" expected="$2" actual="$3"
-    if [ "$expected" = "$actual" ]; then
-        echo "  ✓ $desc"
-        PASS=$((PASS + 1))
-    else
-        echo "  ✗ $desc (expected: $expected, got: $actual)"
-        FAIL=$((FAIL + 1))
-    fi
-}
-
-json_get() {
-    python3 -c "import sys,json; d=json.load(sys.stdin); print(d$1)"
-}
-
-# ── Test: Initial state ──────────────────────────────────────────────────
-echo "Test: Initial state"
-STATE=$(curl -s "$URL/state")
-assert_eq "no file loaded" "" "$(echo "$STATE" | json_get '["filePath"]')"
-assert_eq "empty SQL" "" "$(echo "$STATE" | json_get '["userSQL"]')"
-assert_eq "zero rows" "0" "$(echo "$STATE" | json_get '["rowCount"]')"
-
-# ── Test: Open file ──────────────────────────────────────────────────────
-echo "Test: Open file"
-RESULT=$(curl -s -X POST "$URL/open" -d "{\"path\":\"$SAMPLE\"}")
-assert_eq "open ok" "True" "$(echo "$RESULT" | json_get '["ok"]')"
-sleep 0.5
-
-STATE=$(curl -s "$URL/state")
-assert_eq "file path set" "$SAMPLE" "$(echo "$STATE" | json_get '["filePath"]')"
-assert_eq "500 rows" "500" "$(echo "$STATE" | json_get '["rowCount"]')"
-assert_eq "8 columns" "8" "$(echo "$STATE" | python3 -c "import sys,json; print(len(json.load(sys.stdin)['columns']))")"
-assert_eq "no sort" "" "$(echo "$STATE" | json_get '["sortColumn"]')"
-assert_eq "sort dir none" "0" "$(echo "$STATE" | json_get '["sortDir"]')"
-
-# ── Test: Sort ascending ─────────────────────────────────────────────────
-echo "Test: Sort ascending (score)"
-curl -s -X POST "$URL/sort" -d '{"column":2}' >/dev/null
-sleep 0.5
-STATE=$(curl -s "$URL/state")
-assert_eq "sort column" "score" "$(echo "$STATE" | json_get '["sortColumn"]')"
-assert_eq "sort asc" "1" "$(echo "$STATE" | json_get '["sortDir"]')"
-
-# ── Test: Sort descending ────────────────────────────────────────────────
-echo "Test: Sort descending (score)"
-curl -s -X POST "$URL/sort" -d '{"column":2}' >/dev/null
-sleep 0.5
-STATE=$(curl -s "$URL/state")
-assert_eq "sort column" "score" "$(echo "$STATE" | json_get '["sortColumn"]')"
-assert_eq "sort desc" "2" "$(echo "$STATE" | json_get '["sortDir"]')"
-
-# ── Test: Sort reset ─────────────────────────────────────────────────────
-echo "Test: Sort reset (score)"
-curl -s -X POST "$URL/sort" -d '{"column":2}' >/dev/null
-sleep 0.5
-STATE=$(curl -s "$URL/state")
-assert_eq "sort cleared" "" "$(echo "$STATE" | json_get '["sortColumn"]')"
-assert_eq "sort none" "0" "$(echo "$STATE" | json_get '["sortDir"]')"
-
-# ── Test: Custom query ───────────────────────────────────────────────────
-echo "Test: Custom query"
-curl -s -X POST "$URL/query" -d "{\"sql\":\"SELECT id, name FROM '$SAMPLE' WHERE id <= 10\"}" >/dev/null
-sleep 0.5
-STATE=$(curl -s "$URL/state")
-assert_eq "10 rows" "10" "$(echo "$STATE" | json_get '["rowCount"]')"
-assert_eq "2 columns" "2" "$(echo "$STATE" | python3 -c "import sys,json; print(len(json.load(sys.stdin)['columns']))")"
-
-# ── Test: Pagination ─────────────────────────────────────────────────────
-echo "Test: Pagination"
-curl -s -X POST "$URL/open" -d "{\"path\":\"$SAMPLE\"}" >/dev/null
-sleep 0.5
-curl -s -X POST "$URL/page" -d '{"offset":100}' >/dev/null
-sleep 0.5
-STATE=$(curl -s "$URL/state")
-assert_eq "offset 100" "100" "$(echo "$STATE" | json_get '["pageOffset"]')"
-assert_eq "still 500 total" "500" "$(echo "$STATE" | json_get '["rowCount"]')"
-
-# ── Test: Open replaces current tab ──────────────────────────────────────
-CITIES="$TESTDATA/cities.parquet"
-# Reset: close all tabs, start fresh
-echo "Test: Open second file opens new tab"
-while [ "$(curl -s "$URL/state" | json_get '["tabCount"]')" != "0" ]; do
-    curl -s -X POST "$URL/close-tab" >/dev/null; sleep 0.1
-done
-curl -s -X POST "$URL/open" -d "{\"path\":\"$SAMPLE\"}" >/dev/null
-sleep 0.5
-STATE=$(curl -s "$URL/state")
-assert_eq "sample loaded" "500" "$(echo "$STATE" | json_get '["rowCount"]')"
-TABS_BEFORE=$(echo "$STATE" | json_get '["tabCount"]')
-
-curl -s -X POST "$URL/open" -d "{\"path\":\"$CITIES\"}" >/dev/null
-sleep 0.5
-STATE=$(curl -s "$URL/state")
-assert_eq "cities loaded" "3" "$(echo "$STATE" | json_get '["rowCount"]')"
-assert_eq "tab count +1" "$((TABS_BEFORE + 1))" "$(echo "$STATE" | json_get '["tabCount"]')"
-assert_eq "cities file path" "$CITIES" "$(echo "$STATE" | json_get '["filePath"]')"
-assert_eq "cities 2 cols" "2" "$(echo "$STATE" | python3 -c "import sys,json; print(len(json.load(sys.stdin)['columns']))")"
-
-# ── Test: New tab then open file ─────────────────────────────────────────
-echo "Test: New tab then open file (uses empty tab)"
-curl -s -X POST "$URL/new-tab" >/dev/null
-sleep 0.3
-STATE=$(curl -s "$URL/state")
-NEW_TABS=$(echo "$STATE" | json_get '["tabCount"]')
-assert_eq "new tab empty" "" "$(echo "$STATE" | json_get '["filePath"]')"
-
-curl -s -X POST "$URL/open" -d "{\"path\":\"$SAMPLE\"}" >/dev/null
-sleep 0.5
-STATE=$(curl -s "$URL/state")
-assert_eq "sample in empty tab" "$SAMPLE" "$(echo "$STATE" | json_get '["filePath"]')"
-assert_eq "500 rows" "500" "$(echo "$STATE" | json_get '["rowCount"]')"
-assert_eq "no extra tab" "$NEW_TABS" "$(echo "$STATE" | json_get '["tabCount"]')"
-
-# ── Test: Close all tabs then open file ──────────────────────────────────
-echo "Test: Close all tabs then open file"
-# Close all tabs
-for i in $(seq 1 $NEW_TABS); do
-    curl -s -X POST "$URL/close-tab" >/dev/null
-    sleep 0.2
-done
-STATE=$(curl -s "$URL/state")
-assert_eq "zero tabs" "0" "$(echo "$STATE" | json_get '["tabCount"]')"
-
-curl -s -X POST "$URL/open" -d "{\"path\":\"$CITIES\"}" >/dev/null
-sleep 0.5
-STATE=$(curl -s "$URL/state")
-assert_eq "auto-created tab" "1" "$(echo "$STATE" | json_get '["tabCount"]')"
-assert_eq "cities file" "$CITIES" "$(echo "$STATE" | json_get '["filePath"]')"
-assert_eq "3 rows" "3" "$(echo "$STATE" | json_get '["rowCount"]')"
-
-# ── Test: Select row populates detail ────────────────────────────────────
-echo "Test: Select row"
-curl -s -X POST "$URL/open" -d "{\"path\":\"$SAMPLE\"}" >/dev/null
-sleep 0.5
-RESULT=$(curl -s -X POST "$URL/select-row" -d '{"row":0}')
-assert_eq "select row ok" "True" "$(echo "$RESULT" | json_get '["ok"]')"
-RESULT=$(curl -s -X POST "$URL/select-row" -d '{"row":999}')
-assert_eq "out of range error" "False" "$(echo "$RESULT" | json_get '.get("ok", False)')"
-
-# ── Test: Search detail ──────────────────────────────────────────────────
-echo "Test: Search detail"
-curl -s -X POST "$URL/select-row" -d '{"row":0}' >/dev/null
-sleep 0.3
-RESULT=$(curl -s -X POST "$URL/search-detail" -d '{"query":"tags"}')
-assert_eq "search detail ok" "True" "$(echo "$RESULT" | json_get '["ok"]')"
-
-# ── Test: CSV file ───────────────────────────────────────────────────────
-CSV="$TESTDATA/sales.csv"
-echo "Test: Open CSV file"
-# Reset: close all, open fresh tab
-while [ "$(curl -s "$URL/state" | json_get '["tabCount"]')" != "0" ]; do
-    curl -s -X POST "$URL/close-tab" >/dev/null; sleep 0.1
-done
-curl -s -X POST "$URL/new-tab" >/dev/null
-sleep 0.3
-curl -s -X POST "$URL/query" -d "{\"sql\":\"SELECT * FROM '$CSV'\"}" >/dev/null
-sleep 0.5
-STATE=$(curl -s "$URL/state")
-assert_eq "csv 5 rows" "5" "$(echo "$STATE" | json_get '["rowCount"]')"
-assert_eq "csv 4 cols" "4" "$(echo "$STATE" | python3 -c "import sys,json; print(len(json.load(sys.stdin)['columns']))")"
-assert_eq "csv cols" "['product', 'region', 'quantity', 'price']" "$(echo "$STATE" | json_get '["columns"]')"
-
-# ── Test: JSON file ──────────────────────────────────────────────────────
-JSONF="$TESTDATA/events.json"
-echo "Test: Open JSON file"
-curl -s -X POST "$URL/query" -d "{\"sql\":\"SELECT * FROM '$JSONF'\"}" >/dev/null
-sleep 0.5
-STATE=$(curl -s "$URL/state")
-assert_eq "json 4 rows" "4" "$(echo "$STATE" | json_get '["rowCount"]')"
-assert_eq "json has event col" "True" "$(echo "$STATE" | python3 -c "import sys,json; print('event' in json.load(sys.stdin)['columns'])")"
-assert_eq "json has user col" "True" "$(echo "$STATE" | python3 -c "import sys,json; print('user' in json.load(sys.stdin)['columns'])")"
-
-# ── Test: TSV file ───────────────────────────────────────────────────────
-TSV="$TESTDATA/metrics.tsv"
-echo "Test: Open TSV file"
-curl -s -X POST "$URL/query" -d "{\"sql\":\"SELECT * FROM read_csv('$TSV', delim='\\\\t', header=true)\"}" >/dev/null
-sleep 0.5
-STATE=$(curl -s "$URL/state")
-assert_eq "tsv 4 rows" "4" "$(echo "$STATE" | json_get '["rowCount"]')"
-assert_eq "tsv has host col" "True" "$(echo "$STATE" | python3 -c "import sys,json; print('host' in json.load(sys.stdin)['columns'])")"
-assert_eq "tsv has metric col" "True" "$(echo "$STATE" | python3 -c "import sys,json; print('metric' in json.load(sys.stdin)['columns'])")"
-
-# ── Test: Corrupted parquet ──────────────────────────────────────────────
-CORRUPT="$TESTDATA/corrupted.parquet"
-echo "Test: Corrupted parquet shows error"
-RESULT=$(curl -s -X POST "$URL/query" -d "{\"sql\":\"SELECT * FROM '$CORRUPT'\"}")
-assert_eq "corrupted returns error" "False" "$(echo "$RESULT" | json_get '.get("ok", False)')"
-
-# ── Test: Invalid SQL ────────────────────────────────────────────────────
-echo "Test: Invalid SQL shows error"
-RESULT=$(curl -s -X POST "$URL/query" -d '{"sql":"SELEKT * FORM nowhere"}')
-assert_eq "bad sql returns error" "False" "$(echo "$RESULT" | json_get '.get("ok", False)')"
-
-# ── Test: DuckDB database file ───────────────────────────────────────────
-DUCKDB="$TESTDATA/test.duckdb"
-echo "Test: Open DuckDB database"
-while [ "$(curl -s "$URL/state" | json_get '["tabCount"]')" != "0" ]; do
-    curl -s -X POST "$URL/close-tab" >/dev/null; sleep 0.1
-done
-RESULT=$(curl -s -X POST "$URL/open" -d "{\"path\":\"$DUCKDB\"}")
-assert_eq "duckdb open ok" "True" "$(echo "$RESULT" | json_get '["ok"]')"
-sleep 0.5
-STATE=$(curl -s "$URL/state")
-assert_eq "duckdb no auto rows" "0" "$(echo "$STATE" | json_get '["rowCount"]')"
-
-echo "Test: Query DuckDB table"
-curl -s -X POST "$URL/query" -d '{"sql":"SELECT * FROM users"}' >/dev/null
-sleep 0.5
-STATE=$(curl -s "$URL/state")
-assert_eq "users 3 rows" "3" "$(echo "$STATE" | json_get '["rowCount"]')"
-assert_eq "users has name" "True" "$(echo "$STATE" | python3 -c "import sys,json; print('name' in json.load(sys.stdin)['columns'])")"
-
-echo "Test: Query DuckDB view"
-curl -s -X POST "$URL/query" -d '{"sql":"SELECT * FROM user_orders"}' >/dev/null
-sleep 0.5
-STATE=$(curl -s "$URL/state")
-assert_eq "view 3 rows" "3" "$(echo "$STATE" | json_get '["rowCount"]')"
-assert_eq "view has amount" "True" "$(echo "$STATE" | python3 -c "import sys,json; print('amount' in json.load(sys.stdin)['columns'])")"
-
-# ── Test: Navigation back/forward ────────────────────────────────────────
-echo "Test: Nav back/forward"
-# Reset: close all tabs, create fresh
-while [ "$(curl -s "$URL/state" | json_get '["tabCount"]')" != "0" ]; do
-    curl -s -X POST "$URL/close-tab" >/dev/null; sleep 0.1
-done
-curl -s -X POST "$URL/new-tab" >/dev/null
-sleep 0.3
-# Run query A
-curl -s -X POST "$URL/query" -d "{\"sql\":\"SELECT * FROM '$SAMPLE'\"}" >/dev/null
-sleep 0.3
-# Run query B
-curl -s -X POST "$URL/query" -d "{\"sql\":\"SELECT id, name FROM '$SAMPLE' LIMIT 10\"}" >/dev/null
-sleep 0.3
-STATE=$(curl -s "$URL/state")
-assert_eq "at query B" "10" "$(echo "$STATE" | json_get '["rowCount"]')"
-# Nav back → query A
-curl -s -X POST "$URL/nav-back" >/dev/null
-sleep 0.3
-STATE=$(curl -s "$URL/state")
-assert_eq "back to query A" "500" "$(echo "$STATE" | json_get '["rowCount"]')"
-# Nav forward → query B
-curl -s -X POST "$URL/nav-forward" >/dev/null
-sleep 0.3
-STATE=$(curl -s "$URL/state")
-assert_eq "forward to query B" "10" "$(echo "$STATE" | json_get '["rowCount"]')"
+# Run pytest
+cd "$ROOT"
+python3 -m pytest test/integration_test.py -v "$@"
