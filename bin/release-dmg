@@ -1,0 +1,22 @@
+#!/bin/bash
+# Build the macOS app and package it as a DMG.
+# Usage: ./bin/release-dmg
+set -e
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+APP="$ROOT/releases/darwin/universal/Bufflehead.app"
+DMG="$ROOT/releases/Bufflehead.dmg"
+
+echo "Building macOS app..."
+GOOS=macos gd build ./cmd/viewer
+
+if [ ! -d "$APP" ]; then
+    echo "Error: $APP not found after build" >&2
+    exit 1
+fi
+
+echo "Creating DMG..."
+hdiutil create -volname "Bufflehead" -srcfolder "$APP" -ov -format UDZO "$DMG"
+
+echo "Done: $DMG"
+ls -lh "$DMG"
