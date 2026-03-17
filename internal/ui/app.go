@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"bufflehead/internal/completion"
 	"bufflehead/internal/control"
 	"bufflehead/internal/db"
 	"bufflehead/internal/models"
@@ -624,6 +625,10 @@ type SQLPanel struct {
 
 	editor     CodeEdit.Instance
 	OnRunQuery func(sql string)
+
+	// Autocomplete data
+	columns []db.Column   // current schema columns
+	tables  []db.TableInfo // current database tables (for .duckdb files)
 }
 
 func (s *SQLPanel) Ready() {
@@ -666,12 +671,58 @@ func (s *SQLPanel) Ready() {
 	// SQL syntax highlighting
 	setupSQLHighlighter(s.editor)
 
+	// Code completion
+	s.editor.SetCodeCompletionEnabled(true)
+	s.editor.OnCodeCompletionRequested(func() {
+		s.populateCompletions()
+	})
+	// Trigger completion on every text change while typing a word
+	s.editor.AsTextEdit().OnTextChanged(func() {
+		prefix := s.currentWordPrefix()
+		if len(prefix) >= 1 {
+			s.editor.RequestCodeCompletion()
+		}
+	})
+
 	s.AsNode().AddChild(row.AsNode())
 	s.AsNode().AddChild(s.editor.AsNode())
 }
 
 func (s *SQLPanel) SetSQL(sql string) {
 	s.editor.AsTextEdit().SetText(sql)
+}
+
+// SetCompletionSchema updates the column list used for autocomplete.
+func (s *SQLPanel) SetCompletionSchema(cols []db.Column) {
+	s.columns = cols
+}
+
+// SetCompletionTables updates the table list used for autocomplete.
+func (s *SQLPanel) SetCompletionTables(tables []db.TableInfo) {
+	s.tables = tables
+}
+
+// populateCompletions adds completion options based on the current word prefix.
+func (s *SQLPanel) populateCompletions() {
+	prefix := s.currentWordPrefix()
+	items := completion.Build(prefix, s.columns, s.tables)
+	if len(items) == 0 {
+		return
+	}
+	for _, item := range items {
+		s.editor.AddCodeCompletionOption(
+			CodeEdit.CodeCompletionKind(item.Kind), item.Display, item.InsertText,
+		)
+	}
+	s.editor.UpdateCodeCompletionOptions(true)
+}
+
+// currentWordPrefix returns the text of the word currently being typed at the cursor.
+func (s *SQLPanel) currentWordPrefix() string {
+	te := s.editor.AsTextEdit()
+	line := te.GetLine(te.GetCaretLine())
+	col := te.GetCaretColumn()
+	return completion.WordPrefixAt(line, int(col))
 }
 
 // ── Data grid ──────────────────────────────────────────────────────────────

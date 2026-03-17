@@ -644,6 +644,7 @@ func (w *AppWindow) onFileSelected(path string) {
 	}
 	ts.State.Schema = cols
 	ts.schema.SetSchema(cols)
+	ts.sqlPanel.SetCompletionSchema(cols)
 
 	meta, _ := w.duck.Metadata(path)
 	ts.State.Metadata = meta
@@ -727,6 +728,7 @@ func (w *AppWindow) onDatabaseOpened(path string) {
 		ts.State.IsDatabase = true
 		ts.connIdx = idx
 		ts.schema.SetTables(conn.Tables)
+		ts.sqlPanel.SetCompletionTables(conn.Tables)
 		ts.schema.OnTableClicked = func(tableName string) {
 			ts.State.ActiveTable = tableName
 			ts.State.UserSQL = fmt.Sprintf("SELECT * FROM \"%s\"", tableName)
