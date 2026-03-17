@@ -3,9 +3,20 @@
 # Usage: ./test/integration_test.sh
 set -e
 
-GODOT="/Users/openclaw/gd/bin/Godot.app/Contents/MacOS/Godot"
-PROJECT_DIR="$(cd "$(dirname "$0")/../graphics" && pwd)"
 PORT=9900
+
+# Locate Godot: respect $GODOT, then check $GDPATH/~/gd, then $PATH.
+if [ -z "$GODOT" ]; then
+    GDPATH="${GDPATH:-$HOME/gd}"
+    if [ -x "$GDPATH/bin/godot.app/Contents/MacOS/godot" ]; then
+        GODOT="$GDPATH/bin/godot.app/Contents/MacOS/godot"
+    elif command -v godot >/dev/null 2>&1; then
+        GODOT="$(command -v godot)"
+    else
+        echo "Error: Godot not found. Set GODOT or install via 'gd run'." >&2
+        exit 1
+    fi
+fi
 
 # Kill any stale Godot processes holding port 9900
 pkill -9 -if godot 2>/dev/null || true
@@ -17,14 +28,14 @@ done
 # Build the dylib
 cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
-PATH="$PATH:/Users/openclaw/go/bin"
+PATH="$PATH:$(go env GOPATH)/bin"
 echo "Building dylib..."
 go build -buildmode=c-shared -o "$ROOT/graphics/darwin_amd64.dylib" ./cmd/viewer
 cp "$ROOT/graphics/darwin_amd64.dylib" "$ROOT/graphics/darwin_universal.dylib"
 echo "Build OK"
 
 # Start headless
-cd "$PROJECT_DIR"
+cd "$ROOT/graphics"
 $GODOT --headless &
 PID=$!
 sleep 3

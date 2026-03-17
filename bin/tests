@@ -1,0 +1,13 @@
+#!/bin/bash
+# Run all tests: unit tests + integration tests.
+# Usage: ./bin/tests
+set -e
+
+cd "$(dirname "$0")/.."
+
+echo "=== Unit tests ==="
+go test ./...
+
+echo ""
+echo "=== Integration tests ==="
+./test/integration_test.sh "$@"
