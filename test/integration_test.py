@@ -230,6 +230,33 @@ class TestRowDetail:
         result = post("search-detail", {"query": "tags"})
         assert result["ok"] is True
 
+    def test_detail_opens_at_25_percent(self):
+        close_all_tabs()
+        open_file(SAMPLE)
+        s = state()
+        assert s["detailVisible"] is False
+        assert s["detailToggleActive"] is False
+
+        post("select-row", {"row": 0})
+        time.sleep(0.3)
+        s = state()
+        assert s["detailVisible"] is True
+        assert s["detailToggleActive"] is True
+        assert 0.20 <= s["detailWidthRatio"] <= 0.30, (
+            f"detail panel should open at ~25%, got {s['detailWidthRatio']:.0%}"
+        )
+
+    def test_detail_keeps_size_when_already_open(self):
+        """Selecting another row should not resize the detail panel."""
+        s = state()
+        ratio_before = s["detailWidthRatio"]
+
+        post("select-row", {"row": 1})
+        time.sleep(0.3)
+        s = state()
+        assert s["detailVisible"] is True
+        assert s["detailWidthRatio"] == ratio_before
+
 
 class TestFileFormats:
     def test_csv(self):

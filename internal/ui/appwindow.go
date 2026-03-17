@@ -437,7 +437,13 @@ func (w *AppWindow) addNewTab() {
 	ts.dataGrid.OnRowSelected = func(rowIndex int) {
 		if rowIndex < len(ts.dataGrid.rows) {
 			ts.detailPanel.SetRow(ts.dataGrid.columns, ts.dataGrid.rows[rowIndex])
-			ts.detailWrap.AsCanvasItem().SetVisible(true)
+			if !ts.detailWrap.AsCanvasItem().Visible() {
+				// Open at 25% width
+				totalWidth := ts.outerWrap.AsControl().Size().X
+				ts.outerWrap.AsSplitContainer().SetSplitOffset(int(totalWidth * 0.75))
+				ts.detailWrap.AsCanvasItem().SetVisible(true)
+				w.statusBar.SetRightPaneActive(true)
+			}
 		}
 	}
 

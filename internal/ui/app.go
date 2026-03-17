@@ -35,6 +35,7 @@ import (
 	"graphics.gd/classdb/PanelContainer"
 	"graphics.gd/classdb/SceneTree"
 	"graphics.gd/classdb/ScrollContainer"
+	"graphics.gd/classdb/SplitContainer"
 	"graphics.gd/classdb/Tree"
 	"graphics.gd/classdb/TreeItem"
 	"graphics.gd/classdb/VBoxContainer"
@@ -1235,6 +1236,11 @@ func (s *StatusBar) Ready() {
 	s.AsNode().AddChild(s.rowCount.AsNode())
 }
 
+func (s *StatusBar) SetRightPaneActive(active bool) {
+	s.rightPaneVisible = active
+	applyToggleButtonTheme(s.rightBtn.AsControl(), active)
+}
+
 func (s *StatusBar) SetStatus(msg string) {
 	s.rowCount.SetText(msg)
 }
@@ -1368,6 +1374,15 @@ func (a *App) initMainWindow() {
 			if a.mainWin != nil {
 				state["windowCount"] = 1 + len(a.secondWins)
 			}
+			if ts := w.currentTab(); ts != nil {
+				state["detailVisible"] = ts.detailWrap.AsCanvasItem().Visible()
+				totalWidth := ts.outerWrap.AsControl().Size().X
+				if totalWidth > 0 {
+					offset := float64(ts.outerWrap.AsSplitContainer().SplitOffset())
+					state["detailWidthRatio"] = 1.0 - offset/float64(totalWidth)
+				}
+			}
+			state["detailToggleActive"] = w.statusBar.rightPaneVisible
 			if s := w.currentState(); s != nil {
 				state["filePath"] = s.FilePath
 				state["userSQL"] = s.UserSQL
@@ -1749,6 +1764,9 @@ func walkNode(buf *bytes.Buffer, node Node.Instance, parentPath string) {
 	if sc, ok := Object.As[ScrollContainer.Instance](node); ok {
 		fmt.Fprintf(buf, "horizontal_scroll_mode = %d\n", int(sc.HorizontalScrollMode()))
 		fmt.Fprintf(buf, "vertical_scroll_mode = %d\n", int(sc.VerticalScrollMode()))
+	}
+	if sc, ok := Object.As[SplitContainer.Instance](node); ok {
+		fmt.Fprintf(buf, "split_offset = %d\n", sc.SplitOffset())
 	}
 
 	// Recurse children with correct parent path
