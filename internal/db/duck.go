@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 
 	_ "github.com/marcboeker/go-duckdb"
@@ -167,11 +168,24 @@ func (d *DB) Query(virtualSQL string, offset, limit int) (*QueryResult, error) {
 		}
 		row := make([]string, len(colNames))
 		for i, v := range vals {
-			row[i] = fmt.Sprintf("%v", v)
+			row[i] = formatValue(v)
 		}
 		result.Rows = append(result.Rows, row)
 	}
 	return result, rows.Err()
+}
+
+// formatValue converts a scanned database value to its display string.
+func formatValue(v any) string {
+	if b, ok := v.([]byte); ok {
+		if len(b) == 16 {
+			// Format as UUID: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+			h := hex.EncodeToString(b)
+			return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:32]
+		}
+		return string(b)
+	}
+	return fmt.Sprintf("%v", v)
 }
 
 // Metadata returns parquet file-level metadata.

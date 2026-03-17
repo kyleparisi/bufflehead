@@ -185,6 +185,48 @@ func TestDefaultQuery(t *testing.T) {
 	}
 }
 
+func TestFormatValue(t *testing.T) {
+	tests := []struct {
+		name string
+		in   any
+		want string
+	}{
+		{"uuid bytes", []byte{0x69, 0xb8, 0x4c, 0xa5, 0x93, 0x2b, 0x48, 0xa5, 0x85, 0xa2, 0xf5, 0x62, 0xad, 0xbf, 0xe3, 0x73}, "69b84ca5-932b-48a5-85a2-f562adbfe373"},
+		{"zero uuid", make([]byte, 16), "00000000-0000-0000-0000-000000000000"},
+		{"text bytes", []byte("hello"), "hello"},
+		{"empty bytes", []byte{}, ""},
+		{"int", 42, "42"},
+		{"string", "foo", "foo"},
+		{"nil", nil, "<nil>"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := formatValue(tt.in)
+			if got != tt.want {
+				t.Errorf("formatValue(%v) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestQueryUUID(t *testing.T) {
+	db := setupTestDB(t)
+
+	result, err := db.Query("SELECT uuid() AS id", 0, 1)
+	if err != nil {
+		t.Fatalf("Query() error: %v", err)
+	}
+	if len(result.Rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(result.Rows))
+	}
+
+	id := result.Rows[0][0]
+	// UUID format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx (36 chars)
+	if len(id) != 36 || id[8] != '-' || id[13] != '-' || id[18] != '-' || id[23] != '-' {
+		t.Errorf("expected UUID format, got %q", id)
+	}
+}
+
 func TestSchemaNotParquet(t *testing.T) {
 	db := setupTestDB(t)
 
