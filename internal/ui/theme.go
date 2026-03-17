@@ -2,6 +2,7 @@ package ui
 
 import (
 	"graphics.gd/classdb/Control"
+	"graphics.gd/classdb/DisplayServer"
 	"graphics.gd/classdb/Image"
 	"graphics.gd/classdb/ImageTexture"
 	"graphics.gd/classdb/StyleBoxEmpty"
@@ -10,6 +11,21 @@ import (
 	"graphics.gd/classdb/Texture2D"
 	"graphics.gd/variant/Color"
 )
+
+// UIScale returns a font multiplier derived from the display's DPI scale.
+// On a 1x display it returns 1.0; on a 2x Retina display it returns 2.0.
+func UIScale() float64 {
+	s := float64(DisplayServer.ScreenGetScale())
+	if s < 1 {
+		s = 1
+	}
+	return s
+}
+
+// fontSize scales a base font size by the display's DPI scale factor.
+func fontSize(base int) int {
+	return int(float64(base) * UIScale())
+}
 
 // Dark theme palette (TablePlus-inspired)
 var (
@@ -67,7 +83,7 @@ func applyButtonTheme(c Control.Instance) {
 	c.AddThemeStyleboxOverride("pressed", pressed.AsStyleBox())
 	c.AddThemeColorOverride("font_color", colorTextBright)
 	c.AddThemeColorOverride("font_hover_color", colorTextBright)
-	c.AddThemeFontSizeOverride("font_size", 13)
+	c.AddThemeFontSizeOverride("font_size", fontSize(13))
 }
 
 func applySecondaryButtonTheme(c Control.Instance) {
@@ -78,7 +94,7 @@ func applySecondaryButtonTheme(c Control.Instance) {
 	c.AddThemeStyleboxOverride("pressed", hover.AsStyleBox())
 	c.AddThemeColorOverride("font_color", colorTextMuted)
 	c.AddThemeColorOverride("font_hover_color", colorText)
-	c.AddThemeFontSizeOverride("font_size", 13)
+	c.AddThemeFontSizeOverride("font_size", fontSize(13))
 }
 
 func applySidebarTabTheme(c Control.Instance, active bool) {
@@ -146,7 +162,7 @@ func applyInputTheme(c Control.Instance) {
 	c.AddThemeStyleboxOverride("read_only", normal.AsStyleBox())
 	c.AddThemeColorOverride("font_color", colorText)
 	c.AddThemeColorOverride("font_placeholder_color", colorTextDim)
-	c.AddThemeFontSizeOverride("font_size", 13)
+	c.AddThemeFontSizeOverride("font_size", fontSize(13))
 }
 
 func applyTreeTheme(c Control.Instance) {
@@ -168,7 +184,7 @@ func applyTreeTheme(c Control.Instance) {
 
 	c.AddThemeColorOverride("font_color", colorText)
 	c.AddThemeColorOverride("title_button_color", colorTextMuted)
-	c.AddThemeFontSizeOverride("font_size", 13)
+	c.AddThemeFontSizeOverride("font_size", fontSize(13))
 
 	// Row hover
 	hover := makeStyleBox(Color.RGBA{R: 0.14, G: 0.22, B: 0.32, A: 1}, 0, 0, colorBorder) // subtle blue tint
@@ -191,7 +207,7 @@ func applySidebarTreeTheme(c Control.Instance) {
 	c.AddThemeStyleboxOverride("selected_focus", selected.AsStyleBox())
 
 	c.AddThemeColorOverride("font_color", colorText)
-	c.AddThemeFontSizeOverride("font_size", 13)
+	c.AddThemeFontSizeOverride("font_size", fontSize(13))
 }
 
 func applyTextEditTheme(c Control.Instance) {
@@ -200,7 +216,7 @@ func applyTextEditTheme(c Control.Instance) {
 	c.AddThemeStyleboxOverride("normal", normal.AsStyleBox())
 	c.AddThemeStyleboxOverride("focus", focus.AsStyleBox())
 	c.AddThemeColorOverride("font_color", colorText)
-	c.AddThemeFontSizeOverride("font_size", 13)
+	c.AddThemeFontSizeOverride("font_size", fontSize(13))
 }
 
 func applyLabelTheme(c Control.Instance, dim bool) {
@@ -209,12 +225,12 @@ func applyLabelTheme(c Control.Instance, dim bool) {
 	} else {
 		c.AddThemeColorOverride("font_color", colorText)
 	}
-	c.AddThemeFontSizeOverride("font_size", 13)
+	c.AddThemeFontSizeOverride("font_size", fontSize(13))
 }
 
 func applyStatusBarTheme(c Control.Instance) {
 	c.AddThemeColorOverride("font_color", colorTextMuted)
-	c.AddThemeFontSizeOverride("font_size", 13)
+	c.AddThemeFontSizeOverride("font_size", fontSize(13))
 }
 
 // Title bar colors
@@ -238,7 +254,7 @@ func applyPanelBg(c Control.Instance, bg Color.RGBA) {
 }
 
 func applyTabBarTheme(c Control.Instance) {
-	c.AddThemeFontSizeOverride("font_size", 12)
+	c.AddThemeFontSizeOverride("font_size", fontSize(12))
 	c.AddThemeColorOverride("font_selected_color", colorTextBright)
 	c.AddThemeColorOverride("font_unselected_color", colorTextDim)
 	c.AddThemeColorOverride("font_hovered_color", colorText)

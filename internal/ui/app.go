@@ -85,7 +85,7 @@ func (t *TitleBar) Ready() {
 	// Nav buttons
 	t.NavBackBtn = Button.New()
 	t.NavBackBtn.SetText("◀")
-	t.NavBackBtn.AsControl().AddThemeFontSizeOverride("font_size", 11)
+	t.NavBackBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
 	t.NavBackBtn.AsControl().SetCustomMinimumSize(Vector2.New(24, 0))
 	applySecondaryButtonTheme(t.NavBackBtn.AsControl())
 	t.NavBackBtn.AsBaseButton().SetDisabled(true)
@@ -93,7 +93,7 @@ func (t *TitleBar) Ready() {
 
 	t.NavFwdBtn = Button.New()
 	t.NavFwdBtn.SetText("▶")
-	t.NavFwdBtn.AsControl().AddThemeFontSizeOverride("font_size", 11)
+	t.NavFwdBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
 	t.NavFwdBtn.AsControl().SetCustomMinimumSize(Vector2.New(24, 0))
 	applySecondaryButtonTheme(t.NavFwdBtn.AsControl())
 	t.NavFwdBtn.AsBaseButton().SetDisabled(true)
@@ -112,7 +112,7 @@ func (t *TitleBar) Ready() {
 	t.infoLabel = Label.New()
 	t.infoLabel.SetText("DuckDB  ·  In-Memory  ·  No file loaded")
 	t.infoLabel.AsControl().AddThemeColorOverride("font_color", colorText)
-	t.infoLabel.AsControl().AddThemeFontSizeOverride("font_size", 13)
+	t.infoLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(13))
 	t.infoLabel.SetHorizontalAlignment(1) // center
 	pill.AsNode().AddChild(t.infoLabel.AsNode())
 
@@ -248,7 +248,7 @@ func (s *SchemaPanel) Ready() {
 	// Search input
 	s.searchBox = LineEdit.New()
 	s.searchBox.SetPlaceholderText("Search items…")
-	s.searchBox.AsControl().AddThemeFontSizeOverride("font_size", 12)
+	s.searchBox.AsControl().AddThemeFontSizeOverride("font_size", fontSize(12))
 	applyInputTheme(s.searchBox.AsControl())
 	s.searchBox.OnTextChanged(func(text string) {
 		if len(s.allTables) > 0 {
@@ -316,7 +316,7 @@ func (s *SchemaPanel) SetSchema(cols []db.Column) {
 
 	s.selectAllCb = CheckBox.New()
 	s.selectAllCb.AsBaseButton().SetButtonPressed(true)
-	s.selectAllCb.AsControl().AddThemeFontSizeOverride("font_size", 12)
+	s.selectAllCb.AsControl().AddThemeFontSizeOverride("font_size", fontSize(12))
 	s.selectAllCb.AsBaseButton().OnToggled(func(pressed bool) {
 		for _, cb := range s.checkBoxes {
 			cb.AsBaseButton().SetPressedNoSignal(pressed)
@@ -328,7 +328,7 @@ func (s *SchemaPanel) SetSchema(cols []db.Column) {
 
 	allLabel := Label.New()
 	allLabel.SetText("Label")
-	allLabel.AsControl().AddThemeFontSizeOverride("font_size", 12)
+	allLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(12))
 	allLabel.AsControl().AddThemeColorOverride("font_color", colorTextMuted)
 
 	s.selectAllRow.AsNode().AddChild(s.selectAllCb.AsNode())
@@ -409,7 +409,7 @@ func (s *SchemaPanel) filterCols(query string) {
 
 		cb := CheckBox.New()
 		cb.AsBaseButton().SetButtonPressed(true)
-		cb.AsControl().AddThemeFontSizeOverride("font_size", 12)
+		cb.AsControl().AddThemeFontSizeOverride("font_size", fontSize(12))
 		cb.AsControl().SetTooltipText(col.Name)
 		// CheckBox keeps default MouseFilterStop for click handling
 		cb.AsBaseButton().OnToggled(func(pressed bool) {
@@ -420,20 +420,20 @@ func (s *SchemaPanel) filterCols(query string) {
 
 		nameLabel := Label.New()
 		nameLabel.SetText(col.Name)
-		nameLabel.AsControl().AddThemeFontSizeOverride("font_size", 12)
+		nameLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(12))
 		nameLabel.AsControl().AddThemeColorOverride("font_color", colorText)
 		nameLabel.AsControl().SetMouseFilter(Control.MouseFilterPass)
 
 		typeLabel := Label.New()
 		typeLabel.SetText(typeSuffix)
-		typeLabel.AsControl().AddThemeFontSizeOverride("font_size", 10)
+		typeLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(10))
 		typeLabel.AsControl().AddThemeColorOverride("font_color", colorTextDim)
 		typeLabel.AsControl().SetMouseFilter(Control.MouseFilterPass)
 
 		// "only" link — hidden until hover
 		onlyLabel := Label.New()
 		onlyLabel.SetText("only")
-		onlyLabel.AsControl().AddThemeFontSizeOverride("font_size", 10)
+		onlyLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(10))
 		onlyLabel.AsControl().AddThemeColorOverride("font_color", colorTextMuted)
 		onlyLabel.AsControl().SetMouseFilter(Control.MouseFilterIgnore)
 		onlyLabel.AsCanvasItem().SetVisible(false)
@@ -958,7 +958,7 @@ func (p *RowDetailPanel) Ready() {
 	// Search input
 	p.searchBox = LineEdit.New()
 	p.searchBox.SetPlaceholderText("Search fields…")
-	p.searchBox.AsControl().AddThemeFontSizeOverride("font_size", 12)
+	p.searchBox.AsControl().AddThemeFontSizeOverride("font_size", fontSize(12))
 	applyInputTheme(p.searchBox.AsControl())
 	p.searchBox.OnTextChanged(func(text string) {
 		p.filterFields(text)
@@ -979,13 +979,13 @@ func (p *RowDetailPanel) Ready() {
 
 	phIcon := Label.New()
 	phIcon.SetText("☰")
-	phIcon.AsControl().AddThemeFontSizeOverride("font_size", 32)
+	phIcon.AsControl().AddThemeFontSizeOverride("font_size", fontSize(32))
 	phIcon.AsControl().AddThemeColorOverride("font_color", colorTextDim)
 	phIcon.SetHorizontalAlignment(1)
 
 	phText := Label.New()
 	phText.SetText("No row selected")
-	phText.AsControl().AddThemeFontSizeOverride("font_size", 12)
+	phText.AsControl().AddThemeFontSizeOverride("font_size", fontSize(12))
 	phText.AsControl().AddThemeColorOverride("font_color", colorTextDim)
 	phText.SetHorizontalAlignment(1)
 
@@ -1065,14 +1065,14 @@ func (p *RowDetailPanel) filterFields(query string) {
 		// Label (field name + type dim)
 		lbl := Label.New()
 		lbl.SetText(col)
-		lbl.AsControl().AddThemeFontSizeOverride("font_size", 11)
+		lbl.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
 		lbl.AsControl().AddThemeColorOverride("font_color", colorTextDim)
 
 		// Value (read-only input for copyable text)
 		valInput := LineEdit.New()
 		valInput.SetText(val)
 		valInput.SetEditable(false)
-		valInput.AsControl().AddThemeFontSizeOverride("font_size", 13)
+		valInput.AsControl().AddThemeFontSizeOverride("font_size", fontSize(13))
 		valInput.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 		applyInputTheme(valInput.AsControl())
 
@@ -1224,7 +1224,6 @@ type App struct {
 	appMenu     *AppMenu                 `gd:"-"`
 	history     *models.QueryHistory     `gd:"-"`
 	pendingInit   bool                   `gd:"-"`
-	pendingReopen bool                   `gd:"-"`
 	prevKeys      map[Input.Key]bool     `gd:"-"`
 }
 
@@ -1239,62 +1238,21 @@ func (a *App) activeWindow() *AppWindow {
 }
 
 func (a *App) Ready() {
-	// Root viewport is a hidden 1x1 "server" — all UI lives in secondary windows.
-	if tree, ok := Object.As[SceneTree.Instance](Engine.GetMainLoop()); ok {
-		root := tree.Root()
-		win := root.AsWindow()
-		win.SetContentScaleFactor(1.0)
-		win.SetPosition(Vector2i.New(-32000, -32000))
-
-		// Minimize root viewport overhead
-		root.AsViewport().SetDisable3d(true)
-		root.AsViewport().SetPhysicsObjectPicking(false)
-		root.AsViewport().SetGuiDisableInput(true)
-	}
-
 	a.history = models.NewQueryHistory()
 	a.pendingInit = true
 }
 
 func (a *App) initMainWindow() {
-	a.mainWin = createSecondaryWindow(a.Duck, a.history, func() { a.newWindow() })
-	a.mainWin.isMain = true
-
 	if tree, ok := Object.As[SceneTree.Instance](Engine.GetMainLoop()); ok {
-		root := tree.Root()
-		root.AsNode().AddChild(a.mainWin.window.AsNode())
-		a.mainWin.window.Show()
-		a.mainWin.window.MoveToCenter()
-		a.mainWin.titleBar.WindowID = a.mainWin.window.GetWindowId()
+		rootWin := tree.Root().AsWindow()
+		a.mainWin = createMainWindowFromRoot(rootWin, a.Duck, a.history, func() { a.newWindow() })
+		a.mainWin.titleBar.WindowID = rootWin.GetWindowId()
 		a.mainWin.addNewTab()
+		rootWin.MoveToCenter()
 
-		// Handle close — destroy window, app stays alive
-		closingWin := a.mainWin
-		a.mainWin.window.OnCloseRequested(func() {
-			if closingWin == nil || closingWin.window == (Window.Instance{}) {
-				return
-			}
-			closingWin.window.AsNode().QueueFree()
-			if a.mainWin == closingWin {
-				a.mainWin = nil
-			}
-		})
-
-		// File drag & drop
-		a.mainWin.window.OnFilesDropped(func(files []string) {
-			w := a.activeWindow()
-			if w == nil {
-				return
-			}
-			for _, f := range files {
-				if len(f) > 8 && f[len(f)-8:] == ".parquet" {
-					w.onFileSelected(f)
-					return
-				}
-			}
-			if len(files) > 0 {
-				w.onFileSelected(files[0])
-			}
+		// Handle close — quit the app when main window is closed
+		rootWin.OnCloseRequested(func() {
+			tree.Quit()
 		})
 	}
 
@@ -1432,8 +1390,9 @@ func (a *App) handleShortcut(key Input.Key, w *AppWindow) {
 			if len(w.tabs) <= 1 {
 				// Close the window
 				if w == a.mainWin {
-					w.window.AsNode().QueueFree()
-					a.mainWin = nil
+					if tree, ok := Object.As[SceneTree.Instance](Engine.GetMainLoop()); ok {
+						tree.Quit()
+					}
 				} else {
 					for i, sw := range a.secondWins {
 						if sw == w {
@@ -1475,7 +1434,7 @@ func (a *App) Notification(what Object.Notification) {
 		fmt.Println("[bufflehead] notification:", what, "mainWin:", a.mainWin != nil, "secondWins:", len(a.secondWins))
 	}
 
-	// macOS dock click: focus existing window or create a new one
+	// macOS dock click: focus existing window
 	const notificationApplicationFocusIn Object.Notification = 2016
 	if what == notificationApplicationFocusIn {
 		if w := a.activeWindow(); w != nil {
@@ -1486,9 +1445,6 @@ func (a *App) Notification(what Object.Notification) {
 			}
 			w.window.Show()
 			w.window.GrabFocus()
-		} else {
-			// Can't add children during notification — defer to next frame
-			a.pendingReopen = true
 		}
 	}
 }
@@ -1498,12 +1454,6 @@ func (a *App) Process(delta Float.X) {
 	if a.pendingInit {
 		a.pendingInit = false
 		a.prevKeys = make(map[Input.Key]bool)
-		a.initMainWindow()
-	}
-
-	// Deferred reopen — dock icon clicked with no windows open
-	if a.pendingReopen {
-		a.pendingReopen = false
 		a.initMainWindow()
 	}
 

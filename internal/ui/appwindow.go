@@ -191,19 +191,19 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 
 	emptyIcon := Label.New()
 	emptyIcon.SetText("⬡")
-	emptyIcon.AsControl().AddThemeFontSizeOverride("font_size", 48)
+	emptyIcon.AsControl().AddThemeFontSizeOverride("font_size", fontSize(48))
 	emptyIcon.AsControl().AddThemeColorOverride("font_color", colorTextDim)
 	emptyIcon.SetHorizontalAlignment(1)
 
 	emptyTitle := Label.New()
 	emptyTitle.SetText("Bufflehead")
-	emptyTitle.AsControl().AddThemeFontSizeOverride("font_size", 18)
+	emptyTitle.AsControl().AddThemeFontSizeOverride("font_size", fontSize(18))
 	emptyTitle.AsControl().AddThemeColorOverride("font_color", colorText)
 	emptyTitle.SetHorizontalAlignment(1)
 
 	emptyHint := Label.New()
 	emptyHint.SetText("⌘T  New Tab   ·   ⌘O  Open File   ·   Drop .parquet here")
-	emptyHint.AsControl().AddThemeFontSizeOverride("font_size", 12)
+	emptyHint.AsControl().AddThemeFontSizeOverride("font_size", fontSize(12))
 	emptyHint.AsControl().AddThemeColorOverride("font_color", colorTextDim)
 	emptyHint.SetHorizontalAlignment(1)
 
@@ -237,7 +237,7 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 	// Memory connection is always index 0
 	memBtn := Button.New()
 	memBtn.SetText("mem")
-	memBtn.AsControl().AddThemeFontSizeOverride("font_size", 10)
+	memBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(10))
 	memBtn.AsControl().SetCustomMinimumSize(Vector2.New(36, 36))
 	memBtn.SetClipText(true)
 	applyActiveButtonTheme(memBtn.AsControl()) // active by default
@@ -331,13 +331,13 @@ func (w *AppWindow) addNewTab() {
 
 	schemaBtn := Button.New()
 	schemaBtn.SetText("Items")
-	schemaBtn.AsControl().AddThemeFontSizeOverride("font_size", 11)
+	schemaBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
 	schemaBtn.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	applySidebarTabTheme(schemaBtn.AsControl(), true)
 
 	historyBtn := Button.New()
 	historyBtn.SetText("History")
-	historyBtn.AsControl().AddThemeFontSizeOverride("font_size", 11)
+	historyBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
 	historyBtn.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	applySidebarTabTheme(historyBtn.AsControl(), false)
 
@@ -704,7 +704,7 @@ func (w *AppWindow) onDatabaseOpened(path string) {
 	// Add button to rail
 	btn := Button.New()
 	btn.SetText(name)
-	btn.AsControl().AddThemeFontSizeOverride("font_size", 10)
+	btn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(10))
 	btn.AsControl().SetCustomMinimumSize(Vector2.New(36, 36))
 	btn.SetClipText(true)
 	applySecondaryButtonTheme(btn.AsControl())
@@ -911,6 +911,45 @@ func schemaColTypes(schema []db.Column, resultCols []string) []string {
 		types[i] = typeMap[col]
 	}
 	return types
+}
+
+// createMainWindowFromRoot builds the main AppWindow using the root viewport
+// window, avoiding the creation of a secondary window that causes a visible
+// flash on macOS.
+func createMainWindowFromRoot(rootWin Window.Instance, duck *db.DB, history *models.QueryHistory, onNewWindow func()) *AppWindow {
+	rootWin.SetTitle("Bufflehead")
+	rootWin.SetSize(Vector2i.New(1440, 900))
+	rootWin.SetMinSize(Vector2i.New(1100, 720))
+	rootWin.SetContentScaleFactor(Float.X(1.0))
+
+	aw := &AppWindow{
+		window:      rootWin,
+		isMain:      true,
+		duck:        duck,
+		history:     history,
+		onNewWindow: onNewWindow,
+	}
+
+	ui := aw.buildUI()
+	root := Control.New()
+	root.SetAnchorsAndOffsetsPreset(Control.PresetFullRect)
+	ui.AsControl().SetAnchorsAndOffsetsPreset(Control.PresetFullRect)
+	root.AsNode().AddChild(ui.AsNode())
+	rootWin.AsNode().AddChild(root.AsNode())
+
+	rootWin.OnFilesDropped(func(files []string) {
+		for _, f := range files {
+			if len(f) > 8 && f[len(f)-8:] == ".parquet" {
+				aw.onFileSelected(f)
+				return
+			}
+		}
+		if len(files) > 0 {
+			aw.onFileSelected(files[0])
+		}
+	})
+
+	return aw
 }
 
 // createSecondaryWindow creates a new OS-level window with full UI.
