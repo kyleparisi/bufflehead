@@ -36,6 +36,7 @@ import (
 	"graphics.gd/classdb/SceneTree"
 	"graphics.gd/classdb/StyleBoxEmpty"
 	"graphics.gd/classdb/ScrollContainer"
+	"graphics.gd/classdb/TextServer"
 	"graphics.gd/classdb/SplitContainer"
 	"graphics.gd/classdb/Tree"
 	"graphics.gd/classdb/TreeItem"
@@ -742,6 +743,7 @@ type DataGrid struct {
 	dragCol         int
 	dragStartX      float32
 	dragStartWidth  int
+	skipSort        bool              // set during resize to suppress column sort
 	selectedItem    TreeItem.Instance  // previously selected item (for clearing cell border)
 	selectedCol     int               // previously selected column
 }
@@ -755,6 +757,10 @@ func (d *DataGrid) Ready() {
 	applyTreeTheme(d.AsControl())
 
 	d.Super().OnColumnTitleClicked(func(column int, mouseButton int) {
+		if d.skipSort {
+			d.skipSort = false
+			return
+		}
 		if d.OnColumnClicked != nil {
 			d.OnColumnClicked(column)
 		}
@@ -828,6 +834,7 @@ func (d *DataGrid) SetResult(r *db.QueryResult) {
 	t.SetColumns(len(r.Columns))
 	for i, col := range r.Columns {
 		t.SetColumnTitle(i, col)
+		t.SetColumnClipContent(i, true)
 	}
 	// Set column title alignment for numeric types
 	for i := range r.Columns {
@@ -841,6 +848,7 @@ func (d *DataGrid) SetResult(r *db.QueryResult) {
 		item := t.MoreArgs().CreateItem(root, -1)
 		for i, cell := range row {
 			item.SetText(i, cell)
+			item.SetTextOverrunBehavior(i, TextServer.OverrunTrimEllipsis)
 			if d.isNumericCol(i) {
 				item.SetTextAlignment(i, GUI.HorizontalAlignmentRight) // right align
 			}
@@ -888,26 +896,37 @@ func (d *DataGrid) autoSizeColumns(r *db.QueryResult) {
 		}
 	}
 
-	// Estimate widths from content (header + first 50 rows)
-	widths := make([]int, numCols)
+	// Compute minimum header widths from the actual displayed title (includes sort indicator).
+	// Reserve extra space so a sort indicator (" ▲") can be appended without wrapping.
+	// 8px per char at 13px font + 8+8 padding + 1 border + margin = 25px overhead.
+	headerWidths := make([]int, numCols)
 	for i, col := range r.Columns {
-		widths[i] = len(col)
+		// Use raw column name + 2 extra chars for potential sort indicator
+		headerWidths[i] = (len(col)+2)*8 + 25
 	}
+
+	// Estimate widths from data content (first 50 rows)
+	contentWidths := make([]int, numCols)
 	sampleRows := len(r.Rows)
 	if sampleRows > 50 {
 		sampleRows = 50
 	}
 	for _, row := range r.Rows[:sampleRows] {
 		for i, cell := range row {
-			if len(cell) > widths[i] {
-				widths[i] = len(cell)
+			if len(cell) > contentWidths[i] {
+				contentWidths[i] = len(cell)
 			}
 		}
 	}
 
-	// Convert char widths to pixels (~7px per char at 13px font + padding)
+	// Use the larger of header or content width for each column
+	widths := make([]int, numCols)
 	for i := range widths {
-		w := widths[i]*7 + 24 // padding
+		cw := contentWidths[i]*8 + 24
+		w := headerWidths[i]
+		if cw > w {
+			w = cw
+		}
 		if w < 60 {
 			w = 60
 		}
@@ -928,17 +947,64 @@ func (d *DataGrid) autoSizeColumns(r *db.QueryResult) {
 	d.colWidthCache[key] = widths
 }
 
-func (d *DataGrid) colBorderHit(x float32) int {
-	// Check if x is near a column border (within 4px)
+// headerHeight returns the height of the column title row in pixels.
+func (d *DataGrid) headerHeight() float32 {
+	// font size + stylebox padding (3 top + 3 bottom) + border (1) + internal margin
+	return float32(fontSize(13) + 12)
+}
+
+func (d *DataGrid) colBorderHit(pos Vector2.XY) int {
+	// Only activate in the header area
+	if float32(pos.Y) > d.headerHeight() {
+		return -1
+	}
+	// Check if x is near a column border (within 8px for easier targeting)
 	t := d.Super()
+	x := float32(pos.X)
 	offset := 0
 	for i := 0; i < len(d.columns)-1; i++ {
 		offset += t.GetColumnWidth(i)
-		if x >= float32(offset-4) && x <= float32(offset+4) {
+		if x >= float32(offset-8) && x <= float32(offset+8) {
 			return i
 		}
 	}
 	return -1
+}
+
+// autoFitColumn resizes a column to fit its content (header + all visible rows).
+func (d *DataGrid) autoFitColumn(col int) {
+	if col < 0 || col >= len(d.columns) {
+		return
+	}
+	// Header needs room for column name + sort indicator
+	headerChars := len(d.columns[col]) + 2
+	maxChars := headerChars
+	for _, row := range d.rows {
+		if col < len(row) && len(row[col]) > maxChars {
+			maxChars = len(row[col])
+		}
+	}
+	w := maxChars*8 + 25
+	if w < 60 {
+		w = 60
+	}
+	if w > 600 {
+		w = 600
+	}
+	d.Super().SetColumnCustomMinimumWidth(col, w)
+}
+
+// saveWidthsToCache stores the current column widths into the cache.
+func (d *DataGrid) saveWidthsToCache() {
+	key := d.queryKey()
+	if d.colWidthCache == nil {
+		d.colWidthCache = make(map[string][]int)
+	}
+	widths := make([]int, len(d.columns))
+	for i := range d.columns {
+		widths[i] = d.Super().GetColumnWidth(i)
+	}
+	d.colWidthCache[key] = widths
 }
 
 func (d *DataGrid) GuiInput(event InputEvent.Instance) {
@@ -946,12 +1012,20 @@ func (d *DataGrid) GuiInput(event InputEvent.Instance) {
 	if isMouse {
 		if mb.ButtonIndex() == Input.MouseButtonLeft {
 			if mb.AsInputEvent().IsPressed() {
-				col := d.colBorderHit(mb.AsInputEventMouse().Position().X)
+				col := d.colBorderHit(mb.AsInputEventMouse().Position())
 				if col >= 0 {
-					d.dragging = true
-					d.dragCol = col
-					d.dragStartX = mb.AsInputEventMouse().Position().X
-					d.dragStartWidth = d.Super().GetColumnWidth(col)
+					if mb.DoubleClick() {
+						// Double-click on column border: auto-fit column width to content
+						d.autoFitColumn(col)
+						d.saveWidthsToCache()
+					} else {
+						d.dragging = true
+						d.dragCol = col
+						d.dragStartX = mb.AsInputEventMouse().Position().X
+						d.dragStartWidth = d.Super().GetColumnWidth(col)
+					}
+					d.skipSort = true           // suppress the column-title-click sort
+					d.AsControl().AcceptEvent()
 				} else {
 					// Highlight clicked cell with a border
 					pos := mb.AsInputEventMouse().Position()
@@ -972,16 +1046,8 @@ func (d *DataGrid) GuiInput(event InputEvent.Instance) {
 			} else {
 				if d.dragging {
 					d.dragging = false
-					// Save to cache
-					key := d.queryKey()
-					if d.colWidthCache == nil {
-						d.colWidthCache = make(map[string][]int)
-					}
-					widths := make([]int, len(d.columns))
-					for i := range d.columns {
-						widths[i] = d.Super().GetColumnWidth(i)
-					}
-					d.colWidthCache[key] = widths
+					d.saveWidthsToCache()
+					d.AsControl().SetMouseDefaultCursorShape(Control.CursorArrow)
 				}
 			}
 		}
@@ -997,8 +1063,8 @@ func (d *DataGrid) GuiInput(event InputEvent.Instance) {
 			}
 			d.Super().SetColumnCustomMinimumWidth(d.dragCol, newWidth)
 		} else {
-			// Change cursor near column borders
-			col := d.colBorderHit(mm.AsInputEventMouse().Position().X)
+			// Show resize cursor when hovering near column borders in the header
+			col := d.colBorderHit(mm.AsInputEventMouse().Position())
 			if col >= 0 {
 				d.AsControl().SetMouseDefaultCursorShape(Control.CursorHsize)
 			} else {

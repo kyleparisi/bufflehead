@@ -173,10 +173,15 @@ func applyTreeTheme(c Control.Instance) {
 	c.AddThemeStyleboxOverride("selected", selected.AsStyleBox())
 	c.AddThemeStyleboxOverride("selected_focus", selected.AsStyleBox())
 
-	// Title button (column headers)
-	titleBtn := makeStyleBoxPadded(colorBgHeader, 0, 0, colorBorder, 3)
+	// Title button (column headers) — right border acts as always-visible resize separator
+	titleBtn := makeStyleBox(colorBgHeader, 0, 0, colorBorder)
 	titleBtn.SetBorderWidthBottom(1)
+	titleBtn.SetBorderWidthRight(1)
 	titleBtn.SetBorderColor(colorBorder)
+	titleBtn.AsStyleBox().SetContentMarginTop(3)
+	titleBtn.AsStyleBox().SetContentMarginBottom(3)
+	titleBtn.AsStyleBox().SetContentMarginLeft(8)
+	titleBtn.AsStyleBox().SetContentMarginRight(8)
 	c.AddThemeStyleboxOverride("title_button_normal", titleBtn.AsStyleBox())
 	c.AddThemeStyleboxOverride("title_button_hover", titleBtn.AsStyleBox())
 	c.AddThemeStyleboxOverride("title_button_pressed", titleBtn.AsStyleBox())
