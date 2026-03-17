@@ -17,6 +17,7 @@ import (
 	"graphics.gd/classdb/PanelContainer"
 	"graphics.gd/classdb/TabBar"
 	"graphics.gd/classdb/VBoxContainer"
+	"graphics.gd/classdb/VSplitContainer"
 	"graphics.gd/classdb/Window"
 	"graphics.gd/variant/Float"
 	"graphics.gd/variant/Vector2"
@@ -203,7 +204,7 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 
 	emptyHint := Label.New()
 	emptyHint.SetText("⌘T  New Tab   ·   ⌘O  Open File   ·   Drop .parquet here")
-	emptyHint.AsControl().AddThemeFontSizeOverride("font_size", fontSize(12))
+	emptyHint.AsControl().AddThemeFontSizeOverride("font_size", fontSize(13))
 	emptyHint.AsControl().AddThemeColorOverride("font_color", colorTextDim)
 	emptyHint.SetHorizontalAlignment(1)
 
@@ -331,13 +332,13 @@ func (w *AppWindow) addNewTab() {
 
 	schemaBtn := Button.New()
 	schemaBtn.SetText("Items")
-	schemaBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
+	schemaBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(13))
 	schemaBtn.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	applySidebarTabTheme(schemaBtn.AsControl(), true)
 
 	historyBtn := Button.New()
 	historyBtn.SetText("History")
-	historyBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
+	historyBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(13))
 	historyBtn.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	applySidebarTabTheme(historyBtn.AsControl(), false)
 
@@ -385,8 +386,8 @@ func (w *AppWindow) addNewTab() {
 	sidebarMargin.AsNode().AddChild(sidebarVBox.AsNode())
 	ts.sidebarWrap.AsNode().AddChild(sidebarMargin.AsNode())
 
-	// Right panel
-	ts.rightPanel = VBoxContainer.New()
+	// Right panel (VSplitContainer so SQL panel and data grid are resizable)
+	ts.rightPanel = VSplitContainer.New()
 	ts.rightPanel.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	ts.rightPanel.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
 	ts.rightPanel.AsControl().AddThemeConstantOverride("separation", 1)

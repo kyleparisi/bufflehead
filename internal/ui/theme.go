@@ -254,7 +254,7 @@ func applyPanelBg(c Control.Instance, bg Color.RGBA) {
 }
 
 func applyTabBarTheme(c Control.Instance) {
-	c.AddThemeFontSizeOverride("font_size", fontSize(12))
+	c.AddThemeFontSizeOverride("font_size", fontSize(13))
 	c.AddThemeColorOverride("font_selected_color", colorTextBright)
 	c.AddThemeColorOverride("font_unselected_color", colorTextDim)
 	c.AddThemeColorOverride("font_hovered_color", colorText)

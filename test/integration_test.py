@@ -330,6 +330,17 @@ class TestUITree:
         assert sc["props"]["horizontal_scroll_mode"] == "1"
         assert sc["props"]["vertical_scroll_mode"] == "1"
 
+    def test_sql_data_split_resizable(self):
+        """SQL panel and data grid are in a VSplitContainer (user-resizable)."""
+        tree = ui_tree()
+        vsplit = find_node(tree, "VSplitContainer")
+        assert vsplit is not None, "VSplitContainer should exist for SQL/data split"
+        # Both SQLPanel and DataGrid should be descendants of the VSplitContainer
+        sql = find_node(tree, "SQLPanel", ancestor="VSplitContainer")
+        assert sql is not None, "SQLPanel should be inside VSplitContainer"
+        grid = find_node(tree, "DataGrid", ancestor="VSplitContainer")
+        assert grid is not None, "DataGrid should be inside VSplitContainer"
+
     def test_tree_at_custom_size(self):
         tree = ui_tree(width=800, height=600)
         assert find_node(tree, "Window") is not None

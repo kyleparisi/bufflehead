@@ -37,6 +37,7 @@ import (
 	"graphics.gd/classdb/Tree"
 	"graphics.gd/classdb/TreeItem"
 	"graphics.gd/classdb/VBoxContainer"
+	"graphics.gd/classdb/VSplitContainer"
 	"graphics.gd/classdb/Window"
 
 	"graphics.gd/variant/Float"
@@ -248,7 +249,7 @@ func (s *SchemaPanel) Ready() {
 	// Search input
 	s.searchBox = LineEdit.New()
 	s.searchBox.SetPlaceholderText("Search items…")
-	s.searchBox.AsControl().AddThemeFontSizeOverride("font_size", fontSize(12))
+	s.searchBox.AsControl().AddThemeFontSizeOverride("font_size", fontSize(13))
 	applyInputTheme(s.searchBox.AsControl())
 	s.searchBox.OnTextChanged(func(text string) {
 		if len(s.allTables) > 0 {
@@ -316,7 +317,7 @@ func (s *SchemaPanel) SetSchema(cols []db.Column) {
 
 	s.selectAllCb = CheckBox.New()
 	s.selectAllCb.AsBaseButton().SetButtonPressed(true)
-	s.selectAllCb.AsControl().AddThemeFontSizeOverride("font_size", fontSize(12))
+	s.selectAllCb.AsControl().AddThemeFontSizeOverride("font_size", fontSize(13))
 	s.selectAllCb.AsBaseButton().OnToggled(func(pressed bool) {
 		for _, cb := range s.checkBoxes {
 			cb.AsBaseButton().SetPressedNoSignal(pressed)
@@ -328,7 +329,7 @@ func (s *SchemaPanel) SetSchema(cols []db.Column) {
 
 	allLabel := Label.New()
 	allLabel.SetText("Label")
-	allLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(12))
+	allLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(13))
 	allLabel.AsControl().AddThemeColorOverride("font_color", colorTextMuted)
 
 	s.selectAllRow.AsNode().AddChild(s.selectAllCb.AsNode())
@@ -409,7 +410,7 @@ func (s *SchemaPanel) filterCols(query string) {
 
 		cb := CheckBox.New()
 		cb.AsBaseButton().SetButtonPressed(true)
-		cb.AsControl().AddThemeFontSizeOverride("font_size", fontSize(12))
+		cb.AsControl().AddThemeFontSizeOverride("font_size", fontSize(13))
 		cb.AsControl().SetTooltipText(col.Name)
 		// CheckBox keeps default MouseFilterStop for click handling
 		cb.AsBaseButton().OnToggled(func(pressed bool) {
@@ -420,20 +421,20 @@ func (s *SchemaPanel) filterCols(query string) {
 
 		nameLabel := Label.New()
 		nameLabel.SetText(col.Name)
-		nameLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(12))
+		nameLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(13))
 		nameLabel.AsControl().AddThemeColorOverride("font_color", colorText)
 		nameLabel.AsControl().SetMouseFilter(Control.MouseFilterPass)
 
 		typeLabel := Label.New()
 		typeLabel.SetText(typeSuffix)
-		typeLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(10))
+		typeLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
 		typeLabel.AsControl().AddThemeColorOverride("font_color", colorTextDim)
 		typeLabel.AsControl().SetMouseFilter(Control.MouseFilterPass)
 
 		// "only" link — hidden until hover
 		onlyLabel := Label.New()
 		onlyLabel.SetText("only")
-		onlyLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(10))
+		onlyLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
 		onlyLabel.AsControl().AddThemeColorOverride("font_color", colorTextMuted)
 		onlyLabel.AsControl().SetMouseFilter(Control.MouseFilterIgnore)
 		onlyLabel.AsCanvasItem().SetVisible(false)
@@ -627,6 +628,7 @@ type SQLPanel struct {
 
 func (s *SQLPanel) Ready() {
 	s.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	s.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
 	s.AsControl().AddThemeConstantOverride("separation", 4)
 
 	// Top row: label + run button
@@ -653,9 +655,10 @@ func (s *SQLPanel) Ready() {
 
 	s.editor = CodeEdit.New()
 	s.editor.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	s.editor.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
 	s.editor.AsControl().SetCustomMinimumSize(Vector2.New(0, 80))
 	s.editor.SetGuttersDrawExecutingLines(false)
-	s.editor.SetGuttersDrawLineNumbers(false)
+	s.editor.SetGuttersDrawLineNumbers(true)
 	s.editor.SetGuttersDrawBreakpointsGutter(false)
 	s.editor.SetGuttersDrawBookmarks(false)
 	applyTextEditTheme(s.editor.AsControl())
@@ -958,7 +961,7 @@ func (p *RowDetailPanel) Ready() {
 	// Search input
 	p.searchBox = LineEdit.New()
 	p.searchBox.SetPlaceholderText("Search fields…")
-	p.searchBox.AsControl().AddThemeFontSizeOverride("font_size", fontSize(12))
+	p.searchBox.AsControl().AddThemeFontSizeOverride("font_size", fontSize(13))
 	applyInputTheme(p.searchBox.AsControl())
 	p.searchBox.OnTextChanged(func(text string) {
 		p.filterFields(text)
@@ -985,7 +988,7 @@ func (p *RowDetailPanel) Ready() {
 
 	phText := Label.New()
 	phText.SetText("No row selected")
-	phText.AsControl().AddThemeFontSizeOverride("font_size", fontSize(12))
+	phText.AsControl().AddThemeFontSizeOverride("font_size", fontSize(13))
 	phText.AsControl().AddThemeColorOverride("font_color", colorTextDim)
 	phText.SetHorizontalAlignment(1)
 
@@ -1065,7 +1068,7 @@ func (p *RowDetailPanel) filterFields(query string) {
 		// Label (field name + type dim)
 		lbl := Label.New()
 		lbl.SetText(col)
-		lbl.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
+		lbl.AsControl().AddThemeFontSizeOverride("font_size", fontSize(13))
 		lbl.AsControl().AddThemeColorOverride("font_color", colorTextDim)
 
 		// Value (read-only input for copyable text)
@@ -1204,7 +1207,7 @@ type tabState struct {
 	// Container nodes for show/hide on tab switch
 	sidebarWrap PanelContainer.Instance
 	outerWrap   HSplitContainer.Instance // content | detail
-	rightPanel  VBoxContainer.Instance   // SQL + data grid
+	rightPanel  VSplitContainer.Instance  // SQL + data grid (resizable)
 	detailWrap  PanelContainer.Instance
 }
 
