@@ -34,6 +34,7 @@ import (
 	"graphics.gd/classdb/Node"
 	"graphics.gd/classdb/PanelContainer"
 	"graphics.gd/classdb/SceneTree"
+	"graphics.gd/classdb/StyleBoxEmpty"
 	"graphics.gd/classdb/ScrollContainer"
 	"graphics.gd/classdb/SplitContainer"
 	"graphics.gd/classdb/Tree"
@@ -741,6 +742,8 @@ type DataGrid struct {
 	dragCol         int
 	dragStartX      float32
 	dragStartWidth  int
+	selectedItem    TreeItem.Instance  // previously selected item (for clearing cell border)
+	selectedCol     int               // previously selected column
 }
 
 func (d *DataGrid) Ready() {
@@ -756,6 +759,8 @@ func (d *DataGrid) Ready() {
 			d.OnColumnClicked(column)
 		}
 	})
+
+	d.selectedCol = -1
 
 	d.Super().OnItemSelected(func() {
 		if d.OnRowSelected == nil {
@@ -797,6 +802,8 @@ func (d *DataGrid) UpdateColumnTitles(columns []string, sortCol string, sortDir 
 }
 
 func (d *DataGrid) ShowError(msg string) {
+	d.selectedItem = TreeItem.Instance{}
+	d.selectedCol = -1
 	d.columns = nil
 	d.rows = nil
 	t := d.Super()
@@ -812,6 +819,8 @@ func (d *DataGrid) SetResult(r *db.QueryResult) {
 	if r == nil {
 		return
 	}
+	d.selectedItem = TreeItem.Instance{}
+	d.selectedCol = -1
 	d.columns = r.Columns
 	d.rows = r.Rows
 	t := d.Super()
@@ -943,6 +952,22 @@ func (d *DataGrid) GuiInput(event InputEvent.Instance) {
 					d.dragCol = col
 					d.dragStartX = mb.AsInputEventMouse().Position().X
 					d.dragStartWidth = d.Super().GetColumnWidth(col)
+				} else {
+					// Highlight clicked cell with a border
+					pos := mb.AsInputEventMouse().Position()
+					clickCol := d.Super().GetColumnAtPosition(pos)
+					clickItem := d.Super().GetItemAtPosition(pos)
+					if clickItem != (TreeItem.Instance{}) && clickCol >= 0 && clickCol < len(d.columns) {
+						// Clear previous cell border
+						if d.selectedItem != (TreeItem.Instance{}) && d.selectedCol >= 0 {
+							clear := StyleBoxEmpty.New()
+							d.selectedItem.SetCustomStylebox(d.selectedCol, clear.AsStyleBox())
+						}
+						border := makeStyleBox(colorSelected, 0, 2, colorTextMuted)
+						clickItem.SetCustomStylebox(clickCol, border.AsStyleBox())
+						d.selectedItem = clickItem
+						d.selectedCol = clickCol
+					}
 				}
 			} else {
 				if d.dragging {
