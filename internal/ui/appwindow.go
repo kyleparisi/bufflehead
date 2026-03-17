@@ -124,7 +124,7 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 	// Sidebar column: holds per-tab sidebars (show/hide)
 	w.sidebarCol = VBoxContainer.New()
 	w.sidebarCol.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
-	w.sidebarCol.AsControl().SetCustomMinimumSize(Vector2.New(100, 0))
+	w.sidebarCol.AsControl().SetCustomMinimumSize(Vector2.New(scaled(100), 0))
 	w.sidebarCol.AsControl().SetClipContents(true)
 
 	// Split: sidebar (left) | content column (right)
@@ -216,7 +216,7 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 	// Connection rail (far-left column)
 	w.connRailWrap = PanelContainer.New()
 	w.connRailWrap.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
-	w.connRailWrap.AsControl().SetCustomMinimumSize(Vector2.New(36, 0))
+	w.connRailWrap.AsControl().SetCustomMinimumSize(Vector2.New(scaled(36), 0))
 	applyPanelBg(w.connRailWrap.AsControl(), colorBgDarker)
 
 	railMargin := MarginContainer.New()
@@ -239,7 +239,7 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 	memBtn := Button.New()
 	memBtn.SetText("mem")
 	memBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(10))
-	memBtn.AsControl().SetCustomMinimumSize(Vector2.New(36, 36))
+	memBtn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(36), scaled(36)))
 	memBtn.SetClipText(true)
 	applyActiveButtonTheme(memBtn.AsControl()) // active by default
 	memConn := &Connection{
@@ -310,7 +310,7 @@ func (w *AppWindow) addNewTab() {
 	ts.sidebarWrap = PanelContainer.New()
 	ts.sidebarWrap.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
 	ts.sidebarWrap.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
-	ts.sidebarWrap.AsControl().SetCustomMinimumSize(Vector2.New(100, 0))
+	ts.sidebarWrap.AsControl().SetCustomMinimumSize(Vector2.New(scaled(100), 0))
 	ts.sidebarWrap.AsControl().SetClipContents(true)
 	applyPanelBg(ts.sidebarWrap.AsControl(), colorBgSidebar)
 	sidebarMargin := MarginContainer.New()
@@ -391,7 +391,7 @@ func (w *AppWindow) addNewTab() {
 	ts.rightPanel.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	ts.rightPanel.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
 	ts.rightPanel.AsControl().AddThemeConstantOverride("separation", 1)
-	ts.rightPanel.AsControl().SetCustomMinimumSize(Vector2.New(200, 0)) // min width for data grid
+	ts.rightPanel.AsControl().SetCustomMinimumSize(Vector2.New(scaled(200), 0)) // min width for data grid
 	ts.rightPanel.AsControl().SetClipContents(true)
 
 	ts.sqlPanel = new(SQLPanel)
@@ -447,7 +447,7 @@ func (w *AppWindow) addNewTab() {
 	applyPanelBg(ts.detailWrap.AsControl(), colorBgSidebar)
 	ts.detailWrap.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
 	ts.detailWrap.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
-	ts.detailWrap.AsControl().SetCustomMinimumSize(Vector2.New(150, 0)) // min width for detail
+	ts.detailWrap.AsControl().SetCustomMinimumSize(Vector2.New(scaled(150), 0)) // min width for detail
 	detailMargin := MarginContainer.New()
 	detailMargin.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	detailMargin.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
@@ -707,7 +707,7 @@ func (w *AppWindow) onDatabaseOpened(path string) {
 	btn := Button.New()
 	btn.SetText(name)
 	btn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(10))
-	btn.AsControl().SetCustomMinimumSize(Vector2.New(36, 36))
+	btn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(36), scaled(36)))
 	btn.SetClipText(true)
 	applySecondaryButtonTheme(btn.AsControl())
 	conn.button = btn
@@ -961,10 +961,6 @@ func createSecondaryWindow(duck *db.DB, history *models.QueryHistory, onNewWindo
 	win.SetTitle("Bufflehead")
 	win.SetSize(Vector2i.New(1440, 900))
 	win.SetMinSize(Vector2i.New(1100, 720))
-	// Let Godot/macOS handle per-display DPI. Manually multiplying by
-	// ScreenGetScale() makes the entire UI oversized on some displays
-	// (for example "looks like 1920x1080" setups), which can push the
-	// title pill off-screen and effectively clip the main content.
 	win.SetContentScaleFactor(Float.X(1.0))
 	// Custom title-bar extension behaves inconsistently across Macs.
 	// Keep a normal native title bar for now and render our app chrome below it.

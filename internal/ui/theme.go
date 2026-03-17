@@ -2,7 +2,6 @@ package ui
 
 import (
 	"graphics.gd/classdb/Control"
-	"graphics.gd/classdb/DisplayServer"
 	"graphics.gd/classdb/Image"
 	"graphics.gd/classdb/ImageTexture"
 	"graphics.gd/classdb/StyleBoxEmpty"
@@ -12,19 +11,19 @@ import (
 	"graphics.gd/variant/Color"
 )
 
-// UIScale returns a font multiplier derived from the display's DPI scale.
-// On a 1x display it returns 1.0; on a 2x Retina display it returns 2.0.
-func UIScale() float64 {
-	s := float64(DisplayServer.ScreenGetScale())
-	if s < 1 {
-		s = 1
-	}
-	return s
+// uiScale is the multiplier applied to all font sizes and layout dimensions.
+// Godot on macOS works in logical coordinates but its default sizing is
+// smaller than native macOS UI, so we scale up to match.
+const uiScale = 1.0
+
+// fontSize returns a scaled font size in logical points.
+func fontSize(base int) int {
+	return int(float64(base) * uiScale)
 }
 
-// fontSize scales a base font size by the display's DPI scale factor.
-func fontSize(base int) int {
-	return int(float64(base) * UIScale())
+// scaled returns a scaled layout dimension in logical points.
+func scaled(base float32) float32 {
+	return base * uiScale
 }
 
 // Dark theme palette (TablePlus-inspired)

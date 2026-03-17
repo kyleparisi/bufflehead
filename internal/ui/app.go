@@ -70,7 +70,7 @@ func (t *TitleBar) Ready() {
 	applyTitleBarTheme(t.AsControl())
 	t.AsControl().SetMouseFilter(Control.MouseFilterStop)
 	t.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
-	t.AsControl().SetCustomMinimumSize(Vector2.New(0, 42))
+	t.AsControl().SetCustomMinimumSize(Vector2.New(0, scaled(42)))
 
 	margin := MarginContainer.New()
 	margin.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
@@ -88,7 +88,7 @@ func (t *TitleBar) Ready() {
 	t.NavBackBtn = Button.New()
 	t.NavBackBtn.SetText("◀")
 	t.NavBackBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
-	t.NavBackBtn.AsControl().SetCustomMinimumSize(Vector2.New(24, 0))
+	t.NavBackBtn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(24), 0))
 	applySecondaryButtonTheme(t.NavBackBtn.AsControl())
 	t.NavBackBtn.AsBaseButton().SetDisabled(true)
 	t.NavBackBtn.AsControl().SetMouseFilter(Control.MouseFilterStop)
@@ -96,7 +96,7 @@ func (t *TitleBar) Ready() {
 	t.NavFwdBtn = Button.New()
 	t.NavFwdBtn.SetText("▶")
 	t.NavFwdBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
-	t.NavFwdBtn.AsControl().SetCustomMinimumSize(Vector2.New(24, 0))
+	t.NavFwdBtn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(24), 0))
 	applySecondaryButtonTheme(t.NavFwdBtn.AsControl())
 	t.NavFwdBtn.AsBaseButton().SetDisabled(true)
 	t.NavFwdBtn.AsControl().SetMouseFilter(Control.MouseFilterStop)
@@ -314,7 +314,7 @@ func (s *SchemaPanel) SetSchema(cols []db.Column) {
 	s.selectAllRow = HBoxContainer.New()
 	s.selectAllRow.AsControl().AddThemeConstantOverride("separation", 4)
 	s.selectAllRow.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
-	s.selectAllRow.AsControl().SetCustomMinimumSize(Vector2.New(0, 24))
+	s.selectAllRow.AsControl().SetCustomMinimumSize(Vector2.New(0, scaled(24)))
 
 	s.selectAllCb = CheckBox.New()
 	s.selectAllCb.AsBaseButton().SetButtonPressed(true)
@@ -338,7 +338,7 @@ func (s *SchemaPanel) SetSchema(cols []db.Column) {
 
 	// Divider below header
 	s.selectAllDivider = PanelContainer.New()
-	s.selectAllDivider.AsControl().SetCustomMinimumSize(Vector2.New(0, 1))
+	s.selectAllDivider.AsControl().SetCustomMinimumSize(Vector2.New(0, scaled(1)))
 	s.selectAllDivider.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	applyPanelBg(s.selectAllDivider.AsControl(), colorBorder)
 
@@ -661,7 +661,7 @@ func (s *SQLPanel) Ready() {
 	s.editor = CodeEdit.New()
 	s.editor.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	s.editor.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
-	s.editor.AsControl().SetCustomMinimumSize(Vector2.New(0, 80))
+	s.editor.AsControl().SetCustomMinimumSize(Vector2.New(0, scaled(80)))
 	s.editor.SetGuttersDrawExecutingLines(false)
 	s.editor.SetGuttersDrawLineNumbers(true)
 	s.editor.SetGuttersDrawBreakpointsGutter(false)
@@ -1068,7 +1068,7 @@ func (p *RowDetailPanel) Ready() {
 
 	// Separator line between search and fields
 	sep := PanelContainer.New()
-	sep.AsControl().SetCustomMinimumSize(Vector2.New(0, 1))
+	sep.AsControl().SetCustomMinimumSize(Vector2.New(0, scaled(1)))
 	applyPanelBg(sep.AsControl(), colorBorder)
 
 	p.AsNode().AddChild(searchWrap.AsNode())
@@ -1165,7 +1165,7 @@ func (s *StatusBar) Ready() {
 	s.leftBtn = Button.New()
 	s.leftBtn.AsControl().SetTooltipText("Toggle Left Pane")
 	s.leftBtn.SetText("◧")
-	s.leftBtn.AsControl().SetCustomMinimumSize(Vector2.New(28, 22))
+	s.leftBtn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(28), scaled(22)))
 	applyToggleButtonTheme(s.leftBtn.AsControl(), true)
 	s.leftBtn.AsBaseButton().OnPressed(func() {
 		s.leftPaneVisible = !s.leftPaneVisible
@@ -1178,7 +1178,7 @@ func (s *StatusBar) Ready() {
 	s.rightBtn = Button.New()
 	s.rightBtn.AsControl().SetTooltipText("Toggle Right Pane")
 	s.rightBtn.SetText("◨")
-	s.rightBtn.AsControl().SetCustomMinimumSize(Vector2.New(28, 22))
+	s.rightBtn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(28), scaled(22)))
 	applyToggleButtonTheme(s.rightBtn.AsControl(), false)
 
 	// Spacer
@@ -1441,22 +1441,16 @@ func (a *App) handleShortcut(key Input.Key, w *AppWindow) {
 		}
 	case Input.KeyW:
 		if w != nil {
-			if len(w.tabs) <= 1 {
-				// Close the window
-				if w == a.mainWin {
-					if tree, ok := Object.As[SceneTree.Instance](Engine.GetMainLoop()); ok {
-						tree.Quit()
+			if len(w.tabs) <= 1 && w != a.mainWin {
+				// Close secondary windows when last tab is closed
+				for i, sw := range a.secondWins {
+					if sw == w {
+						a.secondWins = append(a.secondWins[:i], a.secondWins[i+1:]...)
+						break
 					}
-				} else {
-					for i, sw := range a.secondWins {
-						if sw == w {
-							a.secondWins = append(a.secondWins[:i], a.secondWins[i+1:]...)
-							break
-						}
-					}
-					w.window.AsNode().QueueFree()
 				}
-			} else {
+				w.window.AsNode().QueueFree()
+			} else if len(w.tabs) > 0 {
 				w.closeTab(w.activeTab)
 			}
 		}
