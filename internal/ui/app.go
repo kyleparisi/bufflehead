@@ -1349,8 +1349,10 @@ type tabState struct {
 	sqlPanel     *SQLPanel
 	dataGrid     *DataGrid
 	detailPanel  *RowDetailPanel
-	connIdx      int  // index into AppWindow.connections (-1 = in-memory)
-	navigating   bool // true during back/forward nav — skip history+nav recording
+	connIdx      int    // index into AppWindow.connections (-1 = in-memory)
+	navigating   bool   // true during back/forward nav — skip history+nav recording
+	tabID        uint64 // unique ID for matching async results
+	generation   uint64 // incremented on each new query to discard stale results
 
 	// Container nodes for show/hide on tab switch
 	sidebarWrap PanelContainer.Instance
@@ -1370,12 +1372,13 @@ type App struct {
 	// Legacy accessor — points to active window's active tab state
 	State *models.AppState `gd:"-"`
 
-	mainWin     *AppWindow              `gd:"-"`
-	secondWins  []*AppWindow             `gd:"-"`
-	appMenu     *AppMenu                 `gd:"-"`
-	history     *models.QueryHistory     `gd:"-"`
-	pendingInit   bool                   `gd:"-"`
-	prevKeys      map[Input.Key]bool     `gd:"-"`
+	mainWin      *AppWindow              `gd:"-"`
+	secondWins   []*AppWindow             `gd:"-"`
+	appMenu      *AppMenu                 `gd:"-"`
+	history      *models.QueryHistory     `gd:"-"`
+	pendingInit  bool                     `gd:"-"`
+	prevKeys     map[Input.Key]bool       `gd:"-"`
+	cachedState  json.RawMessage          `gd:"-"` // updated on main thread each frame
 }
 
 func (a *App) activeWindow() *AppWindow {
@@ -1450,56 +1453,67 @@ func (a *App) initMainWindow() {
 	}
 	a.appMenu.Setup()
 
-	// Wire up control server state provider
+	// Wire up control server state provider — returns cached state
+	// computed on the main thread each frame (avoids Godot thread-safety errors).
 	if a.ControlServer != nil {
 		a.ControlServer.SetStateProvider(func() (json.RawMessage, error) {
-			w := a.activeWindow()
-			if w == nil {
-				return json.Marshal(map[string]any{"tabCount": 0})
+			if a.cachedState != nil {
+				return a.cachedState, nil
 			}
-			state := map[string]any{
-				"tabCount":    len(w.tabs),
-				"activeTab":   w.activeTab,
-				"windowCount": len(a.secondWins),
-			}
-			if a.mainWin != nil {
-				state["windowCount"] = 1 + len(a.secondWins)
-			}
-			if ts := w.currentTab(); ts != nil {
-				state["detailVisible"] = ts.detailWrap.AsCanvasItem().Visible()
-				totalWidth := ts.outerWrap.AsControl().Size().X
-				if totalWidth > 0 {
-					offset := float64(ts.outerWrap.AsSplitContainer().SplitOffset())
-					state["detailWidthRatio"] = 1.0 - offset/float64(totalWidth)
-				}
-			}
-			state["detailToggleActive"] = w.statusBar.rightPaneVisible
-			if s := w.currentState(); s != nil {
-				state["filePath"] = s.FilePath
-				state["userSQL"] = s.UserSQL
-				state["sortColumn"] = s.SortColumn
-				state["sortDir"] = int(s.SortDir)
-				state["pageOffset"] = s.PageOffset
-				state["pageSize"] = s.PageSize
-				state["rowCount"] = 0
-				state["columns"] = []string{}
-				if s.Result != nil {
-					state["rowCount"] = s.Result.Total
-					state["columns"] = s.Result.Columns
-				}
-				if s.Schema != nil {
-					schema := make([]map[string]any, len(s.Schema))
-					for i, c := range s.Schema {
-						schema[i] = map[string]any{
-							"name": c.Name, "type": c.DataType, "nullable": c.Nullable,
-						}
-					}
-					state["schema"] = schema
-				}
-			}
-			return json.Marshal(state)
+			return json.Marshal(map[string]any{"tabCount": 0})
 		})
 	}
+}
+
+// updateCachedState computes the state snapshot on the main thread
+// so the HTTP state provider can return it without touching Godot nodes.
+func (a *App) updateCachedState() {
+	w := a.activeWindow()
+	if w == nil {
+		a.cachedState, _ = json.Marshal(map[string]any{"tabCount": 0})
+		return
+	}
+	state := map[string]any{
+		"tabCount":    len(w.tabs),
+		"activeTab":   w.activeTab,
+		"windowCount": len(a.secondWins),
+	}
+	if a.mainWin != nil {
+		state["windowCount"] = 1 + len(a.secondWins)
+	}
+	if ts := w.currentTab(); ts != nil {
+		state["detailVisible"] = ts.detailWrap.AsCanvasItem().Visible()
+		totalWidth := ts.outerWrap.AsControl().Size().X
+		if totalWidth > 0 {
+			offset := float64(ts.outerWrap.AsSplitContainer().SplitOffset())
+			state["detailWidthRatio"] = 1.0 - offset/float64(totalWidth)
+		}
+	}
+	state["detailToggleActive"] = w.statusBar.rightPaneVisible
+	if s := w.currentState(); s != nil {
+		state["filePath"] = s.FilePath
+		state["userSQL"] = s.UserSQL
+		state["sortColumn"] = s.SortColumn
+		state["sortDir"] = int(s.SortDir)
+		state["pageOffset"] = s.PageOffset
+		state["pageSize"] = s.PageSize
+		state["rowCount"] = 0
+		state["columns"] = []string{}
+		if s.Result != nil {
+			state["rowCount"] = s.Result.Total
+			state["columns"] = s.Result.Columns
+		}
+		if s.Schema != nil {
+			schema := make([]map[string]any, len(s.Schema))
+			for i, c := range s.Schema {
+				schema[i] = map[string]any{
+					"name": c.Name, "type": c.DataType, "nullable": c.Nullable,
+				}
+			}
+			state["schema"] = schema
+		}
+	}
+	a.cachedState, _ = json.Marshal(state)
 }
 
 func (a *App) newWindow() {
@@ -1582,10 +1596,25 @@ func (a *App) justPressed(key Input.Key) bool {
 	return pressed && !was
 }
 
+func (a *App) stopAllWorkers() {
+	if a.mainWin != nil {
+		a.mainWin.stopWorkers()
+	}
+	for _, w := range a.secondWins {
+		w.stopWorkers()
+	}
+}
+
 func (a *App) Notification(what Object.Notification) {
 	// Log all notifications above 2000 (application-level)
 	if what >= 2000 {
 		fmt.Println("[bufflehead] notification:", what, "mainWin:", a.mainWin != nil, "secondWins:", len(a.secondWins))
+	}
+
+	// Stop workers on quit
+	const notificationWMCloseRequest Object.Notification = 1006
+	if what == notificationWMCloseRequest {
+		a.stopAllWorkers()
 	}
 
 	// macOS dock click: focus existing window
@@ -1631,6 +1660,12 @@ func (a *App) Process(delta Float.X) {
 		a.State = w.currentState()
 	}
 
+	// Poll async DB results from all windows
+	a.pollResults()
+
+	// Update cached state snapshot (safe to access Godot nodes here on the main thread)
+	a.updateCachedState()
+
 	if a.ControlServer == nil {
 		return
 	}
@@ -1641,6 +1676,29 @@ func (a *App) Process(delta Float.X) {
 		default:
 			return
 		}
+	}
+}
+
+func (a *App) pollResults() {
+	windows := make([]*AppWindow, 0, 1+len(a.secondWins))
+	if a.mainWin != nil {
+		windows = append(windows, a.mainWin)
+	}
+	windows = append(windows, a.secondWins...)
+
+	for _, w := range windows {
+		if w.results == nil {
+			continue
+		}
+		for {
+			select {
+			case res := <-w.results:
+				w.handleDBResult(res)
+			default:
+				goto nextWindow
+			}
+		}
+	nextWindow:
 	}
 }
 
@@ -1664,8 +1722,8 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 			cmd.Respond(control.Result{Error: err.Error()})
 			return
 		}
-		w.onFileSelected(d.Path)
-		cmd.Respond(control.Result{OK: true})
+		w.onFileSelectedWithCmd(d.Path, cmd)
+		// Response deferred to async result handler
 
 	case "sort":
 		var d control.SortData
@@ -1694,8 +1752,8 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 			s.SortDir = models.SortAsc
 		}
 		s.PageOffset = 0
-		w.runCurrentQuery()
-		cmd.Respond(control.Result{OK: true})
+		w.runCurrentQuery(cmd)
+		// Response deferred to async result handler
 
 	case "query":
 		var d control.QueryData
@@ -1711,11 +1769,8 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 			ts.State.SortDir = models.SortNone
 			ts.sqlPanel.SetSQL(d.SQL)
 		}
-		if err := w.runCurrentQuery(); err != nil {
-			cmd.Respond(control.Result{Error: err.Error()})
-		} else {
-			cmd.Respond(control.Result{OK: true})
-		}
+		w.runCurrentQuery(cmd)
+		// Response deferred to async result handler
 
 	case "page":
 		var d control.PageData
@@ -1726,8 +1781,8 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 		if s := w.currentState(); s != nil {
 			s.PageOffset = d.Offset
 		}
-		w.runCurrentQuery()
-		cmd.Respond(control.Result{OK: true})
+		w.runCurrentQuery(cmd)
+		// Response deferred to async result handler
 
 	case "reset_sort":
 		if s := w.currentState(); s != nil {
@@ -1735,8 +1790,8 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 			s.SortDir = models.SortNone
 			s.PageOffset = 0
 		}
-		w.runCurrentQuery()
-		cmd.Respond(control.Result{OK: true})
+		w.runCurrentQuery(cmd)
+		// Response deferred to async result handler
 
 	case "new_tab":
 		w.addNewTab()
@@ -1762,7 +1817,12 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 			return
 		}
 		ts.detailPanel.SetRow(ts.dataGrid.columns, ts.dataGrid.rows[d.Row])
-		ts.detailWrap.AsCanvasItem().SetVisible(true)
+		if !ts.detailWrap.AsCanvasItem().Visible() {
+			totalWidth := ts.outerWrap.AsControl().Size().X
+			ts.outerWrap.AsSplitContainer().SetSplitOffset(int(totalWidth * 0.75))
+			ts.detailWrap.AsCanvasItem().SetVisible(true)
+			w.statusBar.SetRightPaneActive(true)
+		}
 		cmd.Respond(control.Result{OK: true})
 
 	case "search_detail":
@@ -1785,12 +1845,12 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 		cmd.Respond(control.Result{OK: true})
 
 	case "nav_back":
-		w.navBack()
-		cmd.Respond(control.Result{OK: true})
+		w.navBackWithCmd(cmd)
+		// Response deferred to async result handler
 
 	case "nav_forward":
-		w.navForward()
-		cmd.Respond(control.Result{OK: true})
+		w.navForwardWithCmd(cmd)
+		// Response deferred to async result handler
 
 	case "ui_tree":
 		// Optional resize before capturing the tree

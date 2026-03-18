@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"bufflehead/internal/control"
 	"bufflehead/internal/db"
 	"bufflehead/internal/models"
 
@@ -31,7 +32,10 @@ type Connection struct {
 	DB     *db.DB
 	Tables []db.TableInfo
 	button Button.Instance
+	worker *ConnWorker
 }
+
+var nextTabID uint64
 
 // AppWindow represents a single viewer window (main or secondary).
 type AppWindow struct {
@@ -58,6 +62,7 @@ type AppWindow struct {
 
 	tabs      []*tabState
 	activeTab int
+	results   chan DBResult
 
 	navWired bool
 
@@ -69,6 +74,8 @@ type AppWindow struct {
 // For the main window, this is added to the App Extension.
 // For secondary windows, this is added to a Window node.
 func (w *AppWindow) buildUI() PanelContainer.Instance {
+	w.results = make(chan DBResult, 16)
+
 	bg := PanelContainer.New()
 	bg.AsControl().SetAnchorsAndOffsetsPreset(Control.PresetFullRect)
 	bg.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
@@ -145,14 +152,14 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 		ts := w.currentTab()
 		if ts != nil && ts.State.PageOffset-ts.State.PageSize >= 0 {
 			ts.State.PageOffset -= ts.State.PageSize
-			w.runCurrentQuery()
+			w.runCurrentQuery(nil)
 		}
 	}
 	w.statusBar.OnNextPage = func() {
 		ts := w.currentTab()
 		if ts != nil && ts.State.Result != nil && ts.State.PageOffset+ts.State.PageSize < int(ts.State.Result.Total) {
 			ts.State.PageOffset += ts.State.PageSize
-			w.runCurrentQuery()
+			w.runCurrentQuery(nil)
 		}
 	}
 	w.statusBar.OnToggleLeftPane = func() {
@@ -242,12 +249,15 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 	memBtn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(36), scaled(36)))
 	memBtn.SetClipText(true)
 	applyActiveButtonTheme(memBtn.AsControl()) // active by default
+	memWorker := NewConnWorker(w.duck, w.results)
+	memWorker.Start()
 	memConn := &Connection{
 		Name:   "Memory",
 		Path:   ":memory:",
 		DB:     w.duck,
 		Tables: nil,
 		button: memBtn,
+		worker: memWorker,
 	}
 	w.connections = append(w.connections, memConn)
 	w.connRail.AsNode().AddChild(memBtn.AsNode())
@@ -304,7 +314,9 @@ func (w *AppWindow) addNewTab() {
 		w.navWired = true
 	}
 
-	ts := &tabState{State: models.NewAppState(), connIdx: 0} // default to Memory connection
+	tid := nextTabID
+	nextTabID++
+	ts := &tabState{State: models.NewAppState(), connIdx: 0, tabID: tid} // default to Memory connection
 
 	// Sidebar
 	ts.sidebarWrap = PanelContainer.New()
@@ -349,7 +361,7 @@ func (w *AppWindow) addNewTab() {
 	ts.schema.OnColumnsChanged = func(selected []string) {
 		ts.State.SelectedCols = selected
 		ts.State.PageOffset = 0
-		w.runCurrentQuery()
+		w.runCurrentQuery(nil)
 	}
 	ts.historyPanel = new(HistoryPanel)
 	ts.historyPanel.OnReplay = func(sql string) {
@@ -358,7 +370,7 @@ func (w *AppWindow) addNewTab() {
 		ts.State.SortColumn = ""
 		ts.State.SortDir = models.SortNone
 		ts.sqlPanel.SetSQL(sql)
-		w.execQuery()
+		w.runCurrentQuery(nil)
 	}
 
 	// Start showing schema, hide history
@@ -400,7 +412,7 @@ func (w *AppWindow) addNewTab() {
 		ts.State.PageOffset = 0
 		ts.State.SortColumn = ""
 		ts.State.SortDir = models.SortNone
-		w.runCurrentQuery()
+		w.runCurrentQuery(nil)
 	}
 	sqlWrap := MarginContainer.New()
 	sqlWrap.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
@@ -431,7 +443,7 @@ func (w *AppWindow) addNewTab() {
 			ts.State.SortDir = models.SortAsc
 		}
 		ts.State.PageOffset = 0
-		w.runCurrentQuery()
+		w.runCurrentQuery(nil)
 	}
 
 	ts.dataGrid.OnRowSelected = func(rowIndex int) {
@@ -523,6 +535,9 @@ func (w *AppWindow) switchTab(idx int) {
 	} else if ts.connIdx == 0 {
 		w.titleBar.SetFileInfo("")
 	}
+
+	// Sync right pane toggle with the active tab's detail panel visibility
+	w.statusBar.SetRightPaneActive(ts.detailWrap.AsCanvasItem().Visible())
 
 	if ts.State.Result != nil {
 		start := ts.State.PageOffset + 1
@@ -618,8 +633,12 @@ func (w *AppWindow) isDuckDBFile(path string) bool {
 }
 
 func (w *AppWindow) onFileSelected(path string) {
+	w.onFileSelectedWithCmd(path, nil)
+}
+
+func (w *AppWindow) onFileSelectedWithCmd(path string, cmd *control.Command) {
 	if w.isDuckDBFile(path) {
-		w.onDatabaseOpened(path)
+		w.onDatabaseOpenedWithCmd(path, cmd)
 		return
 	}
 	if len(w.tabs) == 0 {
@@ -630,6 +649,9 @@ func (w *AppWindow) onFileSelected(path string) {
 	}
 	ts := w.currentTab()
 	if ts == nil {
+		if cmd != nil {
+			cmd.Respond(control.Result{Error: "no active tab"})
+		}
 		return
 	}
 	ts.State.FilePath = path
@@ -641,56 +663,89 @@ func (w *AppWindow) onFileSelected(path string) {
 	ts.sqlPanel.SetSQL(ts.State.UserSQL)
 	w.titleBar.SetFileInfo(path)
 	w.updateTabTitle(w.activeTab)
+	w.statusBar.SetStatus("Loading…")
 
-	cols, err := w.duck.Schema(path)
-	if err != nil {
-		w.statusBar.SetStatus("Error: " + err.Error())
-		ts.dataGrid.ShowError(err.Error())
-		return
-	}
-	ts.State.Schema = cols
-	ts.schema.SetSchema(cols)
-	ts.sqlPanel.SetCompletionSchema(cols)
-
-	meta, _ := w.duck.Metadata(path)
-	ts.State.Metadata = meta
-	w.execQuery()
+	ts.generation++
+	conn := w.connections[0] // memory connection for file queries
+	conn.worker.Send(DBRequest{
+		Kind:       ReqOpenFile,
+		FilePath:   path,
+		UserSQL:    ts.State.UserSQL,
+		VirtualSQL: ts.State.VirtualSQL(),
+		Offset:     ts.State.PageOffset,
+		Limit:      ts.State.PageSize,
+		TabID:      ts.tabID,
+		Generation: ts.generation,
+		ControlCmd: cmd,
+	})
 }
 
-// runCurrentQuery uses the right DB connection for the active tab.
-func (w *AppWindow) runCurrentQuery() error {
+// runCurrentQuery sends a query request to the appropriate worker.
+// The optional cmd will receive a response when the result arrives.
+func (w *AppWindow) runCurrentQuery(cmd *control.Command) {
 	ts := w.currentTab()
 	if ts == nil {
-		return fmt.Errorf("no active tab")
+		if cmd != nil {
+			cmd.Respond(control.Result{Error: "no active tab"})
+		}
+		return
 	}
+	ts.generation++
+	w.statusBar.SetStatus("Running…")
+
+	var worker *ConnWorker
 	if ts.connIdx >= 0 && ts.connIdx < len(w.connections) {
-		return w.execQueryWithConn(ts, w.connections[ts.connIdx].DB)
+		worker = w.connections[ts.connIdx].worker
 	}
-	return w.execQuery()
+	if worker == nil {
+		if cmd != nil {
+			cmd.Respond(control.Result{Error: "no worker for connection"})
+		}
+		return
+	}
+	worker.Send(DBRequest{
+		Kind:       ReqQuery,
+		VirtualSQL: ts.State.VirtualSQL(),
+		UserSQL:    ts.State.UserSQL,
+		FilePath:   ts.State.FilePath,
+		Offset:     ts.State.PageOffset,
+		Limit:      ts.State.PageSize,
+		TabID:      ts.tabID,
+		Generation: ts.generation,
+		Navigating: ts.navigating,
+		ControlCmd: cmd,
+	})
 }
 
 func (w *AppWindow) onDatabaseOpened(path string) {
-	// Open a read-only connection
-	dbConn, err := db.OpenDB(path)
-	if err != nil {
-		w.statusBar.SetStatus("Error: " + err.Error())
+	w.onDatabaseOpenedWithCmd(path, nil)
+}
+
+func (w *AppWindow) onDatabaseOpenedWithCmd(path string, cmd *control.Command) {
+	w.statusBar.SetStatus("Opening database…")
+	// Use a placeholder tabID for the one-shot goroutine
+	// (the actual tab doesn't exist yet; handleOpenDBResult will create it)
+	tid := nextTabID
+	nextTabID++
+	RunOpenDB(path, tid, 0, cmd, w.results)
+}
+
+// handleOpenDBResult processes the result of an async OpenDB operation.
+func (w *AppWindow) handleOpenDBResult(res DBResult) {
+	if res.Err != nil {
+		w.statusBar.SetStatus("Error: " + res.Err.Error())
 		if ts := w.currentTab(); ts != nil {
-			ts.dataGrid.ShowError(err.Error())
+			ts.dataGrid.ShowError(res.Err.Error())
+		}
+		if res.ControlCmd != nil {
+			res.ControlCmd.Respond(control.Result{Error: res.Err.Error()})
 		}
 		return
 	}
 
-	// Load tables
-	tables, err := dbConn.Tables()
-	if err != nil {
-		dbConn.Close()
-		w.statusBar.SetStatus("Error listing tables: " + err.Error())
-		return
-	}
-	for i := range tables {
-		cols, _ := dbConn.TableSchema(tables[i].Name)
-		tables[i].Columns = cols
-	}
+	path := res.DBPath
+	tables := res.Tables
+	dbConn := res.DB
 
 	// Extract short name from path
 	name := path
@@ -701,12 +756,17 @@ func (w *AppWindow) onDatabaseOpened(path string) {
 		}
 	}
 
+	// Create worker for this connection
+	dbWorker := NewConnWorker(dbConn, w.results)
+	dbWorker.Start()
+
 	// Create connection
 	conn := &Connection{
 		Name:   name,
 		Path:   path,
 		DB:     dbConn,
 		Tables: tables,
+		worker: dbWorker,
 	}
 
 	// Add button to rail
@@ -742,7 +802,7 @@ func (w *AppWindow) onDatabaseOpened(path string) {
 			ts.State.SortColumn = ""
 			ts.State.SortDir = models.SortNone
 			ts.sqlPanel.SetSQL(ts.State.UserSQL)
-			w.runCurrentQuery()
+			w.runCurrentQuery(nil)
 		}
 	}
 
@@ -750,6 +810,9 @@ func (w *AppWindow) onDatabaseOpened(path string) {
 	w.selectConnection(idx)
 
 	w.statusBar.SetStatus(fmt.Sprintf("Connected: %s (%d tables/views)", name, len(tables)))
+	if res.ControlCmd != nil {
+		res.ControlCmd.Respond(control.Result{OK: true})
+	}
 }
 
 func (w *AppWindow) selectConnection(idx int) {
@@ -776,75 +839,65 @@ func (w *AppWindow) selectConnection(idx int) {
 	}
 }
 
-// execQueryWithConn runs a query using a specific database connection.
-func (w *AppWindow) execQueryWithConn(ts *tabState, conn *db.DB) error {
-	if ts == nil || conn == nil {
-		return fmt.Errorf("no active tab or connection")
-	}
-	w.statusBar.SetStatus("Running…")
-	queryStart := time.Now()
-	result, err := conn.Query(ts.State.VirtualSQL(), ts.State.PageOffset, ts.State.PageSize)
-	if err != nil {
-		w.statusBar.SetStatus("Error: " + err.Error())
-		ts.dataGrid.ShowError(err.Error())
-		return err
-	}
-	elapsed := time.Since(queryStart)
-	ts.State.Result = result
-
-	if !ts.navigating {
-		if w.history != nil {
-			w.history.Add(models.HistoryEntry{
-				SQL:        ts.State.VirtualSQL(),
-				FilePath:   ts.State.FilePath,
-				Timestamp:  time.Now(),
-				RowCount:   result.Total,
-				DurationMs: elapsed.Milliseconds(),
-			})
+// findTab returns the tabState with the given tabID, or nil if not found.
+func (w *AppWindow) findTab(tabID uint64) *tabState {
+	for _, ts := range w.tabs {
+		if ts.tabID == tabID {
+			return ts
 		}
-		ts.State.NavPush(ts.State.UserSQL)
 	}
-	ts.dataGrid.colTypes = schemaColTypes(ts.State.Schema, result.Columns)
-	ts.dataGrid.SetResult(result)
-	ts.dataGrid.UpdateColumnTitles(result.Columns, ts.State.SortColumn, ts.State.SortDir)
-	start := ts.State.PageOffset + 1
-	end := ts.State.PageOffset + len(result.Rows)
-	w.statusBar.SetStatus(fmt.Sprintf("%d–%d of %d rows", start, end, result.Total))
-	page := (ts.State.PageOffset / ts.State.PageSize) + 1
-	totalPages := (int(result.Total) + ts.State.PageSize - 1) / ts.State.PageSize
-	w.statusBar.SetPage(page, totalPages)
-	w.updateNavButtons()
 	return nil
 }
 
-func (w *AppWindow) execQuery() error {
-	ts := w.currentTab()
-	if ts == nil {
-		return fmt.Errorf("no active tab")
+// handleDBResult dispatches an async result by kind.
+func (w *AppWindow) handleDBResult(res DBResult) {
+	switch res.Kind {
+	case ReqQuery:
+		w.handleQueryResult(res)
+	case ReqOpenFile:
+		w.handleOpenFileResult(res)
+	case ReqOpenDB:
+		w.handleOpenDBResult(res)
 	}
-	w.statusBar.SetStatus("Running…")
-	queryStart := time.Now()
-	result, err := w.duck.Query(ts.State.VirtualSQL(), ts.State.PageOffset, ts.State.PageSize)
-	if err != nil {
-		w.statusBar.SetStatus("Error: " + err.Error())
-		ts.dataGrid.ShowError(err.Error())
-		return err
+}
+
+// handleQueryResult applies a query result to the UI.
+func (w *AppWindow) handleQueryResult(res DBResult) {
+	ts := w.findTab(res.TabID)
+	if ts == nil || ts.generation != res.Generation {
+		// Stale result — respond OK to any waiting control command
+		if res.ControlCmd != nil {
+			res.ControlCmd.Respond(control.Result{OK: true})
+		}
+		return
 	}
-	elapsed := time.Since(queryStart)
+
+	if res.Err != nil {
+		w.statusBar.SetStatus("Error: " + res.Err.Error())
+		ts.dataGrid.ShowError(res.Err.Error())
+		ts.navigating = false
+		if res.ControlCmd != nil {
+			res.ControlCmd.Respond(control.Result{Error: res.Err.Error()})
+		}
+		return
+	}
+
+	result := res.Query
 	ts.State.Result = result
 
-	if !ts.navigating {
+	if !res.Navigating {
 		if w.history != nil {
 			w.history.Add(models.HistoryEntry{
-				SQL:        ts.State.VirtualSQL(),
+				SQL:        res.VirtualSQL,
 				FilePath:   ts.State.FilePath,
 				Timestamp:  time.Now(),
 				RowCount:   result.Total,
-				DurationMs: elapsed.Milliseconds(),
+				DurationMs: res.Elapsed.Milliseconds(),
 			})
 		}
 		ts.State.NavPush(ts.State.UserSQL)
 	}
+	ts.navigating = false
 	ts.dataGrid.colTypes = schemaColTypes(ts.State.Schema, result.Columns)
 	ts.dataGrid.SetResult(result)
 	ts.dataGrid.UpdateColumnTitles(result.Columns, ts.State.SortColumn, ts.State.SortDir)
@@ -855,7 +908,43 @@ func (w *AppWindow) execQuery() error {
 	totalPages := (int(result.Total) + ts.State.PageSize - 1) / ts.State.PageSize
 	w.statusBar.SetPage(page, totalPages)
 	w.updateNavButtons()
-	return nil
+
+	if res.ControlCmd != nil {
+		res.ControlCmd.Respond(control.Result{OK: true})
+	}
+}
+
+// handleOpenFileResult applies the schema/metadata from an open-file operation,
+// then delegates the query result.
+func (w *AppWindow) handleOpenFileResult(res DBResult) {
+	ts := w.findTab(res.TabID)
+	if ts == nil || ts.generation != res.Generation {
+		if res.ControlCmd != nil {
+			res.ControlCmd.Respond(control.Result{OK: true})
+		}
+		return
+	}
+
+	if res.Schema == nil && res.Err != nil {
+		// Schema failed — show error
+		w.statusBar.SetStatus("Error: " + res.Err.Error())
+		ts.dataGrid.ShowError(res.Err.Error())
+		if res.ControlCmd != nil {
+			res.ControlCmd.Respond(control.Result{Error: res.Err.Error()})
+		}
+		return
+	}
+
+	// Apply schema
+	ts.State.Schema = res.Schema
+	ts.schema.SetSchema(res.Schema)
+	ts.sqlPanel.SetCompletionSchema(res.Schema)
+
+	// Apply metadata (may be nil)
+	ts.State.Metadata = res.Metadata
+
+	// Delegate query result handling
+	w.handleQueryResult(res)
 }
 
 func (w *AppWindow) updateNavButtons() {
@@ -870,12 +959,22 @@ func (w *AppWindow) updateNavButtons() {
 }
 
 func (w *AppWindow) navBack() {
+	w.navBackWithCmd(nil)
+}
+
+func (w *AppWindow) navBackWithCmd(cmd *control.Command) {
 	ts := w.currentTab()
 	if ts == nil {
+		if cmd != nil {
+			cmd.Respond(control.Result{OK: true})
+		}
 		return
 	}
 	entry, ok := ts.State.NavBack()
 	if !ok {
+		if cmd != nil {
+			cmd.Respond(control.Result{OK: true})
+		}
 		return
 	}
 	ts.navigating = true
@@ -884,18 +983,27 @@ func (w *AppWindow) navBack() {
 	ts.State.SortDir = entry.SortDir
 	ts.State.PageOffset = entry.PageOffset
 	ts.sqlPanel.SetSQL(entry.SQL)
-	w.runCurrentQuery()
-	ts.navigating = false
+	w.runCurrentQuery(cmd)
 	w.updateNavButtons()
 }
 
 func (w *AppWindow) navForward() {
+	w.navForwardWithCmd(nil)
+}
+
+func (w *AppWindow) navForwardWithCmd(cmd *control.Command) {
 	ts := w.currentTab()
 	if ts == nil {
+		if cmd != nil {
+			cmd.Respond(control.Result{OK: true})
+		}
 		return
 	}
 	entry, ok := ts.State.NavForward()
 	if !ok {
+		if cmd != nil {
+			cmd.Respond(control.Result{OK: true})
+		}
 		return
 	}
 	ts.navigating = true
@@ -904,9 +1012,17 @@ func (w *AppWindow) navForward() {
 	ts.State.SortDir = entry.SortDir
 	ts.State.PageOffset = entry.PageOffset
 	ts.sqlPanel.SetSQL(entry.SQL)
-	w.runCurrentQuery()
-	ts.navigating = false
+	w.runCurrentQuery(cmd)
 	w.updateNavButtons()
+}
+
+// stopWorkers shuts down all connection workers for this window.
+func (w *AppWindow) stopWorkers() {
+	for _, conn := range w.connections {
+		if conn.worker != nil {
+			conn.worker.Stop()
+		}
+	}
 }
 
 // schemaColTypes maps result columns to their schema types.
