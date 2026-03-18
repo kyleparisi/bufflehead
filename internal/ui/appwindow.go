@@ -1073,13 +1073,7 @@ func createMainWindowFromRoot(rootWin Window.Instance, duck *db.DB, history *mod
 
 	rootWin.OnFilesDropped(func(files []string) {
 		for _, f := range files {
-			if len(f) > 8 && f[len(f)-8:] == ".parquet" {
-				aw.onFileSelected(f)
-				return
-			}
-		}
-		if len(files) > 0 {
-			aw.onFileSelected(files[0])
+			aw.onFileSelected(f)
 		}
 	})
 
@@ -1120,13 +1114,7 @@ func createSecondaryWindow(duck *db.DB, history *models.QueryHistory, onNewWindo
 	// Setup drag & drop for this window
 	win.OnFilesDropped(func(files []string) {
 		for _, f := range files {
-			if len(f) > 8 && f[len(f)-8:] == ".parquet" {
-				aw.onFileSelected(f)
-				return
-			}
-		}
-		if len(files) > 0 {
-			aw.onFileSelected(files[0])
+			aw.onFileSelected(f)
 		}
 	})
 
