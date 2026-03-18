@@ -64,32 +64,32 @@ func scaled(base float32) float32 {
 
 // Dark theme palette (TablePlus-inspired)
 var (
-	colorBg         = Color.RGBA{R: 0.10, G: 0.10, B: 0.10, A: 1} // #1a1a1a
-	colorBgSidebar  = Color.RGBA{R: 0.11, G: 0.11, B: 0.11, A: 1} // #1c1c1c
-	colorBgDarker   = Color.RGBA{R: 0.08, G: 0.08, B: 0.08, A: 1} // #141414
-	colorBgPanel    = Color.RGBA{R: 0.13, G: 0.13, B: 0.13, A: 1} // #222222
-	colorBgInput    = Color.RGBA{R: 0.16, G: 0.16, B: 0.16, A: 1} // #2a2a2a
-	colorBgHeader   = Color.RGBA{R: 0.15, G: 0.15, B: 0.15, A: 1} // #252525
-	colorRowOdd     = Color.RGBA{R: 0.10, G: 0.10, B: 0.10, A: 1} // #1a1a1a
-	colorRowEven    = Color.RGBA{R: 0.12, G: 0.12, B: 0.12, A: 1} // #1f1f1f
-	colorBorder     = Color.RGBA{R: 0.20, G: 0.20, B: 0.20, A: 1} // #333333
-	colorBorderDim  = Color.RGBA{R: 0.17, G: 0.17, B: 0.17, A: 1} // #2a2a2a
-	colorText       = Color.RGBA{R: 0.78, G: 0.78, B: 0.78, A: 1} // #c8c8c8
-	colorTextBright = Color.RGBA{R: 0.88, G: 0.88, B: 0.88, A: 1} // #e0e0e0
-	colorTextDim    = Color.RGBA{R: 0.40, G: 0.40, B: 0.40, A: 1} // #666666
-	colorTextMuted  = Color.RGBA{R: 0.53, G: 0.53, B: 0.53, A: 1} // #888888
-	colorAccent     = Color.RGBA{R: 0.18, G: 0.35, B: 0.56, A: 1} // #2d5a8e
-	colorSelected   = Color.RGBA{R: 0.12, G: 0.23, B: 0.37, A: 1} // #1e3a5f
-	colorBtnNormal  = Color.RGBA{R: 0.16, G: 0.16, B: 0.16, A: 1} // #2a2a2a
-	colorBtnHover   = Color.RGBA{R: 0.20, G: 0.20, B: 0.20, A: 1} // #333333
+	colorBg         = Color.RGBA{R: 0.11, G: 0.11, B: 0.12, A: 1}  // #1C1C1E
+	colorBgSidebar  = Color.RGBA{R: 0.14, G: 0.14, B: 0.16, A: 1}  // #242428
+	colorBgDarker   = Color.RGBA{R: 0.094, G: 0.094, B: 0.10, A: 1} // #18181A
+	colorBgPanel    = Color.RGBA{R: 0.165, G: 0.165, B: 0.18, A: 1} // #2A2A2E
+	colorBgInput    = Color.RGBA{R: 0.165, G: 0.165, B: 0.18, A: 1} // #2A2A2E
+	colorBgHeader   = Color.RGBA{R: 0.145, G: 0.145, B: 0.16, A: 1} // #252528
+	colorRowOdd     = Color.RGBA{R: 0.11, G: 0.11, B: 0.12, A: 1}  // #1C1C1E
+	colorRowEven    = Color.RGBA{R: 0.133, G: 0.133, B: 0.15, A: 1} // #222226
+	colorBorder     = Color.RGBA{R: 0.227, G: 0.227, B: 0.243, A: 1} // #3A3A3E
+	colorBorderDim  = Color.RGBA{R: 0.18, G: 0.18, B: 0.20, A: 1}   // #2E2E32
+	colorText       = Color.RGBA{R: 0.90, G: 0.90, B: 0.90, A: 1}  // #E5E5E5
+	colorTextBright = Color.RGBA{R: 1.0, G: 1.0, B: 1.0, A: 1}     // #FFFFFF
+	colorTextDim    = Color.RGBA{R: 0.333, G: 0.333, B: 0.345, A: 1} // #555558
+	colorTextMuted  = Color.RGBA{R: 0.557, G: 0.557, B: 0.576, A: 1} // #8E8E93
+	colorAccent     = Color.RGBA{R: 0.29, G: 0.494, B: 0.969, A: 1} // #4A7EF7
+	colorSelected   = Color.RGBA{R: 0.118, G: 0.227, B: 0.435, A: 1} // #1E3A6F
+	colorBtnNormal  = Color.RGBA{R: 0.165, G: 0.165, B: 0.18, A: 1} // #2A2A2E
+	colorBtnHover   = Color.RGBA{R: 0.22, G: 0.22, B: 0.235, A: 1} // #38383C
 
 	// SQL syntax highlighting
-	colorSQLKeyword  = Color.RGBA{R: 0.40, G: 0.60, B: 0.90, A: 1} // #6699e6 — blue
-	colorSQLString   = Color.RGBA{R: 0.80, G: 0.58, B: 0.36, A: 1} // #cc9460 — warm orange
-	colorSQLNumber   = Color.RGBA{R: 0.70, G: 0.85, B: 0.55, A: 1} // #b3d98c — green
-	colorSQLComment  = Color.RGBA{R: 0.45, G: 0.50, B: 0.45, A: 1} // #738073 — muted green
-	colorSQLSymbol   = Color.RGBA{R: 0.65, G: 0.65, B: 0.65, A: 1} // #a6a6a6 — gray
-	colorSQLFunction = Color.RGBA{R: 0.85, G: 0.75, B: 0.50, A: 1} // #d9bf80 — gold
+	colorSQLKeyword  = Color.RGBA{R: 0.40, G: 0.60, B: 1.0, A: 1}  // #6699FF — brighter blue
+	colorSQLString   = Color.RGBA{R: 0.80, G: 0.58, B: 0.38, A: 1} // #CC9460 — warm orange
+	colorSQLNumber   = Color.RGBA{R: 0.70, G: 0.85, B: 0.55, A: 1} // #B3D98C — green
+	colorSQLComment  = Color.RGBA{R: 0.42, G: 0.42, B: 0.435, A: 1} // #6B6B6F — muted tone
+	colorSQLSymbol   = Color.RGBA{R: 0.65, G: 0.65, B: 0.667, A: 1} // #A6A6AA — blue-tinted gray
+	colorSQLFunction = Color.RGBA{R: 0.85, G: 0.75, B: 0.50, A: 1} // #D9BF80 — gold
 )
 
 func makeStyleBox(bg Color.RGBA, radius int, border int, borderColor Color.RGBA) StyleBoxFlat.Instance {
@@ -110,9 +110,25 @@ func makeStyleBoxPadded(bg Color.RGBA, radius int, border int, borderColor Color
 }
 
 func applyButtonTheme(c Control.Instance) {
-	normal := makeStyleBoxPadded(colorAccent, 3, 0, colorBorder, 5)
-	hover := makeStyleBoxPadded(Color.RGBA{R: 0.22, G: 0.40, B: 0.62, A: 1}, 3, 0, colorBorder, 5)
-	pressed := makeStyleBoxPadded(Color.RGBA{R: 0.14, G: 0.28, B: 0.46, A: 1}, 3, 0, colorBorder, 5)
+	// Premium CTA button with vivid accent blue
+	normal := makeStyleBox(colorAccent, 6, 0, colorBorder)
+	normal.AsStyleBox().SetContentMarginLeft(14)
+	normal.AsStyleBox().SetContentMarginRight(14)
+	normal.AsStyleBox().SetContentMarginTop(8)
+	normal.AsStyleBox().SetContentMarginBottom(8)
+
+	hover := makeStyleBox(Color.RGBA{R: 0.353, G: 0.557, B: 1.0, A: 1}, 6, 0, colorBorder) // #5A8EFF
+	hover.AsStyleBox().SetContentMarginLeft(14)
+	hover.AsStyleBox().SetContentMarginRight(14)
+	hover.AsStyleBox().SetContentMarginTop(8)
+	hover.AsStyleBox().SetContentMarginBottom(8)
+
+	pressed := makeStyleBox(Color.RGBA{R: 0.227, G: 0.431, B: 0.906, A: 1}, 6, 0, colorBorder) // #3A6EE7
+	pressed.AsStyleBox().SetContentMarginLeft(14)
+	pressed.AsStyleBox().SetContentMarginRight(14)
+	pressed.AsStyleBox().SetContentMarginTop(8)
+	pressed.AsStyleBox().SetContentMarginBottom(8)
+
 	c.AddThemeStyleboxOverride("normal", normal.AsStyleBox())
 	c.AddThemeStyleboxOverride("hover", hover.AsStyleBox())
 	c.AddThemeStyleboxOverride("pressed", pressed.AsStyleBox())
@@ -122,8 +138,19 @@ func applyButtonTheme(c Control.Instance) {
 }
 
 func applySecondaryButtonTheme(c Control.Instance) {
-	normal := makeStyleBoxPadded(colorBtnNormal, 3, 1, colorBorder, 5)
-	hover := makeStyleBoxPadded(colorBtnHover, 3, 1, colorBorder, 5)
+	// Secondary button with 6px radius
+	normal := makeStyleBox(colorBtnNormal, 6, 1, colorBorder)
+	normal.AsStyleBox().SetContentMarginLeft(14)
+	normal.AsStyleBox().SetContentMarginRight(14)
+	normal.AsStyleBox().SetContentMarginTop(8)
+	normal.AsStyleBox().SetContentMarginBottom(8)
+
+	hover := makeStyleBox(colorBtnHover, 6, 1, colorBorder)
+	hover.AsStyleBox().SetContentMarginLeft(14)
+	hover.AsStyleBox().SetContentMarginRight(14)
+	hover.AsStyleBox().SetContentMarginTop(8)
+	hover.AsStyleBox().SetContentMarginBottom(8)
+
 	c.AddThemeStyleboxOverride("normal", normal.AsStyleBox())
 	c.AddThemeStyleboxOverride("hover", hover.AsStyleBox())
 	c.AddThemeStyleboxOverride("pressed", hover.AsStyleBox())
@@ -204,8 +231,9 @@ func applyTreeTheme(c Control.Instance) {
 	panel := makeStyleBox(colorBg, 0, 0, colorBg)
 	c.AddThemeStyleboxOverride("panel", panel.AsStyleBox())
 
+	// Compact row height (~32px) with 4px vertical padding
 	selected := makeStyleBox(colorSelected, 0, 0, colorBorder)
-	selected.AsStyleBox().SetContentMarginAll(2)
+	selected.AsStyleBox().SetContentMarginAll(4)
 	c.AddThemeStyleboxOverride("selected", selected.AsStyleBox())
 	c.AddThemeStyleboxOverride("selected_focus", selected.AsStyleBox())
 
@@ -226,9 +254,9 @@ func applyTreeTheme(c Control.Instance) {
 	c.AddThemeColorOverride("title_button_color", colorTextMuted)
 	c.AddThemeFontSizeOverride("font_size", fontSize(13))
 
-	// Row hover
-	hover := makeStyleBox(Color.RGBA{R: 0.14, G: 0.22, B: 0.32, A: 1}, 0, 0, colorBorder) // subtle blue tint
-	hover.AsStyleBox().SetContentMarginAll(2)
+	// Row hover - vivid blue tint (#1E3050)
+	hover := makeStyleBox(Color.RGBA{R: 0.118, G: 0.188, B: 0.314, A: 1}, 0, 0, colorBorder)
+	hover.AsStyleBox().SetContentMarginAll(4)
 	c.AddThemeStyleboxOverride("hover", hover.AsStyleBox())
 	c.AddThemeStyleboxOverride("hovered", hover.AsStyleBox())
 
@@ -275,8 +303,8 @@ func applyStatusBarTheme(c Control.Instance) {
 
 // Title bar colors
 var (
-	colorTitleBar  = Color.RGBA{R: 0.11, G: 0.11, B: 0.12, A: 1} // #1c1c1e
-	colorTitlePill = Color.RGBA{R: 0.23, G: 0.23, B: 0.24, A: 1} // #3a3a3c
+	colorTitleBar  = Color.RGBA{R: 0.11, G: 0.11, B: 0.12, A: 1}  // #1C1C1E (same as main bg)
+	colorTitlePill = Color.RGBA{R: 0.22, G: 0.22, B: 0.235, A: 1} // #38383C
 )
 
 func applyTitleBarTheme(c Control.Instance) {

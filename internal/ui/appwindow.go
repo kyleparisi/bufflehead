@@ -96,11 +96,11 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 
 	// (toolbar removed)
 
-	// Tab bar
+	// Tab bar - slightly more breathing room
 	w.tabBarWrap = MarginContainer.New()
 	w.tabBarWrap.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
-	w.tabBarWrap.AsControl().AddThemeConstantOverride("margin_left", 8)
-	w.tabBarWrap.AsControl().AddThemeConstantOverride("margin_right", 8)
+	w.tabBarWrap.AsControl().AddThemeConstantOverride("margin_left", 12)
+	w.tabBarWrap.AsControl().AddThemeConstantOverride("margin_right", 12)
 	w.tabBarWrap.AsControl().AddThemeConstantOverride("margin_top", 0)
 	w.tabBarWrap.AsControl().AddThemeConstantOverride("margin_bottom", 0)
 
@@ -141,14 +141,14 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 	w.split.AsNode().AddChild(w.sidebarCol.AsNode())
 	w.split.AsNode().AddChild(w.contentCol.AsNode())
 
-	// Status bar
+	// Status bar - more padding for breathing room
 	statusWrap := PanelContainer.New()
 	applyPanelBg(statusWrap.AsControl(), colorBgSidebar)
 	statusMargin := MarginContainer.New()
-	statusMargin.AsControl().AddThemeConstantOverride("margin_top", 4)
-	statusMargin.AsControl().AddThemeConstantOverride("margin_left", 8)
-	statusMargin.AsControl().AddThemeConstantOverride("margin_right", 8)
-	statusMargin.AsControl().AddThemeConstantOverride("margin_bottom", 4)
+	statusMargin.AsControl().AddThemeConstantOverride("margin_top", 6)
+	statusMargin.AsControl().AddThemeConstantOverride("margin_left", 12)
+	statusMargin.AsControl().AddThemeConstantOverride("margin_right", 12)
+	statusMargin.AsControl().AddThemeConstantOverride("margin_bottom", 6)
 
 	w.statusBar = new(StatusBar)
 	w.statusBar.OnPrevPage = func() {
@@ -321,7 +321,7 @@ func (w *AppWindow) addNewTab() {
 	nextTabID++
 	ts := &tabState{State: models.NewAppState(), connIdx: 0, tabID: tid} // default to Memory connection
 
-	// Sidebar
+	// Sidebar - 12px horizontal, 8px vertical padding
 	ts.sidebarWrap = PanelContainer.New()
 	ts.sidebarWrap.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
 	ts.sidebarWrap.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
@@ -331,15 +331,15 @@ func (w *AppWindow) addNewTab() {
 	sidebarMargin := MarginContainer.New()
 	sidebarMargin.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	sidebarMargin.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
-	sidebarMargin.AsControl().AddThemeConstantOverride("margin_top", 6)
-	sidebarMargin.AsControl().AddThemeConstantOverride("margin_left", 6)
-	sidebarMargin.AsControl().AddThemeConstantOverride("margin_right", 4)
-	sidebarMargin.AsControl().AddThemeConstantOverride("margin_bottom", 4)
+	sidebarMargin.AsControl().AddThemeConstantOverride("margin_top", 8)
+	sidebarMargin.AsControl().AddThemeConstantOverride("margin_left", 12)
+	sidebarMargin.AsControl().AddThemeConstantOverride("margin_right", 12)
+	sidebarMargin.AsControl().AddThemeConstantOverride("margin_bottom", 8)
 
 	sidebarVBox := VBoxContainer.New()
 	sidebarVBox.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	sidebarVBox.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
-	sidebarVBox.AsControl().AddThemeConstantOverride("separation", 4)
+	sidebarVBox.AsControl().AddThemeConstantOverride("separation", 8)
 
 	// Tab selector: Items | History (TablePlus-style)
 	selectorRow := HBoxContainer.New()
@@ -419,10 +419,10 @@ func (w *AppWindow) addNewTab() {
 	}
 	sqlWrap := MarginContainer.New()
 	sqlWrap.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
-	sqlWrap.AsControl().AddThemeConstantOverride("margin_top", 4)
-	sqlWrap.AsControl().AddThemeConstantOverride("margin_left", 6)
-	sqlWrap.AsControl().AddThemeConstantOverride("margin_right", 6)
-	sqlWrap.AsControl().AddThemeConstantOverride("margin_bottom", 2)
+	sqlWrap.AsControl().AddThemeConstantOverride("margin_top", 6)
+	sqlWrap.AsControl().AddThemeConstantOverride("margin_left", 8)
+	sqlWrap.AsControl().AddThemeConstantOverride("margin_right", 8)
+	sqlWrap.AsControl().AddThemeConstantOverride("margin_bottom", 4)
 	sqlWrap.AsNode().AddChild(ts.sqlPanel.AsNode())
 
 	ts.dataGrid = new(DataGrid)
