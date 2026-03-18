@@ -35,6 +35,7 @@ import (
 	"graphics.gd/classdb/MarginContainer"
 	"graphics.gd/classdb/Node"
 	"graphics.gd/classdb/PanelContainer"
+	"graphics.gd/classdb/PopupMenu"
 	"graphics.gd/classdb/SceneTree"
 	"graphics.gd/classdb/StyleBoxEmpty"
 	"graphics.gd/classdb/ScrollContainer"
@@ -751,6 +752,7 @@ type DataGrid struct {
 	selectedItem     TreeItem.Instance  // previously selected item (for clearing cell border)
 	selectedCol      int               // previously selected column
 	cellEdit         LineEdit.Instance  // overlay for copying cell text
+	contextMenu      PopupMenu.Instance // right-click context menu
 	selectedRows     map[int]bool       // set of selected row indices for multi-select
 	lastSelectedRow  int               // anchor for shift-click range selection
 	mouseHandled     bool              // suppress OnItemSelected after mouse click handling
@@ -1133,6 +1135,28 @@ func (d *DataGrid) GuiInput(event InputEvent.Instance) {
 				}
 			}
 		}
+		if mb.ButtonIndex() == Input.MouseButtonRight && mb.AsInputEvent().IsPressed() {
+			pos := mb.AsInputEventMouse().Position()
+			clickCol := d.Super().GetColumnAtPosition(pos)
+			clickItem := d.Super().GetItemAtPosition(pos)
+			if clickItem != (TreeItem.Instance{}) && clickCol >= 0 && clickCol < len(d.columns) {
+				clickedRow := d.treeItemIndex(clickItem)
+				if clickedRow >= 0 && !d.selectedRows[clickedRow] {
+					// Right-clicked a row outside the current selection: select just this row
+					d.clearCellHighlight()
+					d.clearRowHighlights()
+					d.selectedRows = make(map[int]bool)
+					d.selectedRows[clickedRow] = true
+					d.lastSelectedRow = clickedRow
+					d.applyRowHighlights()
+					d.notifyRowsSelected()
+				}
+			}
+			if len(d.selectedRows) > 0 {
+				d.showContextMenu()
+			}
+			d.AsControl().AcceptEvent()
+		}
 		return
 	}
 	kb, isKey := Object.As[InputEventKey.Instance](event)
@@ -1218,6 +1242,75 @@ func (d *DataGrid) showCellEdit(item TreeItem.Instance, col int) {
 	})
 
 	d.cellEdit = edit
+}
+
+const (
+	copyTSVWithHeaders = 0
+	copyTSV            = 1
+)
+
+func (d *DataGrid) dismissContextMenu() {
+	if d.contextMenu != (PopupMenu.Instance{}) {
+		d.contextMenu.AsNode().QueueFree()
+		d.contextMenu = PopupMenu.Instance{}
+	}
+}
+
+func (d *DataGrid) showContextMenu() {
+	d.dismissContextMenu()
+
+	copyMenu := PopupMenu.New()
+	copyMenu.AddItem("TSV with Headers")
+	copyMenu.AddItem("TSV")
+	copyMenu.OnIndexPressed(func(index int) {
+		d.copySelectedRows(index == copyTSVWithHeaders)
+		d.dismissContextMenu()
+	})
+
+	popup := PopupMenu.New()
+	popup.AddSubmenuNodeItem("Copy", copyMenu)
+	d.AsNode().AddChild(popup.AsNode())
+
+	popup.AsWindow().OnCloseRequested(func() {
+		d.dismissContextMenu()
+	})
+
+	// Position at mouse cursor in screen coordinates
+	popup.AsWindow().SetPosition(DisplayServer.MouseGetPosition())
+	popup.AsWindow().Popup()
+	d.contextMenu = popup
+}
+
+func (d *DataGrid) copySelectedRows(withHeaders bool) {
+	indices := d.sortedSelectedRows()
+	if len(indices) == 0 {
+		return
+	}
+	var buf strings.Builder
+	if withHeaders {
+		for i, col := range d.columns {
+			if i > 0 {
+				buf.WriteByte('\t')
+			}
+			buf.WriteString(col)
+		}
+		buf.WriteByte('\n')
+	}
+	for ri, idx := range indices {
+		if idx < len(d.rows) {
+			row := d.rows[idx]
+			for ci, val := range row {
+				if ci > 0 {
+					buf.WriteByte('\t')
+				}
+				buf.WriteString(val)
+			}
+			if ri < len(indices)-1 {
+				buf.WriteByte('\n')
+			}
+		}
+	}
+	DisplayServer.ClipboardSet(buf.String())
 }
 
 // treeItemIndex returns the row index for a TreeItem, or -1 if not found.
