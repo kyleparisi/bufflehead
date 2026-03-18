@@ -5,7 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	_ "github.com/marcboeker/go-duckdb"
+	"github.com/marcboeker/go-duckdb"
 )
 
 // DB wraps a DuckDB in-memory connection.
@@ -177,15 +177,19 @@ func (d *DB) Query(virtualSQL string, offset, limit int) (*QueryResult, error) {
 
 // formatValue converts a scanned database value to its display string.
 func formatValue(v any) string {
-	if b, ok := v.([]byte); ok {
-		if len(b) == 16 {
+	switch val := v.(type) {
+	case []byte:
+		if len(val) == 16 {
 			// Format as UUID: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-			h := hex.EncodeToString(b)
+			h := hex.EncodeToString(val)
 			return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:32]
 		}
-		return string(b)
+		return string(val)
+	case duckdb.Decimal:
+		return val.String()
+	default:
+		return fmt.Sprintf("%v", v)
 	}
-	return fmt.Sprintf("%v", v)
 }
 
 // Metadata returns parquet file-level metadata.

@@ -1,9 +1,12 @@
 package db
 
 import (
+	"math/big"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/marcboeker/go-duckdb"
 )
 
 func setupTestDB(t *testing.T) *DB {
@@ -198,6 +201,8 @@ func TestFormatValue(t *testing.T) {
 		{"int", 42, "42"},
 		{"string", "foo", "foo"},
 		{"nil", nil, "<nil>"},
+		{"decimal", duckdb.Decimal{Width: 18, Scale: 2, Value: big.NewInt(123456)}, "1234.56"},
+		{"decimal zero", duckdb.Decimal{Width: 10, Scale: 4, Value: big.NewInt(0)}, "0"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -224,6 +229,23 @@ func TestQueryUUID(t *testing.T) {
 	// UUID format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx (36 chars)
 	if len(id) != 36 || id[8] != '-' || id[13] != '-' || id[18] != '-' || id[23] != '-' {
 		t.Errorf("expected UUID format, got %q", id)
+	}
+}
+
+func TestQueryDecimal(t *testing.T) {
+	db := setupTestDB(t)
+
+	result, err := db.Query("SELECT 123.45::DECIMAL(10,2) AS price", 0, 1)
+	if err != nil {
+		t.Fatalf("Query() error: %v", err)
+	}
+	if len(result.Rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(result.Rows))
+	}
+
+	got := result.Rows[0][0]
+	if got != "123.45" {
+		t.Errorf("expected \"123.45\", got %q", got)
 	}
 }
 
