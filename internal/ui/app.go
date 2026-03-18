@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"bufflehead/internal/completion"
@@ -734,20 +735,25 @@ func (s *SQLPanel) currentWordPrefix() string {
 type DataGrid struct {
 	Tree.Extension[DataGrid] `gd:"DataGrid"`
 
-	OnColumnClicked func(column int)
-	OnRowSelected   func(rowIndex int)
-	columns         []string // track current column names
-	rows            [][]string
-	colTypes        []string // data types for alignment
-	colWidthCache   map[string][]int // query hash → column widths
-	dragging        bool
-	dragCol         int
-	dragStartX      float32
-	dragStartWidth  int
-	skipSort        bool              // set during resize to suppress column sort
-	selectedItem    TreeItem.Instance  // previously selected item (for clearing cell border)
-	selectedCol     int               // previously selected column
-	cellEdit        LineEdit.Instance  // overlay for copying cell text
+	OnColumnClicked    func(column int)
+	OnRowSelected      func(rowIndex int)
+	OnRowsSelected     func(rowIndices []int)
+	OnSelectionCleared func()
+	columns          []string // track current column names
+	rows             [][]string
+	colTypes         []string // data types for alignment
+	colWidthCache    map[string][]int // query hash → column widths
+	dragging         bool
+	dragCol          int
+	dragStartX       float32
+	dragStartWidth   int
+	skipSort         bool              // set during resize to suppress column sort
+	selectedItem     TreeItem.Instance  // previously selected item (for clearing cell border)
+	selectedCol      int               // previously selected column
+	cellEdit         LineEdit.Instance  // overlay for copying cell text
+	selectedRows     map[int]bool       // set of selected row indices for multi-select
+	lastSelectedRow  int               // anchor for shift-click range selection
+	mouseHandled     bool              // suppress OnItemSelected after mouse click handling
 }
 
 func (d *DataGrid) Ready() {
@@ -769,27 +775,47 @@ func (d *DataGrid) Ready() {
 	})
 
 	d.selectedCol = -1
+	d.selectedRows = make(map[int]bool)
+	d.lastSelectedRow = -1
 
 	d.Super().OnItemSelected(func() {
-		if d.OnRowSelected == nil {
+		// Mouse clicks handle multi-select in GuiInput; skip duplicate processing
+		if d.mouseHandled {
+			d.mouseHandled = false
 			return
 		}
+		// Clear cell highlight when navigating with arrow keys
+		d.clearCellHighlight()
 		selected := d.Super().GetSelected()
 		if selected == (TreeItem.Instance{}) {
 			return
 		}
-		// Find row index by walking tree items
-		root := d.Super().GetRoot()
-		child := root.GetFirstChild()
-		idx := 0
-		for child != (TreeItem.Instance{}) {
-			if child == selected {
-				d.OnRowSelected(idx)
-				return
-			}
-			child = child.GetNext()
-			idx++
+		idx := d.treeItemIndex(selected)
+		if idx < 0 {
+			return
 		}
+		// Shift+arrow key extends the selection range from the anchor
+		if Input.IsKeyPressed(Input.KeyShift) && d.lastSelectedRow >= 0 {
+			d.clearRowHighlights()
+			d.selectedRows = make(map[int]bool)
+			lo, hi := d.lastSelectedRow, idx
+			if lo > hi {
+				lo, hi = hi, lo
+			}
+			for i := lo; i <= hi; i++ {
+				d.selectedRows[i] = true
+			}
+			d.applyRowHighlights()
+			d.notifyRowsSelected()
+			return
+		}
+		// Plain arrow key: single-select
+		d.clearRowHighlights()
+		d.selectedRows = make(map[int]bool)
+		d.selectedRows[idx] = true
+		d.lastSelectedRow = idx
+		d.applyRowHighlights()
+		d.notifyRowsSelected()
 	})
 }
 
@@ -813,6 +839,8 @@ func (d *DataGrid) ShowError(msg string) {
 	d.dismissCellEdit()
 	d.selectedItem = TreeItem.Instance{}
 	d.selectedCol = -1
+	d.selectedRows = make(map[int]bool)
+	d.lastSelectedRow = -1
 	d.columns = nil
 	d.rows = nil
 	t := d.Super()
@@ -831,6 +859,8 @@ func (d *DataGrid) SetResult(r *db.QueryResult) {
 	d.dismissCellEdit()
 	d.selectedItem = TreeItem.Instance{}
 	d.selectedCol = -1
+	d.selectedRows = make(map[int]bool)
+	d.lastSelectedRow = -1
 	d.columns = r.Columns
 	d.rows = r.Rows
 	t := d.Super()
@@ -1042,15 +1072,56 @@ func (d *DataGrid) GuiInput(event InputEvent.Instance) {
 							d.AsControl().AcceptEvent()
 						} else {
 							d.dismissCellEdit()
-							// Highlight clicked cell with a border
-							if d.selectedItem != (TreeItem.Instance{}) && d.selectedCol >= 0 {
-								clear := StyleBoxEmpty.New()
-								d.selectedItem.SetCustomStylebox(d.selectedCol, clear.AsStyleBox())
+
+							// Multi-row selection (skip duplicate in OnItemSelected)
+							d.mouseHandled = true
+							clickedRow := d.treeItemIndex(clickItem)
+							if clickedRow >= 0 {
+								cmdHeld := Input.IsKeyPressed(Input.KeyMeta) || Input.IsKeyPressed(Input.KeyCtrl)
+								shiftHeld := Input.IsKeyPressed(Input.KeyShift)
+
+								if shiftHeld && d.lastSelectedRow >= 0 {
+									// Shift+click: select range from anchor to clicked row
+									d.clearCellHighlight()
+									d.clearRowHighlights()
+									d.selectedRows = make(map[int]bool)
+									lo, hi := d.lastSelectedRow, clickedRow
+									if lo > hi {
+										lo, hi = hi, lo
+									}
+									for i := lo; i <= hi; i++ {
+										d.selectedRows[i] = true
+									}
+									d.applyRowHighlights()
+									d.notifyRowsSelected()
+								} else if cmdHeld {
+									// Cmd/Ctrl+click: toggle individual row
+									d.clearCellHighlight()
+									d.clearRowHighlights()
+									if d.selectedRows[clickedRow] {
+										delete(d.selectedRows, clickedRow)
+									} else {
+										d.selectedRows[clickedRow] = true
+									}
+									d.lastSelectedRow = clickedRow
+									d.applyRowHighlights()
+									d.notifyRowsSelected()
+								} else {
+									// Plain click: select single row, highlight clicked cell
+									d.clearCellHighlight()
+									d.clearRowHighlights()
+									d.selectedRows = make(map[int]bool)
+									d.selectedRows[clickedRow] = true
+									d.lastSelectedRow = clickedRow
+									d.applyRowHighlights()
+									d.notifyRowsSelected()
+									// Cell border highlight for single click
+									border := makeStyleBox(colorSelected, 0, 2, colorTextMuted)
+									clickItem.SetCustomStylebox(clickCol, border.AsStyleBox())
+									d.selectedItem = clickItem
+									d.selectedCol = clickCol
+								}
 							}
-							border := makeStyleBox(colorSelected, 0, 2, colorTextMuted)
-							clickItem.SetCustomStylebox(clickCol, border.AsStyleBox())
-							d.selectedItem = clickItem
-							d.selectedCol = clickCol
 						}
 					}
 				}
@@ -1061,6 +1132,21 @@ func (d *DataGrid) GuiInput(event InputEvent.Instance) {
 					d.AsControl().SetMouseDefaultCursorShape(Control.CursorArrow)
 				}
 			}
+		}
+		return
+	}
+	kb, isKey := Object.As[InputEventKey.Instance](event)
+	if isKey && kb.AsInputEvent().IsPressed() && kb.Keycode() == Input.KeyEscape {
+		if len(d.selectedRows) > 0 {
+			d.clearCellHighlight()
+			d.clearRowHighlights()
+			d.selectedRows = make(map[int]bool)
+			d.lastSelectedRow = -1
+			d.Super().DeselectAll()
+			if d.OnSelectionCleared != nil {
+				d.OnSelectionCleared()
+			}
+			d.AsControl().AcceptEvent()
 		}
 		return
 	}
@@ -1083,6 +1169,16 @@ func (d *DataGrid) GuiInput(event InputEvent.Instance) {
 			}
 		}
 	}
+}
+
+func (d *DataGrid) clearCellHighlight() {
+	if d.selectedItem != (TreeItem.Instance{}) && d.selectedCol >= 0 {
+		clear := StyleBoxEmpty.New()
+		d.selectedItem.SetCustomStylebox(d.selectedCol, clear.AsStyleBox())
+		d.selectedItem = TreeItem.Instance{}
+		d.selectedCol = -1
+	}
+	d.dismissCellEdit()
 }
 
 func (d *DataGrid) dismissCellEdit() {
@@ -1124,6 +1220,85 @@ func (d *DataGrid) showCellEdit(item TreeItem.Instance, col int) {
 	d.cellEdit = edit
 }
 
+// treeItemIndex returns the row index for a TreeItem, or -1 if not found.
+func (d *DataGrid) treeItemIndex(item TreeItem.Instance) int {
+	root := d.Super().GetRoot()
+	if root == (TreeItem.Instance{}) {
+		return -1
+	}
+	child := root.GetFirstChild()
+	idx := 0
+	for child != (TreeItem.Instance{}) {
+		if child == item {
+			return idx
+		}
+		child = child.GetNext()
+		idx++
+	}
+	return -1
+}
+
+// treeItemAtIndex returns the TreeItem at the given row index, or zero value if out of range.
+func (d *DataGrid) treeItemAtIndex(idx int) TreeItem.Instance {
+	root := d.Super().GetRoot()
+	if root == (TreeItem.Instance{}) {
+		return TreeItem.Instance{}
+	}
+	child := root.GetFirstChild()
+	for i := 0; child != (TreeItem.Instance{}); i++ {
+		if i == idx {
+			return child
+		}
+		child = child.GetNext()
+	}
+	return TreeItem.Instance{}
+}
+
+// clearRowHighlights removes the custom background color from all selected rows.
+func (d *DataGrid) clearRowHighlights() {
+	for idx := range d.selectedRows {
+		item := d.treeItemAtIndex(idx)
+		if item != (TreeItem.Instance{}) {
+			for c := 0; c < len(d.columns); c++ {
+				item.ClearCustomBgColor(c)
+			}
+		}
+	}
+}
+
+// applyRowHighlights sets the custom background color on all selected rows.
+func (d *DataGrid) applyRowHighlights() {
+	for idx := range d.selectedRows {
+		item := d.treeItemAtIndex(idx)
+		if item != (TreeItem.Instance{}) {
+			for c := 0; c < len(d.columns); c++ {
+				item.SetCustomBgColor(c, colorSelected)
+			}
+		}
+	}
+}
+
+// sortedSelectedRows returns the selected row indices in ascending order.
+func (d *DataGrid) sortedSelectedRows() []int {
+	rows := make([]int, 0, len(d.selectedRows))
+	for idx := range d.selectedRows {
+		rows = append(rows, idx)
+	}
+	sort.Ints(rows)
+	return rows
+}
+
+// notifyRowsSelected calls the appropriate callback with the current selection.
+func (d *DataGrid) notifyRowsSelected() {
+	if d.OnRowsSelected != nil {
+		d.OnRowsSelected(d.sortedSelectedRows())
+	} else if d.OnRowSelected != nil && len(d.selectedRows) == 1 {
+		for idx := range d.selectedRows {
+			d.OnRowSelected(idx)
+		}
+	}
+}
+
 func debugLog(msg string) {
 	f, _ := os.OpenFile("/tmp/pv-debug.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if f != nil {
@@ -1143,6 +1318,7 @@ type RowDetailPanel struct {
 	placeholder  VBoxContainer.Instance
 	columns      []string
 	values       []string
+	multiRows    [][]string // all selected rows for multi-select display
 }
 
 func (p *RowDetailPanel) Ready() {
@@ -1222,6 +1398,23 @@ func (p *RowDetailPanel) Ready() {
 func (p *RowDetailPanel) SetRow(columns []string, values []string) {
 	p.columns = columns
 	p.values = values
+	p.multiRows = nil
+	p.searchBox.SetText("")
+	p.placeholder.AsCanvasItem().SetVisible(false)
+	p.scrollBox.AsCanvasItem().SetVisible(true)
+	p.filterFields("")
+}
+
+// SetRows displays detail for multiple selected rows. If all rows share
+// the same value for a column, that value is shown; otherwise "—" is displayed.
+func (p *RowDetailPanel) SetRows(columns []string, rows [][]string) {
+	if len(rows) == 1 {
+		p.SetRow(columns, rows[0])
+		return
+	}
+	p.columns = columns
+	p.values = nil
+	p.multiRows = rows
 	p.searchBox.SetText("")
 	p.placeholder.AsCanvasItem().SetVisible(false)
 	p.scrollBox.AsCanvasItem().SetVisible(true)
@@ -1231,7 +1424,11 @@ func (p *RowDetailPanel) SetRow(columns []string, values []string) {
 func (p *RowDetailPanel) Clear() {
 	p.columns = nil
 	p.values = nil
+	p.multiRows = nil
 	p.clearFields()
+	p.searchBox.SetText("")
+	p.scrollBox.AsCanvasItem().SetVisible(false)
+	p.placeholder.AsCanvasItem().SetVisible(true)
 }
 
 func (p *RowDetailPanel) clearFields() {
@@ -1246,10 +1443,7 @@ func (p *RowDetailPanel) filterFields(query string) {
 	p.clearFields()
 	query = strings.ToLower(query)
 	for i, col := range p.columns {
-		val := ""
-		if i < len(p.values) {
-			val = p.values[i]
-		}
+		val := p.resolveValue(i)
 		if query != "" && !strings.Contains(strings.ToLower(col), query) && !strings.Contains(strings.ToLower(val), query) {
 			continue
 		}
@@ -1276,6 +1470,16 @@ func (p *RowDetailPanel) filterFields(query string) {
 		group.AsNode().AddChild(valInput.AsNode())
 		p.fieldsList.AsNode().AddChild(group.AsNode())
 	}
+}
+
+// resolveValue returns the display value for column i. For single-row selection
+// it returns the value directly. For multi-row, it returns the value if all rows
+// agree, or "—" if they differ.
+func (p *RowDetailPanel) resolveValue(i int) string {
+	if p.multiRows == nil {
+		return models.ResolveDetailValue(i, p.values, nil)
+	}
+	return models.ResolveDetailValue(i, nil, p.multiRows)
 }
 
 // ── Status bar ─────────────────────────────────────────────────────────────
@@ -1538,6 +1742,15 @@ func (a *App) updateCachedState() {
 		if totalWidth > 0 {
 			offset := float64(ts.outerWrap.AsSplitContainer().SplitOffset())
 			state["detailWidthRatio"] = 1.0 - offset/float64(totalWidth)
+		}
+		state["selectedRows"] = ts.dataGrid.sortedSelectedRows()
+		// Detail panel values for testing
+		if ts.detailPanel.columns != nil {
+			detailValues := make(map[string]string, len(ts.detailPanel.columns))
+			for i, col := range ts.detailPanel.columns {
+				detailValues[col] = ts.detailPanel.resolveValue(i)
+			}
+			state["detailValues"] = detailValues
 		}
 	}
 	state["detailToggleActive"] = w.statusBar.rightPaneVisible
@@ -1857,7 +2070,10 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 		cmd.Respond(control.Result{OK: true})
 
 	case "select_row":
-		var d struct{ Row int `json:"row"` }
+		var d struct {
+			Row  int   `json:"row"`
+			Rows []int `json:"rows"`
+		}
 		if err := json.Unmarshal(cmd.Data, &d); err != nil {
 			cmd.Respond(control.Result{Error: err.Error()})
 			return
@@ -1867,11 +2083,27 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 			cmd.Respond(control.Result{Error: "no active tab"})
 			return
 		}
-		if d.Row < 0 || d.Row >= len(ts.dataGrid.rows) {
-			cmd.Respond(control.Result{Error: "row index out of range"})
-			return
+		// Support both single row and multi-row
+		indices := d.Rows
+		if len(indices) == 0 {
+			indices = []int{d.Row}
 		}
-		ts.detailPanel.SetRow(ts.dataGrid.columns, ts.dataGrid.rows[d.Row])
+		var rows [][]string
+		ts.dataGrid.clearRowHighlights()
+		ts.dataGrid.selectedRows = make(map[int]bool)
+		for _, idx := range indices {
+			if idx < 0 || idx >= len(ts.dataGrid.rows) {
+				cmd.Respond(control.Result{Error: "row index out of range"})
+				return
+			}
+			rows = append(rows, ts.dataGrid.rows[idx])
+			ts.dataGrid.selectedRows[idx] = true
+		}
+		if len(indices) > 0 {
+			ts.dataGrid.lastSelectedRow = indices[len(indices)-1]
+		}
+		ts.dataGrid.applyRowHighlights()
+		ts.detailPanel.SetRows(ts.dataGrid.columns, rows)
 		if !ts.detailWrap.AsCanvasItem().Visible() {
 			totalWidth := ts.outerWrap.AsControl().Size().X
 			ts.outerWrap.AsSplitContainer().SetSplitOffset(int(totalWidth * 0.75))
@@ -1893,6 +2125,20 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 		}
 		ts.detailPanel.searchBox.SetText(d.Query)
 		ts.detailPanel.filterFields(d.Query)
+		cmd.Respond(control.Result{OK: true})
+
+	case "deselect_all":
+		ts := w.currentTab()
+		if ts == nil || ts.dataGrid == nil {
+			cmd.Respond(control.Result{Error: "no active tab"})
+			return
+		}
+		ts.dataGrid.clearCellHighlight()
+		ts.dataGrid.clearRowHighlights()
+		ts.dataGrid.selectedRows = make(map[int]bool)
+		ts.dataGrid.lastSelectedRow = -1
+		ts.dataGrid.Super().DeselectAll()
+		ts.detailPanel.Clear()
 		cmd.Respond(control.Result{OK: true})
 
 	case "new_window":

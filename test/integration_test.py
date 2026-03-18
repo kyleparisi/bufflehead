@@ -371,3 +371,95 @@ class TestUITree:
     def test_tree_at_custom_size(self):
         tree = ui_tree(width=800, height=600)
         assert find_node(tree, "Window") is not None
+
+
+class TestMultiRowSelect:
+    """Tests for multi-row selection and detail panel value resolution."""
+
+    def setup_method(self):
+        close_all_tabs()
+        post("new-tab")
+        time.sleep(0.3)
+        # Use sales.csv: 5 rows with known data
+        # row0: Widget, North, 150, 9.99
+        # row1: Gadget, South, 85, 24.5
+        # row2: Widget, East, 200, 9.99
+        # row3: Doohickey, West, 42, 49.99
+        # row4: Gadget, North, 110, 24.5
+        post("query", {"sql": f"SELECT * FROM '{CSV}'"})
+        wait()
+
+    def test_single_row_select(self):
+        """Selecting a single row exposes it in state."""
+        post("select-row", {"row": 0})
+        time.sleep(0.3)
+        s = state()
+        assert s["selectedRows"] == [0]
+        assert s["detailValues"]["product"] == "Widget"
+        assert s["detailValues"]["region"] == "North"
+
+    def test_multi_row_select(self):
+        """Selecting multiple rows exposes all indices in state."""
+        post("select-row", {"rows": [0, 2]})
+        time.sleep(0.3)
+        s = state()
+        assert s["selectedRows"] == [0, 2]
+
+    def test_multi_row_same_value(self):
+        """When all selected rows agree on a column, detail shows that value."""
+        # rows 0 and 2 are both Widget with price 9.99
+        post("select-row", {"rows": [0, 2]})
+        time.sleep(0.3)
+        s = state()
+        assert s["detailValues"]["product"] == "Widget"
+        assert s["detailValues"]["price"] == "9.99"
+
+    def test_multi_row_different_value(self):
+        """When selected rows disagree on a column, detail shows dash."""
+        # rows 0 and 2: same product (Widget) but different region (North vs East)
+        post("select-row", {"rows": [0, 2]})
+        time.sleep(0.3)
+        s = state()
+        assert s["detailValues"]["region"] == "\u2014"  # em dash
+
+    def test_multi_row_all_different(self):
+        """Selecting rows with no common values shows dashes everywhere."""
+        # rows 0 (Widget/North) and 3 (Doohickey/West): all columns differ
+        post("select-row", {"rows": [0, 3]})
+        time.sleep(0.3)
+        s = state()
+        assert s["detailValues"]["product"] == "\u2014"
+        assert s["detailValues"]["region"] == "\u2014"
+        assert s["detailValues"]["quantity"] == "\u2014"
+        assert s["detailValues"]["price"] == "\u2014"
+
+    def test_deselect_all(self):
+        """Deselecting clears selected rows and detail values."""
+        post("select-row", {"row": 0})
+        time.sleep(0.3)
+        s = state()
+        assert s["selectedRows"] == [0]
+
+        post("deselect-all")
+        time.sleep(0.3)
+        s = state()
+        assert s["selectedRows"] == []
+        assert s.get("detailValues") is None
+
+    def test_select_then_reselect_single(self):
+        """Selecting multi then single replaces the selection."""
+        post("select-row", {"rows": [0, 1, 2]})
+        time.sleep(0.3)
+        s = state()
+        assert s["selectedRows"] == [0, 1, 2]
+
+        post("select-row", {"row": 4})
+        time.sleep(0.3)
+        s = state()
+        assert s["selectedRows"] == [4]
+        assert s["detailValues"]["product"] == "Gadget"
+
+    def test_select_row_out_of_range_multi(self):
+        """Out-of-range index in multi-select returns an error."""
+        result = post("select-row", {"rows": [0, 999]})
+        assert result.get("ok") is not True

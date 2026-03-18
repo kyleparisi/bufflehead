@@ -449,17 +449,32 @@ func (w *AppWindow) addNewTab() {
 		w.runCurrentQuery(nil)
 	}
 
-	ts.dataGrid.OnRowSelected = func(rowIndex int) {
-		if rowIndex < len(ts.dataGrid.rows) {
-			ts.detailPanel.SetRow(ts.dataGrid.columns, ts.dataGrid.rows[rowIndex])
-			if !ts.detailWrap.AsCanvasItem().Visible() {
-				// Open at 25% width
-				totalWidth := ts.outerWrap.AsControl().Size().X
-				ts.outerWrap.AsSplitContainer().SetSplitOffset(int(totalWidth * 0.75))
-				ts.detailWrap.AsCanvasItem().SetVisible(true)
-				w.statusBar.SetRightPaneActive(true)
+	ts.dataGrid.OnRowsSelected = func(rowIndices []int) {
+		if len(rowIndices) == 0 {
+			return
+		}
+		// Collect row data for all selected indices
+		var rows [][]string
+		for _, idx := range rowIndices {
+			if idx < len(ts.dataGrid.rows) {
+				rows = append(rows, ts.dataGrid.rows[idx])
 			}
 		}
+		if len(rows) == 0 {
+			return
+		}
+		ts.detailPanel.SetRows(ts.dataGrid.columns, rows)
+		if !ts.detailWrap.AsCanvasItem().Visible() {
+			// Open at 25% width
+			totalWidth := ts.outerWrap.AsControl().Size().X
+			ts.outerWrap.AsSplitContainer().SetSplitOffset(int(totalWidth * 0.75))
+			ts.detailWrap.AsCanvasItem().SetVisible(true)
+			w.statusBar.SetRightPaneActive(true)
+		}
+	}
+
+	ts.dataGrid.OnSelectionCleared = func() {
+		ts.detailPanel.Clear()
 	}
 
 	// Detail panel (third column)

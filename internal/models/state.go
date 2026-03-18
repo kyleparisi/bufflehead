@@ -124,6 +124,35 @@ func isSelectQuery(sql string) bool {
 	return prefix == "SELECT" || prefix == "select" || prefix == "Select"
 }
 
+// ResolveDetailValue returns the display value for a column when one or more rows
+// are selected. For a single row, it returns the column value directly. For multiple
+// rows, it returns the value if all rows agree, or "—" if they differ.
+func ResolveDetailValue(col int, singleRow []string, multiRows [][]string) string {
+	if multiRows == nil {
+		if col < len(singleRow) {
+			return singleRow[col]
+		}
+		return ""
+	}
+	if len(multiRows) == 0 {
+		return ""
+	}
+	first := ""
+	if col < len(multiRows[0]) {
+		first = multiRows[0][col]
+	}
+	for _, row := range multiRows[1:] {
+		v := ""
+		if col < len(row) {
+			v = row[col]
+		}
+		if v != first {
+			return "—"
+		}
+	}
+	return first
+}
+
 // VirtualSQL wraps the user's query with sorting and pagination.
 func (s *AppState) VirtualSQL() string {
 	cols := "*"

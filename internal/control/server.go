@@ -148,6 +148,10 @@ func (s *Server) Start() {
 		s.handleCommand(w, r, "search_detail")
 	})
 
+	mux.HandleFunc("POST /deselect-all", func(w http.ResponseWriter, r *http.Request) {
+		s.handleCommand(w, r, "deselect_all")
+	})
+
 	mux.HandleFunc("POST /nav-back", func(w http.ResponseWriter, r *http.Request) {
 		s.handleCommand(w, r, "nav_back")
 	})
