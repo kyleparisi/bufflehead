@@ -26,6 +26,7 @@ import (
 	"graphics.gd/classdb/HSplitContainer"
 	"graphics.gd/classdb/Input"
 	"graphics.gd/classdb/InputEvent"
+	"graphics.gd/classdb/InputEventKey"
 	"graphics.gd/classdb/InputEventMouseButton"
 	"graphics.gd/classdb/InputEventMouseMotion"
 	"graphics.gd/classdb/Label"
@@ -746,6 +747,7 @@ type DataGrid struct {
 	skipSort        bool              // set during resize to suppress column sort
 	selectedItem    TreeItem.Instance  // previously selected item (for clearing cell border)
 	selectedCol     int               // previously selected column
+	cellEdit        LineEdit.Instance  // overlay for copying cell text
 }
 
 func (d *DataGrid) Ready() {
@@ -808,6 +810,7 @@ func (d *DataGrid) UpdateColumnTitles(columns []string, sortCol string, sortDir 
 }
 
 func (d *DataGrid) ShowError(msg string) {
+	d.dismissCellEdit()
 	d.selectedItem = TreeItem.Instance{}
 	d.selectedCol = -1
 	d.columns = nil
@@ -825,6 +828,7 @@ func (d *DataGrid) SetResult(r *db.QueryResult) {
 	if r == nil {
 		return
 	}
+	d.dismissCellEdit()
 	d.selectedItem = TreeItem.Instance{}
 	d.selectedCol = -1
 	d.columns = r.Columns
@@ -1027,20 +1031,27 @@ func (d *DataGrid) GuiInput(event InputEvent.Instance) {
 					d.skipSort = true           // suppress the column-title-click sort
 					d.AsControl().AcceptEvent()
 				} else {
-					// Highlight clicked cell with a border
+					// Cell click handling
 					pos := mb.AsInputEventMouse().Position()
 					clickCol := d.Super().GetColumnAtPosition(pos)
 					clickItem := d.Super().GetItemAtPosition(pos)
 					if clickItem != (TreeItem.Instance{}) && clickCol >= 0 && clickCol < len(d.columns) {
-						// Clear previous cell border
-						if d.selectedItem != (TreeItem.Instance{}) && d.selectedCol >= 0 {
-							clear := StyleBoxEmpty.New()
-							d.selectedItem.SetCustomStylebox(d.selectedCol, clear.AsStyleBox())
+						if mb.DoubleClick() {
+							// Double-click on cell: show copyable overlay
+							d.showCellEdit(clickItem, clickCol)
+							d.AsControl().AcceptEvent()
+						} else {
+							d.dismissCellEdit()
+							// Highlight clicked cell with a border
+							if d.selectedItem != (TreeItem.Instance{}) && d.selectedCol >= 0 {
+								clear := StyleBoxEmpty.New()
+								d.selectedItem.SetCustomStylebox(d.selectedCol, clear.AsStyleBox())
+							}
+							border := makeStyleBox(colorSelected, 0, 2, colorTextMuted)
+							clickItem.SetCustomStylebox(clickCol, border.AsStyleBox())
+							d.selectedItem = clickItem
+							d.selectedCol = clickCol
 						}
-						border := makeStyleBox(colorSelected, 0, 2, colorTextMuted)
-						clickItem.SetCustomStylebox(clickCol, border.AsStyleBox())
-						d.selectedItem = clickItem
-						d.selectedCol = clickCol
 					}
 				}
 			} else {
@@ -1072,6 +1083,45 @@ func (d *DataGrid) GuiInput(event InputEvent.Instance) {
 			}
 		}
 	}
+}
+
+func (d *DataGrid) dismissCellEdit() {
+	if d.cellEdit != (LineEdit.Instance{}) {
+		d.cellEdit.AsNode().QueueFree()
+		d.cellEdit = LineEdit.Instance{}
+	}
+}
+
+func (d *DataGrid) showCellEdit(item TreeItem.Instance, col int) {
+	d.dismissCellEdit()
+
+	rect := d.Super().MoreArgs().GetItemAreaRect(item, col, -1)
+	scroll := d.Super().GetScroll()
+	rect.Position.Y -= scroll.Y
+
+	edit := LineEdit.New()
+	edit.SetText(item.GetText(col))
+	edit.SetEditable(false)
+	edit.AsControl().SetPosition(Vector2.New(rect.Position.X, rect.Position.Y))
+	edit.AsControl().SetSize(Vector2.New(rect.Size.X, rect.Size.Y))
+	edit.AsControl().AddThemeFontSizeOverride("font_size", fontSize(13))
+	applyInputTheme(edit.AsControl())
+	d.AsNode().AddChild(edit.AsNode())
+	edit.AsControl().GrabFocus()
+	edit.SelectAll()
+
+	edit.AsControl().OnFocusExited(func() {
+		d.dismissCellEdit()
+	})
+	edit.AsControl().OnGuiInput(func(event InputEvent.Instance) {
+		if kb, ok := Object.As[InputEventKey.Instance](event); ok {
+			if kb.AsInputEvent().IsPressed() && kb.Keycode() == Input.KeyEscape {
+				d.dismissCellEdit()
+			}
+		}
+	})
+
+	d.cellEdit = edit
 }
 
 func debugLog(msg string) {
