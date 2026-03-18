@@ -8,6 +8,8 @@ import (
 	"bufflehead/internal/db"
 	"bufflehead/internal/models"
 
+	"graphics.gd/variant/Color"
+
 	"graphics.gd/classdb/BoxContainer"
 	"graphics.gd/classdb/Button"
 	"graphics.gd/classdb/Control"
@@ -63,6 +65,7 @@ type AppWindow struct {
 	tabs      []*tabState
 	activeTab int
 	results   chan DBResult
+	skipPoll  bool // skip one frame of result polling so "Running…" renders
 
 	navWired bool
 
@@ -664,6 +667,8 @@ func (w *AppWindow) onFileSelectedWithCmd(path string, cmd *control.Command) {
 	w.titleBar.SetFileInfo(path)
 	w.updateTabTitle(w.activeTab)
 	w.statusBar.SetStatus("Loading…")
+	ts.dataGrid.AsCanvasItem().SetModulate(Color.RGBA{R: 1, G: 1, B: 1, A: 0.3})
+	w.skipPoll = true
 
 	ts.generation++
 	conn := w.connections[0] // memory connection for file queries
@@ -692,6 +697,8 @@ func (w *AppWindow) runCurrentQuery(cmd *control.Command) {
 	}
 	ts.generation++
 	w.statusBar.SetStatus("Running…")
+	ts.dataGrid.AsCanvasItem().SetModulate(Color.RGBA{R: 1, G: 1, B: 1, A: 0.3})
+	w.skipPoll = true
 
 	var worker *ConnWorker
 	if ts.connIdx >= 0 && ts.connIdx < len(w.connections) {
@@ -871,6 +878,8 @@ func (w *AppWindow) handleQueryResult(res DBResult) {
 		}
 		return
 	}
+
+	ts.dataGrid.AsCanvasItem().SetModulate(Color.RGBA{R: 1, G: 1, B: 1, A: 1})
 
 	if res.Err != nil {
 		w.statusBar.SetStatus("Error: " + res.Err.Error())

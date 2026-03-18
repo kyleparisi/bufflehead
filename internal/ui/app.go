@@ -1690,6 +1690,10 @@ func (a *App) pollResults() {
 		if w.results == nil {
 			continue
 		}
+		if w.skipPoll {
+			w.skipPoll = false
+			continue
+		}
 		for {
 			select {
 			case res := <-w.results:
