@@ -173,3 +173,55 @@ func (s *AppState) VirtualSQL() string {
 	}
 	return q
 }
+
+// FormatRowsTSV formats the given rows as tab-separated values.
+// If withHeaders is true, a header row from columns is prepended.
+func FormatRowsTSV(columns []string, rows [][]string, withHeaders bool) string {
+	var buf strings.Builder
+	if withHeaders {
+		for i, col := range columns {
+			if i > 0 {
+				buf.WriteByte('\t')
+			}
+			buf.WriteString(col)
+		}
+		buf.WriteByte('\n')
+	}
+	for ri, row := range rows {
+		for ci, val := range row {
+			if ci > 0 {
+				buf.WriteByte('\t')
+			}
+			buf.WriteString(val)
+		}
+		if ri < len(rows)-1 {
+			buf.WriteByte('\n')
+		}
+	}
+	return buf.String()
+}
+
+// FormatColumnValues formats the values at the given column index across rows
+// as a comma-separated list suitable for a SQL IN clause.
+// Numeric values are bare; non-numeric values are single-quoted with escaping.
+func FormatColumnValues(rows [][]string, col int, numeric bool) string {
+	var buf strings.Builder
+	first := true
+	for _, row := range rows {
+		if col < len(row) {
+			if !first {
+				buf.WriteString(", ")
+			}
+			val := row[col]
+			if numeric {
+				buf.WriteString(val)
+			} else {
+				buf.WriteByte('\'')
+				buf.WriteString(strings.ReplaceAll(val, "'", "''"))
+				buf.WriteByte('\'')
+			}
+			first = false
+		}
+	}
+	return buf.String()
+}

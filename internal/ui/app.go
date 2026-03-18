@@ -1153,7 +1153,7 @@ func (d *DataGrid) GuiInput(event InputEvent.Instance) {
 				}
 			}
 			if len(d.selectedRows) > 0 {
-				d.showContextMenu()
+				d.showContextMenu(clickCol)
 			}
 			d.AsControl().AcceptEvent()
 		}
@@ -1247,6 +1247,7 @@ func (d *DataGrid) showCellEdit(item TreeItem.Instance, col int) {
 const (
 	copyTSVWithHeaders = 0
 	copyTSV            = 1
+	copyColumnValues   = 2
 )
 
 func (d *DataGrid) dismissContextMenu() {
@@ -1256,14 +1257,22 @@ func (d *DataGrid) dismissContextMenu() {
 	}
 }
 
-func (d *DataGrid) showContextMenu() {
+func (d *DataGrid) showContextMenu(col int) {
 	d.dismissContextMenu()
 
 	copyMenu := PopupMenu.New()
 	copyMenu.AddItem("TSV with Headers")
 	copyMenu.AddItem("TSV")
+	copyMenu.AddItem("Column Values")
 	copyMenu.OnIndexPressed(func(index int) {
-		d.copySelectedRows(index == copyTSVWithHeaders)
+		switch index {
+		case copyTSVWithHeaders:
+			d.copySelectedRows(true)
+		case copyTSV:
+			d.copySelectedRows(false)
+		case copyColumnValues:
+			d.copyColumnValues(col)
+		}
 		d.dismissContextMenu()
 	})
 
@@ -1286,31 +1295,30 @@ func (d *DataGrid) copySelectedRows(withHeaders bool) {
 	if len(indices) == 0 {
 		return
 	}
-	var buf strings.Builder
-	if withHeaders {
-		for i, col := range d.columns {
-			if i > 0 {
-				buf.WriteByte('\t')
-			}
-			buf.WriteString(col)
-		}
-		buf.WriteByte('\n')
-	}
-	for ri, idx := range indices {
+	rows := make([][]string, 0, len(indices))
+	for _, idx := range indices {
 		if idx < len(d.rows) {
-			row := d.rows[idx]
-			for ci, val := range row {
-				if ci > 0 {
-					buf.WriteByte('\t')
-				}
-				buf.WriteString(val)
-			}
-			if ri < len(indices)-1 {
-				buf.WriteByte('\n')
-			}
+			rows = append(rows, d.rows[idx])
 		}
 	}
-	DisplayServer.ClipboardSet(buf.String())
+	DisplayServer.ClipboardSet(models.FormatRowsTSV(d.columns, rows, withHeaders))
+}
+
+func (d *DataGrid) copyColumnValues(col int) {
+	if col < 0 || col >= len(d.columns) {
+		return
+	}
+	indices := d.sortedSelectedRows()
+	if len(indices) == 0 {
+		return
+	}
+	rows := make([][]string, 0, len(indices))
+	for _, idx := range indices {
+		if idx < len(d.rows) {
+			rows = append(rows, d.rows[idx])
+		}
+	}
+	DisplayServer.ClipboardSet(models.FormatColumnValues(rows, col, d.isNumericCol(col)))
 }
 
 // treeItemIndex returns the row index for a TreeItem, or -1 if not found.

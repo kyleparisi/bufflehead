@@ -135,3 +135,132 @@ func TestResolveDetailValue(t *testing.T) {
 		})
 	}
 }
+
+func TestFormatRowsTSV(t *testing.T) {
+	tests := []struct {
+		name        string
+		columns     []string
+		rows        [][]string
+		withHeaders bool
+		want        string
+	}{
+		{
+			name:        "single row without headers",
+			columns:     []string{"id", "name"},
+			rows:        [][]string{{"1", "alice"}},
+			withHeaders: false,
+			want:        "1\talice",
+		},
+		{
+			name:        "single row with headers",
+			columns:     []string{"id", "name"},
+			rows:        [][]string{{"1", "alice"}},
+			withHeaders: true,
+			want:        "id\tname\n1\talice",
+		},
+		{
+			name:        "multiple rows with headers",
+			columns:     []string{"id", "name", "score"},
+			rows:        [][]string{{"1", "alice", "90"}, {"2", "bob", "85"}},
+			withHeaders: true,
+			want:        "id\tname\tscore\n1\talice\t90\n2\tbob\t85",
+		},
+		{
+			name:        "multiple rows without headers",
+			columns:     []string{"a", "b"},
+			rows:        [][]string{{"x", "y"}, {"z", "w"}},
+			withHeaders: false,
+			want:        "x\ty\nz\tw",
+		},
+		{
+			name:        "empty rows",
+			columns:     []string{"id"},
+			rows:        [][]string{},
+			withHeaders: true,
+			want:        "id\n",
+		},
+		{
+			name:        "empty rows no headers",
+			columns:     []string{"id"},
+			rows:        [][]string{},
+			withHeaders: false,
+			want:        "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := FormatRowsTSV(tt.columns, tt.rows, tt.withHeaders)
+			if got != tt.want {
+				t.Errorf("FormatRowsTSV() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFormatColumnValues(t *testing.T) {
+	tests := []struct {
+		name    string
+		rows    [][]string
+		col     int
+		numeric bool
+		want    string
+	}{
+		{
+			name:    "numeric values",
+			rows:    [][]string{{"1", "alice"}, {"2", "bob"}, {"3", "carol"}},
+			col:     0,
+			numeric: true,
+			want:    "1, 2, 3",
+		},
+		{
+			name:    "string values",
+			rows:    [][]string{{"1", "alice"}, {"2", "bob"}},
+			col:     1,
+			numeric: false,
+			want:    "'alice', 'bob'",
+		},
+		{
+			name:    "string with single quotes escaped",
+			rows:    [][]string{{"1", "it's"}, {"2", "they're"}},
+			col:     1,
+			numeric: false,
+			want:    "'it''s', 'they''re'",
+		},
+		{
+			name:    "single row numeric",
+			rows:    [][]string{{"42", "x"}},
+			col:     0,
+			numeric: true,
+			want:    "42",
+		},
+		{
+			name:    "single row string",
+			rows:    [][]string{{"42", "x"}},
+			col:     1,
+			numeric: false,
+			want:    "'x'",
+		},
+		{
+			name:    "empty rows",
+			rows:    [][]string{},
+			col:     0,
+			numeric: true,
+			want:    "",
+		},
+		{
+			name:    "col out of range skipped",
+			rows:    [][]string{{"a"}, {"b"}},
+			col:     5,
+			numeric: false,
+			want:    "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := FormatColumnValues(tt.rows, tt.col, tt.numeric)
+			if got != tt.want {
+				t.Errorf("FormatColumnValues() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
