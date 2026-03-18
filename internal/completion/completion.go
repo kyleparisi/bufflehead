@@ -79,7 +79,7 @@ func Build(prefix string, columns []db.Column, tables []db.TableInfo) []Item {
 		colLower := strings.ToLower(col.Name)
 		if strings.Contains(colLower, prefixLower) {
 			display := col.Name + "  " + col.DataType
-			items = append(items, Item{KindVariable, display, col.Name})
+			items = append(items, Item{KindVariable, display, quoteIdentifier(col.Name)})
 			seen[colLower] = true
 		}
 	}
@@ -100,7 +100,7 @@ func Build(prefix string, columns []db.Column, tables []db.TableInfo) []Item {
 			}
 			if strings.Contains(colLower, prefixLower) {
 				display := col.Name + "  " + col.DataType
-				items = append(items, Item{KindVariable, display, col.Name})
+				items = append(items, Item{KindVariable, display, quoteIdentifier(col.Name)})
 				seen[colLower] = true
 			}
 		}
@@ -148,6 +148,11 @@ func WordPrefixAt(line string, col int) string {
 		}
 	}
 	return line[start:col]
+}
+
+// quoteIdentifier wraps a column name in double quotes for safe SQL usage.
+func quoteIdentifier(name string) string {
+	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }
 
 // IsWordChar returns true for characters that can be part of a SQL identifier.

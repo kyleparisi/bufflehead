@@ -45,7 +45,7 @@ func TestBuildSchemaColumns(t *testing.T) {
 	}
 
 	// Check display format: "column_name  DATA_TYPE"
-	uid := findByInsert(items, "user_id")
+	uid := findByInsert(items, `"user_id"`)
 	if uid == nil {
 		t.Fatal("expected user_id in completions")
 	}
@@ -56,7 +56,7 @@ func TestBuildSchemaColumns(t *testing.T) {
 		t.Errorf("kind = %d, want KindVariable (%d)", uid.Kind, KindVariable)
 	}
 
-	uname := findByInsert(items, "username")
+	uname := findByInsert(items, `"username"`)
 	if uname == nil {
 		t.Fatal("expected username in completions")
 	}
@@ -78,7 +78,7 @@ func TestBuildSchemaColumnsSubstring(t *testing.T) {
 
 	found := 0
 	for _, v := range vars {
-		if v.InsertText == "created_at" || v.InsertText == "updated_at" {
+		if v.InsertText == `"created_at"` || v.InsertText == `"updated_at"` {
 			found++
 		}
 	}
@@ -145,10 +145,10 @@ func TestBuildTableColumns(t *testing.T) {
 	for _, v := range vars {
 		found[v.InsertText] = true
 	}
-	if !found["order_id"] {
+	if !found[`"order_id"`] {
 		t.Error("expected order_id in completions")
 	}
-	if !found["product_id"] {
+	if !found[`"product_id"`] {
 		t.Error("expected product_id in completions")
 	}
 }
@@ -244,7 +244,7 @@ func TestBuildDeduplicatesColumnAndKeyword(t *testing.T) {
 	items := Build("sel", cols, nil)
 
 	// The column should be present
-	col := findByInsert(items, "select")
+	col := findByInsert(items, `"select"`)
 	if col == nil {
 		t.Fatal("expected column 'select' in completions")
 	}
@@ -267,7 +267,7 @@ func TestBuildDeduplicatesColumnAndFunction(t *testing.T) {
 
 	items := Build("cou", cols, nil)
 
-	col := findByInsert(items, "count")
+	col := findByInsert(items, `"count"`)
 	if col == nil {
 		t.Fatal("expected column 'count' in completions")
 	}
@@ -300,7 +300,7 @@ func TestBuildDeduplicatesTableColumns(t *testing.T) {
 	vars := itemsOfKind(items, KindVariable)
 	idCount := 0
 	for _, v := range vars {
-		if v.InsertText == "id" {
+		if v.InsertText == `"id"` {
 			idCount++
 		}
 	}
@@ -420,7 +420,7 @@ func TestBuildColumnsBeforeKeywords(t *testing.T) {
 	if items[0].Kind != KindVariable {
 		t.Errorf("first item kind = %d, want KindVariable; items[0] = %+v", items[0].Kind, items[0])
 	}
-	if items[0].InsertText != "select_flag" {
-		t.Errorf("first item insert = %q, want %q", items[0].InsertText, "select_flag")
+	if items[0].InsertText != `"select_flag"` {
+		t.Errorf("first item insert = %q, want %q", items[0].InsertText, `"select_flag"`)
 	}
 }
