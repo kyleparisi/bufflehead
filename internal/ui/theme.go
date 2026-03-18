@@ -2,6 +2,7 @@ package ui
 
 import (
 	"graphics.gd/classdb/Control"
+	"graphics.gd/classdb/DisplayServer"
 	"graphics.gd/classdb/Image"
 	"graphics.gd/classdb/ImageTexture"
 	"graphics.gd/classdb/StyleBoxEmpty"
@@ -12,9 +13,44 @@ import (
 )
 
 // uiScale is the multiplier applied to all font sizes and layout dimensions.
-// Godot on macOS works in logical coordinates but its default sizing is
-// smaller than native macOS UI, so we scale up to match.
-const uiScale = 1.0
+// It is computed dynamically from the screen's physical pixel height so
+// that the UI remains readable on high-resolution displays.
+//
+// Using discrete scale factors inspired by the Godot 3D resolution-scaling
+// table, the physical pixel height maps to:
+//
+//	≤1080  (Full HD)     → 1.0
+//	≤1440  (QHD)         → 1.33
+//	≤2160  (Retina / 4K) → 1.5
+//	≤2880  (5K)          → 2.0
+//	>2880  (8K+)         → 2.0
+var uiScale float64 = 1.0
+
+// initScale computes uiScale from the primary screen's physical pixel
+// height. It should be called once during startup, after the Godot
+// DisplayServer is available.
+func initScale() {
+	screenSize := DisplayServer.ScreenGetSize()
+	physH := float64(screenSize.Y)
+	if physH <= 0 {
+		return // fallback: keep 1.0
+	}
+
+	// Map physical pixel height to a discrete scale factor.
+	var scale float64
+	switch {
+	case physH <= 1080: // 1080p
+		scale = 1.0
+	case physH <= 1440: // QHD
+		scale = 1.33
+	case physH <= 2160: // Retina laptops, 4K
+		scale = 1.5
+	default: // 5K, 8K+
+		scale = 2.0
+	}
+
+	uiScale = scale
+}
 
 // fontSize returns a scaled font size in logical points.
 func fontSize(base int) int {
@@ -23,7 +59,7 @@ func fontSize(base int) int {
 
 // scaled returns a scaled layout dimension in logical points.
 func scaled(base float32) float32 {
-	return base * uiScale
+	return base * float32(uiScale)
 }
 
 // Dark theme palette (TablePlus-inspired)

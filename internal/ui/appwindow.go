@@ -1054,7 +1054,7 @@ func createMainWindowFromRoot(rootWin Window.Instance, duck *db.DB, history *mod
 	rootWin.SetTitle("Bufflehead")
 	rootWin.SetSize(Vector2i.New(1440, 900))
 	rootWin.SetMinSize(Vector2i.New(1100, 720))
-	rootWin.SetContentScaleFactor(Float.X(1.0))
+	rootWin.SetContentScaleFactor(Float.X(uiScale))
 
 	aw := &AppWindow{
 		window:      rootWin,
@@ -1092,7 +1092,7 @@ func createSecondaryWindow(duck *db.DB, history *models.QueryHistory, onNewWindo
 	win.SetTitle("Bufflehead")
 	win.SetSize(Vector2i.New(1440, 900))
 	win.SetMinSize(Vector2i.New(1100, 720))
-	win.SetContentScaleFactor(Float.X(1.0))
+	win.SetContentScaleFactor(Float.X(uiScale))
 	// Custom title-bar extension behaves inconsistently across Macs.
 	// Keep a normal native title bar for now and render our app chrome below it.
 	win.SetExtendToTitle(false)
