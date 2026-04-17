@@ -5,10 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"sort"
 	"strings"
 
+	bfaws "bufflehead/internal/aws"
 	"bufflehead/internal/completion"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"bufflehead/internal/control"
 	"bufflehead/internal/db"
 	"bufflehead/internal/models"
@@ -145,6 +149,10 @@ func (t *TitleBar) Ready() {
 
 	margin.AsNode().AddChild(row.AsNode())
 	t.AsNode().AddChild(margin.AsNode())
+}
+
+func (t *TitleBar) SetConnectionInfo(driver, name, dbName string) {
+	t.infoLabel.SetText(driver + "  ·  " + name + "  ·  " + dbName)
 }
 
 func (t *TitleBar) SetFileInfo(path string) {
@@ -1723,6 +1731,7 @@ type App struct {
 
 	Duck          *db.DB          `gd:"-"`
 	ControlServer *control.Server `gd:"-"`
+	GatewayConfig *models.GatewayConfig `gd:"-"`
 
 	// Legacy accessor — points to active window's active tab state
 	State *models.AppState `gd:"-"`
@@ -1757,11 +1766,18 @@ func (a *App) initMainWindow() {
 		rootWin := tree.Root().AsWindow()
 		a.mainWin = createMainWindowFromRoot(rootWin, a.Duck, a.history, func() { a.newWindow() })
 		a.mainWin.titleBar.WindowID = rootWin.GetWindowId()
-		a.mainWin.addNewTab()
+
+		if a.GatewayConfig != nil && len(a.GatewayConfig.Gateways) > 0 {
+			a.showGatewayScreen()
+		} else {
+			a.mainWin.addNewTab()
+		}
 		rootWin.MoveToCenter()
 
 		// Handle close — quit the app when main window is closed
 		rootWin.OnCloseRequested(func() {
+			// Stop any gateway tunnels
+			a.stopGatewayTunnels()
 			tree.Quit()
 		})
 	}
@@ -1806,6 +1822,9 @@ func (a *App) initMainWindow() {
 		OnNewWindow: func() {
 			a.newWindow()
 		},
+		OnOpenGateway: func() {
+			a.openGatewayScreen()
+		},
 	}
 	a.appMenu.Setup()
 
@@ -1818,6 +1837,92 @@ func (a *App) initMainWindow() {
 			}
 			return json.Marshal(map[string]any{"tabCount": 0})
 		})
+	}
+}
+
+func (a *App) showGatewayScreen() {
+	w := a.mainWin
+	screen := new(GatewayScreen)
+	screen.SetGateways(a.GatewayConfig.Gateways)
+	screen.OnConnect = func(entry models.GatewayEntry, auth *bfaws.AuthManager, tunnel *bfaws.TunnelManager) {
+		// Hide gateway screen and transition to connected mode
+		screen.AsCanvasItem().SetVisible(false)
+		a.onGatewayConnected(entry, auth, tunnel)
+	}
+	screen.OnOpenLocal = func() {
+		screen.AsCanvasItem().SetVisible(false)
+		w.addNewTab()
+	}
+	screen.OnEditConfig = func() {
+		path := models.GatewayConfigPath()
+		cmd := exec.Command("open", path)
+		cmd.Start()
+	}
+
+	// Add gateway screen to emptyView (which is already visible)
+	// Clear default empty view children and add gateway screen
+	for w.emptyView.AsNode().GetChildCount() > 0 {
+		child := w.emptyView.AsNode().GetChild(0)
+		w.emptyView.AsNode().RemoveChild(child)
+		child.QueueFree()
+	}
+	w.emptyView.AsNode().AddChild(screen.AsNode())
+}
+
+func (a *App) onGatewayConnected(entry models.GatewayEntry, auth *bfaws.AuthManager, tunnel *bfaws.TunnelManager) {
+	w := a.mainWin
+	password := entry.ResolvePassword()
+
+	// For IAM auth, pass the AWS config; for password auth, pass nil
+	var awsCfg *aws.Config
+	if entry.UseIAMAuth() {
+		cfg := auth.Config()
+		awsCfg = &cfg
+	}
+
+	// rdsEndpoint is the real RDS host:port (for IAM token generation)
+	rdsEndpoint := fmt.Sprintf("%s:%d", entry.RDSHost, entry.RDSPort)
+
+	// Connect to Postgres via the tunnel (127.0.0.1:localPort)
+	RunOpenGateway("127.0.0.1", entry.LocalPort, rdsEndpoint, entry.DBName, entry.DBUser, password,
+		awsCfg, nextTabID, 0, w.results)
+	nextTabID++
+
+	// Store gateway info for creating the connection after async result
+	w.pendingGateway = &GatewayConnection{
+		Config: entry,
+		Auth:   auth,
+		Tunnel: tunnel,
+	}
+}
+
+func (a *App) openGatewayScreen() {
+	// Reload config from disk each time so edits are picked up
+	cfg, err := models.LoadGatewayConfig()
+	if err != nil {
+		fmt.Printf("gateway config error: %v\n", err)
+	}
+	if cfg == nil {
+		cfg = &models.GatewayConfig{}
+	}
+
+	a.GatewayConfig = cfg
+	a.showGatewayScreen()
+
+	// Show the empty view (which now contains the gateway screen)
+	w := a.mainWin
+	w.emptyView.AsCanvasItem().SetVisible(true)
+	w.split.AsCanvasItem().SetVisible(false)
+}
+
+func (a *App) stopGatewayTunnels() {
+	if a.mainWin == nil {
+		return
+	}
+	for _, conn := range a.mainWin.connections {
+		if conn.Gateway != nil && conn.Gateway.Tunnel != nil {
+			conn.Gateway.Tunnel.Stop()
+		}
 	}
 }
 
@@ -1943,6 +2048,8 @@ func (a *App) handleShortcut(key Input.Key, w *AppWindow) {
 		if a.appMenu != nil && a.appMenu.OnOpenFile != nil {
 			a.appMenu.OnOpenFile()
 		}
+	case Input.KeyG:
+		a.openGatewayScreen()
 	case Input.KeyBracketleft:
 		if w != nil {
 			w.navBack()
@@ -2007,7 +2114,7 @@ func (a *App) Process(delta Float.X) {
 
 	// Poll keyboard shortcuts (works across all windows)
 	if Input.IsKeyPressed(Input.KeyMeta) || Input.IsKeyPressed(Input.KeyCtrl) {
-		shortcuts := []Input.Key{Input.KeyQ, Input.KeyN, Input.KeyT, Input.KeyW, Input.KeyO, Input.KeyBracketleft, Input.KeyBracketright}
+		shortcuts := []Input.Key{Input.KeyQ, Input.KeyN, Input.KeyT, Input.KeyW, Input.KeyO, Input.KeyG, Input.KeyBracketleft, Input.KeyBracketright}
 		for _, k := range shortcuts {
 			if a.justPressed(k) {
 				a.handleShortcut(k, a.activeWindow())
@@ -2348,6 +2455,8 @@ func RegisterAll() {
 	classdb.Register[HistoryPanel]()
 	classdb.Register[RowDetailPanel]()
 	classdb.Register[StatusBar]()
+	classdb.Register[GatewayScreen]()
+	classdb.Register[GatewayInfoPanel]()
 	classdb.Register[App]()
 }
 

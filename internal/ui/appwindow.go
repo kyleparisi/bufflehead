@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	bfaws "bufflehead/internal/aws"
 	"bufflehead/internal/control"
 	"bufflehead/internal/db"
 	"bufflehead/internal/models"
@@ -29,12 +30,20 @@ import (
 
 // Connection represents an open database connection.
 type Connection struct {
-	Name   string
-	Path   string
-	DB     *db.DB
-	Tables []db.TableInfo
-	button Button.Instance
-	worker *ConnWorker
+	Name    string
+	Path    string
+	DB      db.Querier
+	Tables  []db.TableInfo
+	button  Button.Instance
+	worker  *ConnWorker
+	Gateway *GatewayConnection // nil for local connections
+}
+
+// GatewayConnection holds the gateway-specific state for a remote connection.
+type GatewayConnection struct {
+	Config models.GatewayEntry
+	Auth   *bfaws.AuthManager
+	Tunnel *bfaws.TunnelManager
 }
 
 var nextTabID uint64
@@ -68,6 +77,9 @@ type AppWindow struct {
 	skipPoll  bool // skip one frame of result polling so "Running…" renders
 
 	navWired bool
+
+	// Gateway
+	pendingGateway *GatewayConnection
 
 	// Callbacks
 	onNewWindow func()
@@ -767,7 +779,7 @@ func (w *AppWindow) handleOpenDBResult(res DBResult) {
 
 	path := res.DBPath
 	tables := res.Tables
-	dbConn := res.DB
+	dbConn := res.Querier
 
 	// Extract short name from path
 	name := path
@@ -880,7 +892,86 @@ func (w *AppWindow) handleDBResult(res DBResult) {
 		w.handleOpenFileResult(res)
 	case ReqOpenDB:
 		w.handleOpenDBResult(res)
+	case ReqOpenGateway:
+		w.handleOpenGatewayResult(res)
 	}
+}
+
+// handleOpenGatewayResult processes the result of an async gateway (Postgres) open.
+func (w *AppWindow) handleOpenGatewayResult(res DBResult) {
+	if res.Err != nil {
+		w.statusBar.SetStatus("Gateway error: " + res.Err.Error())
+		if ts := w.currentTab(); ts != nil {
+			ts.dataGrid.ShowError(res.Err.Error())
+		}
+		return
+	}
+
+	gw := w.pendingGateway
+	w.pendingGateway = nil
+	if gw == nil {
+		return
+	}
+
+	name := gw.Config.Name
+	pgConn := res.Querier
+	tables := res.Tables
+
+	// Create worker
+	pgWorker := NewConnWorker(pgConn, w.results)
+	pgWorker.Start()
+
+	conn := &Connection{
+		Name:    name,
+		Path:    fmt.Sprintf("postgresql://localhost:%d/%s", gw.Config.LocalPort, gw.Config.DBName),
+		DB:      pgConn,
+		Tables:  tables,
+		worker:  pgWorker,
+		Gateway: gw,
+	}
+
+	// Add button to rail
+	btn := Button.New()
+	btn.SetText(name)
+	btn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(10))
+	btn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(36), scaled(36)))
+	btn.SetClipText(true)
+	applySecondaryButtonTheme(btn.AsControl())
+	conn.button = btn
+
+	idx := len(w.connections)
+	w.connections = append(w.connections, conn)
+	w.connRail.AsNode().AddChild(btn.AsNode())
+	w.connRailWrap.AsCanvasItem().SetVisible(true)
+
+	btn.AsBaseButton().OnPressed(func() {
+		w.selectConnection(idx)
+	})
+
+	// Create a new tab bound to this connection
+	w.addNewTab()
+	ts := w.currentTab()
+	if ts != nil {
+		ts.State.IsDatabase = true
+		ts.connIdx = idx
+		ts.schema.SetTables(conn.Tables)
+		ts.sqlPanel.SetCompletionTables(conn.Tables)
+		ts.schema.OnTableClicked = func(tableName string) {
+			ts.State.ActiveTable = tableName
+			ts.State.UserSQL = fmt.Sprintf("SELECT * FROM %s", tableName)
+			ts.State.PageOffset = 0
+			ts.State.SortColumn = ""
+			ts.State.SortDir = models.SortNone
+			ts.sqlPanel.SetSQL(ts.State.UserSQL)
+			w.runCurrentQuery(nil)
+		}
+
+		// Update title bar for Postgres
+		w.titleBar.SetConnectionInfo("PostgreSQL", name, gw.Config.DBName)
+	}
+
+	w.selectConnection(idx)
+	w.statusBar.SetStatus(fmt.Sprintf("Connected: %s (%d tables/views)", name, len(tables)))
 }
 
 // handleQueryResult applies a query result to the UI.

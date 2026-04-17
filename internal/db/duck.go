@@ -220,6 +220,9 @@ func (d *DB) Metadata(path string) (map[string]string, error) {
 	return meta, nil
 }
 
+// Verify DB implements Querier at compile time.
+var _ Querier = (*DB)(nil)
+
 // DefaultQuery builds a simple SELECT * for a given parquet path.
 func DefaultQuery(path string) string {
 	return fmt.Sprintf("SELECT * FROM '%s'", path)
