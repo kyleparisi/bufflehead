@@ -15,6 +15,7 @@ import (
 	"graphics.gd/classdb/HBoxContainer"
 	"graphics.gd/classdb/Label"
 	"graphics.gd/classdb/LineEdit"
+	"graphics.gd/classdb/OptionButton"
 	"graphics.gd/classdb/PanelContainer"
 	"graphics.gd/classdb/ScrollContainer"
 	"graphics.gd/classdb/VBoxContainer"
@@ -67,10 +68,23 @@ type GatewayScreen struct {
 	ssoProfileName  string
 
 	// Connection form fields
-	formProfile   LineEdit.Instance
-	formRegion    LineEdit.Instance
-	formInstance  LineEdit.Instance
-	formRDSHost   LineEdit.Instance
+	formProfile      LineEdit.Instance
+	formRegion       LineEdit.Instance
+	formInstance     OptionButton.Instance
+	formInstanceBtn  Button.Instance
+	formInstanceIDs  []string // instance IDs corresponding to dropdown items
+	instancesLoading bool
+	instancesReady   bool
+	instancesErr     string
+	instancesResult  []bfaws.SSMInstance
+	formRDS          OptionButton.Instance
+	formRDSBtn       Button.Instance
+	formRDSData      []bfaws.RDSInstance // RDS instances for dropdown
+	rdsLoading       bool
+	rdsReady         bool
+	rdsErr           string
+	rdsResult        []bfaws.RDSInstance
+	formRDSHost      LineEdit.Instance
 	formRDSPort   LineEdit.Instance
 	formLocalPort LineEdit.Instance
 	formDBName    LineEdit.Instance
@@ -513,7 +527,38 @@ func (g *GatewayScreen) buildForm() PanelContainer.Instance {
 
 	g.formProfile = g.makeField(vbox, "AWS Profile", "e.g. my-sso-profile")
 	g.formRegion = g.makeField(vbox, "AWS Region", "e.g. us-east-1")
-	g.formInstance = g.makeField(vbox, "Bastion Instance ID", "e.g. i-0abc123def456")
+
+	// Bastion instance dropdown + refresh button
+	instanceVBox := VBoxContainer.New()
+	instanceVBox.AsControl().AddThemeConstantOverride("separation", 2)
+	instanceLbl := Label.New()
+	instanceLbl.SetText("Bastion Instance")
+	instanceLbl.AsControl().AddThemeFontSizeOverride("font_size", fontSize(10))
+	instanceLbl.AsControl().AddThemeColorOverride("font_color", colorTextMuted)
+	instanceVBox.AsNode().AddChild(instanceLbl.AsNode())
+
+	instanceRow := HBoxContainer.New()
+	instanceRow.AsControl().AddThemeConstantOverride("separation", 4)
+
+	g.formInstance = OptionButton.New()
+	g.formInstance.AddItem("Select an instance...")
+	g.formInstance.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	applyInputTheme(g.formInstance.AsControl())
+	g.formInstance.AsControl().AddThemeFontSizeOverride("font_size", fontSize(12))
+	instanceRow.AsNode().AddChild(g.formInstance.AsNode())
+
+	g.formInstanceBtn = Button.New()
+	g.formInstanceBtn.SetText("Load")
+	g.formInstanceBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
+	applySecondaryButtonTheme(g.formInstanceBtn.AsControl())
+	g.formInstanceBtn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(60), 0))
+	g.formInstanceBtn.AsBaseButton().OnPressed(func() {
+		g.onLoadInstances()
+	})
+	instanceRow.AsNode().AddChild(g.formInstanceBtn.AsNode())
+
+	instanceVBox.AsNode().AddChild(instanceRow.AsNode())
+	vbox.AsNode().AddChild(instanceVBox.AsNode())
 
 	// RDS section
 	rdsLabel := Label.New()
@@ -521,6 +566,41 @@ func (g *GatewayScreen) buildForm() PanelContainer.Instance {
 	rdsLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
 	rdsLabel.AsControl().AddThemeColorOverride("font_color", colorTextDim)
 	vbox.AsNode().AddChild(rdsLabel.AsNode())
+
+	// RDS instance dropdown + load button
+	rdsPickerVBox := VBoxContainer.New()
+	rdsPickerVBox.AsControl().AddThemeConstantOverride("separation", 2)
+	rdsPickerLbl := Label.New()
+	rdsPickerLbl.SetText("RDS Instance")
+	rdsPickerLbl.AsControl().AddThemeFontSizeOverride("font_size", fontSize(10))
+	rdsPickerLbl.AsControl().AddThemeColorOverride("font_color", colorTextMuted)
+	rdsPickerVBox.AsNode().AddChild(rdsPickerLbl.AsNode())
+
+	rdsPickerRow := HBoxContainer.New()
+	rdsPickerRow.AsControl().AddThemeConstantOverride("separation", 4)
+
+	g.formRDS = OptionButton.New()
+	g.formRDS.AddItem("Select an RDS instance...")
+	g.formRDS.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	applyInputTheme(g.formRDS.AsControl())
+	g.formRDS.AsControl().AddThemeFontSizeOverride("font_size", fontSize(12))
+	g.formRDS.OnItemSelected(func(index int) {
+		g.onRDSSelected(index)
+	})
+	rdsPickerRow.AsNode().AddChild(g.formRDS.AsNode())
+
+	g.formRDSBtn = Button.New()
+	g.formRDSBtn.SetText("Load")
+	g.formRDSBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
+	applySecondaryButtonTheme(g.formRDSBtn.AsControl())
+	g.formRDSBtn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(60), 0))
+	g.formRDSBtn.AsBaseButton().OnPressed(func() {
+		g.onLoadRDS()
+	})
+	rdsPickerRow.AsNode().AddChild(g.formRDSBtn.AsNode())
+
+	rdsPickerVBox.AsNode().AddChild(rdsPickerRow.AsNode())
+	vbox.AsNode().AddChild(rdsPickerVBox.AsNode())
 
 	g.formRDSHost = g.makeField(vbox, "RDS Host", "e.g. my-db.cluster-xyz.rds.amazonaws.com")
 
@@ -664,10 +744,88 @@ func (g *GatewayScreen) makeField(parent VBoxContainer.Instance, label, placehol
 	return input
 }
 
+func (g *GatewayScreen) onLoadInstances() {
+	profile := g.formProfile.Text()
+	region := g.formRegion.Text()
+	if profile == "" {
+		g.formStatus.SetText("Enter AWS Profile first")
+		g.formStatus.AsControl().AddThemeColorOverride("font_color", colorStatusRed)
+		return
+	}
+	if region == "" {
+		g.formStatus.SetText("Enter AWS Region first")
+		g.formStatus.AsControl().AddThemeColorOverride("font_color", colorStatusRed)
+		return
+	}
+
+	g.instancesLoading = true
+	g.formInstanceBtn.AsBaseButton().SetDisabled(true)
+	g.formInstanceBtn.SetText("...")
+	g.formStatus.SetText("Loading instances...")
+	g.formStatus.AsControl().AddThemeColorOverride("font_color", colorStatusYellow)
+
+	auth := bfaws.NewAuthManager(profile, region)
+	go func() {
+		instances, err := auth.ListSSMInstances()
+		if err != nil {
+			g.instancesErr = err.Error()
+		} else {
+			g.instancesResult = instances
+		}
+		g.instancesReady = true
+	}()
+}
+
+func (g *GatewayScreen) onLoadRDS() {
+	profile := g.formProfile.Text()
+	region := g.formRegion.Text()
+	if profile == "" {
+		g.formStatus.SetText("Enter AWS Profile first")
+		g.formStatus.AsControl().AddThemeColorOverride("font_color", colorStatusRed)
+		return
+	}
+	if region == "" {
+		g.formStatus.SetText("Enter AWS Region first")
+		g.formStatus.AsControl().AddThemeColorOverride("font_color", colorStatusRed)
+		return
+	}
+
+	g.rdsLoading = true
+	g.formRDSBtn.AsBaseButton().SetDisabled(true)
+	g.formRDSBtn.SetText("...")
+	g.formStatus.SetText("Loading RDS instances...")
+	g.formStatus.AsControl().AddThemeColorOverride("font_color", colorStatusYellow)
+
+	auth := bfaws.NewAuthManager(profile, region)
+	go func() {
+		instances, err := auth.ListRDSInstances()
+		if err != nil {
+			g.rdsErr = err.Error()
+		} else {
+			g.rdsResult = instances
+		}
+		g.rdsReady = true
+	}()
+}
+
+func (g *GatewayScreen) onRDSSelected(index int) {
+	if index <= 0 || index > len(g.formRDSData) {
+		return
+	}
+	rdsInst := g.formRDSData[index-1] // offset by 1 for placeholder
+	g.formRDSHost.SetText(rdsInst.Endpoint)
+	g.formRDSPort.SetText(strconv.Itoa(rdsInst.Port))
+}
+
 func (g *GatewayScreen) onFormConnect() {
 	profile := g.formProfile.Text()
 	region := g.formRegion.Text()
-	instanceID := g.formInstance.Text()
+	// Get selected instance ID from the dropdown
+	selectedIdx := g.formInstance.Selected()
+	var instanceID string
+	if selectedIdx > 0 && selectedIdx <= len(g.formInstanceIDs) {
+		instanceID = g.formInstanceIDs[selectedIdx-1] // offset by 1 for placeholder item
+	}
 	rdsHost := g.formRDSHost.Text()
 	rdsPortStr := g.formRDSPort.Text()
 	localPortStr := g.formLocalPort.Text()
@@ -1039,6 +1197,82 @@ func (g *GatewayScreen) Process(delta Float.X) {
 			g.ssoLog.AsCanvasItem().SetVisible(true)
 			g.ssoStatus.SetText("Waiting for browser authorization...")
 			g.ssoStatus.AsControl().AddThemeColorOverride("font_color", colorStatusYellow)
+		}
+	}
+
+	// ── Instance list updates ──
+	if g.instancesReady {
+		g.instancesReady = false
+		g.instancesLoading = false
+		g.formInstanceBtn.AsBaseButton().SetDisabled(false)
+		g.formInstanceBtn.SetText("Load")
+
+		if g.instancesErr != "" {
+			g.formStatus.SetText("Error loading instances: " + g.instancesErr)
+			g.formStatus.AsControl().AddThemeColorOverride("font_color", colorStatusRed)
+			g.instancesErr = ""
+		} else {
+			// Clear existing items and repopulate
+			g.formInstance.Clear()
+			g.formInstanceIDs = nil
+
+			if len(g.instancesResult) == 0 {
+				g.formInstance.AddItem("No online instances found")
+				g.formStatus.SetText("No SSM-managed instances are online")
+				g.formStatus.AsControl().AddThemeColorOverride("font_color", colorStatusYellow)
+			} else {
+				g.formInstance.AddItem(fmt.Sprintf("Select an instance (%d found)...", len(g.instancesResult)))
+				for _, inst := range g.instancesResult {
+					label := inst.InstanceID
+					if inst.Name != "" {
+						label = fmt.Sprintf("%s (%s)", inst.Name, inst.InstanceID)
+					}
+					if inst.IPAddress != "" {
+						label += " — " + inst.IPAddress
+					}
+					g.formInstance.AddItem(label)
+					g.formInstanceIDs = append(g.formInstanceIDs, inst.InstanceID)
+				}
+				g.formStatus.SetText(fmt.Sprintf("Found %d instance(s)", len(g.instancesResult)))
+				g.formStatus.AsControl().AddThemeColorOverride("font_color", colorStatusGreen)
+			}
+			g.instancesResult = nil
+		}
+	}
+
+	// ── RDS list updates ──
+	if g.rdsReady {
+		g.rdsReady = false
+		g.rdsLoading = false
+		g.formRDSBtn.AsBaseButton().SetDisabled(false)
+		g.formRDSBtn.SetText("Load")
+
+		if g.rdsErr != "" {
+			g.formStatus.SetText("Error loading RDS: " + g.rdsErr)
+			g.formStatus.AsControl().AddThemeColorOverride("font_color", colorStatusRed)
+			g.rdsErr = ""
+		} else {
+			g.formRDS.Clear()
+			g.formRDSData = nil
+
+			if len(g.rdsResult) == 0 {
+				g.formRDS.AddItem("No RDS instances found")
+				g.formStatus.SetText("No RDS instances found")
+				g.formStatus.AsControl().AddThemeColorOverride("font_color", colorStatusYellow)
+			} else {
+				g.formRDS.AddItem(fmt.Sprintf("Select an RDS instance (%d found)...", len(g.rdsResult)))
+				for _, inst := range g.rdsResult {
+					label := fmt.Sprintf("%s — %s:%d", inst.Identifier, inst.Endpoint, inst.Port)
+					if inst.Engine != "" {
+						label += " [" + inst.Engine + "]"
+					}
+					g.formRDS.AddItem(label)
+				}
+				g.formRDSData = g.rdsResult
+				g.formStatus.SetText(fmt.Sprintf("Found %d RDS instance(s)", len(g.rdsResult)))
+				g.formStatus.AsControl().AddThemeColorOverride("font_color", colorStatusGreen)
+			}
+			g.rdsResult = nil
 		}
 	}
 

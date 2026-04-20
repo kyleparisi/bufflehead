@@ -15,7 +15,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/aws/aws-sdk-go-v2/service/rds"
 	"github.com/aws/aws-sdk-go-v2/service/sso"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
 )
 
 // CredentialStatus represents the state of AWS credentials for a profile.
@@ -420,6 +422,184 @@ func (a *AuthManager) EnsureConfig(ctx context.Context) error {
 	}
 	a.cfg = cfg
 	return nil
+}
+
+// SSMInstance represents an EC2 instance registered with SSM.
+type SSMInstance struct {
+	InstanceID   string
+	Name         string // Name tag value
+	PlatformType string // e.g. "Linux", "Windows"
+	PingStatus   string // e.g. "Online", "ConnectionLost"
+	IPAddress    string
+}
+
+// ListSSMInstances lists instances managed by SSM that are currently online.
+// It enriches results with EC2 Name tags.
+func (a *AuthManager) ListSSMInstances() ([]SSMInstance, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	if err := a.EnsureConfig(ctx); err != nil {
+		return nil, fmt.Errorf("load aws config: %w", err)
+	}
+
+	ssmClient := ssm.NewFromConfig(a.cfg)
+	var instances []SSMInstance
+	var nextToken *string
+
+	for {
+		out, err := ssmClient.DescribeInstanceInformation(ctx, &ssm.DescribeInstanceInformationInput{
+			NextToken:  nextToken,
+			MaxResults: aws.Int32(50),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("describe instance information: %w", err)
+		}
+
+		for _, info := range out.InstanceInformationList {
+			inst := SSMInstance{
+				InstanceID:   deref(info.InstanceId),
+				Name:         deref(info.Name),
+				PlatformType: string(info.PlatformType),
+				PingStatus:   string(info.PingStatus),
+				IPAddress:    deref(info.IPAddress),
+			}
+			if inst.PingStatus == "Online" {
+				instances = append(instances, inst)
+			}
+		}
+
+		if out.NextToken == nil {
+			break
+		}
+		nextToken = out.NextToken
+	}
+
+	// Enrich with EC2 Name tags
+	if len(instances) > 0 {
+		var ids []string
+		for _, inst := range instances {
+			ids = append(ids, inst.InstanceID)
+		}
+		ec2Client := ec2.NewFromConfig(a.cfg)
+		out, err := ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
+			InstanceIds: ids,
+		})
+		if err == nil {
+			nameMap := make(map[string]string)
+			for _, res := range out.Reservations {
+				for _, inst := range res.Instances {
+					for _, tag := range inst.Tags {
+						if deref(tag.Key) == "Name" {
+							nameMap[deref(inst.InstanceId)] = deref(tag.Value)
+						}
+					}
+				}
+			}
+			for i := range instances {
+				if name, ok := nameMap[instances[i].InstanceID]; ok {
+					instances[i].Name = name
+				}
+			}
+		}
+		// Non-fatal if EC2 enrichment fails — we still have instance IDs
+	}
+
+	return instances, nil
+}
+
+// RDSInstance represents an RDS database instance or cluster.
+type RDSInstance struct {
+	Identifier string // DB instance or cluster identifier
+	Engine     string // e.g. "postgres", "aurora-postgresql", "mysql"
+	Endpoint   string // hostname
+	Port       int    // e.g. 5432
+}
+
+// ListRDSInstances lists RDS instances and Aurora clusters.
+func (a *AuthManager) ListRDSInstances() ([]RDSInstance, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	if err := a.EnsureConfig(ctx); err != nil {
+		return nil, fmt.Errorf("load aws config: %w", err)
+	}
+
+	client := rds.NewFromConfig(a.cfg)
+	var results []RDSInstance
+
+	// List Aurora clusters (reader/writer endpoints)
+	var clusterToken *string
+	for {
+		out, err := client.DescribeDBClusters(ctx, &rds.DescribeDBClustersInput{
+			Marker: clusterToken,
+		})
+		if err != nil {
+			break // non-fatal, fall through to instances
+		}
+		for _, c := range out.DBClusters {
+			port := 5432
+			if c.Port != nil {
+				port = int(*c.Port)
+			}
+			if c.Endpoint != nil {
+				results = append(results, RDSInstance{
+					Identifier: deref(c.DBClusterIdentifier) + " (writer)",
+					Engine:     deref(c.Engine),
+					Endpoint:   *c.Endpoint,
+					Port:       port,
+				})
+			}
+			if c.ReaderEndpoint != nil {
+				results = append(results, RDSInstance{
+					Identifier: deref(c.DBClusterIdentifier) + " (reader)",
+					Engine:     deref(c.Engine),
+					Endpoint:   *c.ReaderEndpoint,
+					Port:       port,
+				})
+			}
+		}
+		if out.Marker == nil {
+			break
+		}
+		clusterToken = out.Marker
+	}
+
+	// List standalone RDS instances
+	var instanceToken *string
+	for {
+		out, err := client.DescribeDBInstances(ctx, &rds.DescribeDBInstancesInput{
+			Marker: instanceToken,
+		})
+		if err != nil {
+			break
+		}
+		for _, db := range out.DBInstances {
+			// Skip instances that belong to a cluster (already covered above)
+			if db.DBClusterIdentifier != nil {
+				continue
+			}
+			if db.Endpoint == nil {
+				continue
+			}
+			port := 5432
+			if db.Endpoint.Port != nil {
+				port = int(*db.Endpoint.Port)
+			}
+			results = append(results, RDSInstance{
+				Identifier: deref(db.DBInstanceIdentifier),
+				Engine:     deref(db.Engine),
+				Endpoint:   deref(db.Endpoint.Address),
+				Port:       port,
+			})
+		}
+		if out.Marker == nil {
+			break
+		}
+		instanceToken = out.Marker
+	}
+
+	return results, nil
 }
 
 // ResolveInstanceID finds a bastion instance by tags using EC2 DescribeInstances.

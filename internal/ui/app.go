@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+	"time"
 
 	bfaws "bufflehead/internal/aws"
 	"bufflehead/internal/completion"
@@ -62,10 +63,13 @@ import (
 type TitleBar struct {
 	PanelContainer.Extension[TitleBar] `gd:"TitleBar"`
 
-	infoLabel  Label.Instance
-	NavBackBtn Button.Instance
-	NavFwdBtn  Button.Instance
-	WindowID   int
+	infoLabel     Label.Instance
+	copyBtn       Button.Instance
+	aiPrompt      string
+	NavBackBtn    Button.Instance
+	NavFwdBtn     Button.Instance
+	WindowID      int
+	resetCopyText bool // set by goroutine, read by Process on main thread
 }
 
 func (t *TitleBar) GuiInput(event InputEvent.Instance) {
@@ -121,12 +125,38 @@ func (t *TitleBar) Ready() {
 	applyPillTheme(pill.AsControl())
 	pill.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	pill.AsControl().AsControl().SetSizeFlagsStretchRatio(2)
+
+	pillRow := HBoxContainer.New()
+	pillRow.AsControl().AddThemeConstantOverride("separation", 6)
+	pillRow.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+
 	t.infoLabel = Label.New()
 	t.infoLabel.SetText("DuckDB  ·  In-Memory  ·  No file loaded")
 	t.infoLabel.AsControl().AddThemeColorOverride("font_color", colorText)
 	t.infoLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(13))
 	t.infoLabel.SetHorizontalAlignment(1) // center
-	pill.AsNode().AddChild(t.infoLabel.AsNode())
+	t.infoLabel.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+
+	t.copyBtn = Button.New()
+	t.copyBtn.SetText("AI ⎘")
+	t.copyBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(10))
+	applySecondaryButtonTheme(t.copyBtn.AsControl())
+	t.copyBtn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(40), 0))
+	t.copyBtn.AsCanvasItem().SetVisible(false)
+	t.copyBtn.AsBaseButton().OnPressed(func() {
+		if t.aiPrompt != "" {
+			DisplayServer.ClipboardSet(t.aiPrompt)
+			t.copyBtn.SetText("Copied!")
+			go func() {
+				<-time.After(1500 * time.Millisecond)
+				t.resetCopyText = true
+			}()
+		}
+	})
+
+	pillRow.AsNode().AddChild(t.infoLabel.AsNode())
+	pillRow.AsNode().AddChild(t.copyBtn.AsNode())
+	pill.AsNode().AddChild(pillRow.AsNode())
 
 	// Right spacer (25%)
 	rightSpacer := Control.New()
@@ -138,6 +168,7 @@ func (t *TitleBar) Ready() {
 	row.AsControl().SetMouseFilter(Control.MouseFilterPass)
 	leftSpacer.SetMouseFilter(Control.MouseFilterPass)
 	pill.AsControl().SetMouseFilter(Control.MouseFilterPass)
+	pillRow.AsControl().SetMouseFilter(Control.MouseFilterPass)
 	t.infoLabel.AsControl().SetMouseFilter(Control.MouseFilterPass)
 	rightSpacer.SetMouseFilter(Control.MouseFilterPass)
 
@@ -151,8 +182,21 @@ func (t *TitleBar) Ready() {
 	t.AsNode().AddChild(margin.AsNode())
 }
 
+func (t *TitleBar) Process(delta Float.X) {
+	if t.resetCopyText {
+		t.resetCopyText = false
+		t.copyBtn.SetText("AI ⎘")
+	}
+}
+
 func (t *TitleBar) SetConnectionInfo(driver, name, dbName string) {
 	t.infoLabel.SetText(driver + "  ·  " + name + "  ·  " + dbName)
+}
+
+func (t *TitleBar) SetAIPrompt(prompt string) {
+	t.aiPrompt = prompt
+	t.copyBtn.AsCanvasItem().SetVisible(prompt != "")
+	t.copyBtn.SetText("AI ⎘")
 }
 
 func (t *TitleBar) SetFileInfo(path string) {
@@ -275,6 +319,7 @@ func (s *SchemaPanel) Ready() {
 	})
 
 	s.tree = Tree.New()
+	s.tree.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	s.tree.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
 	s.tree.SetHideRoot(true)
 	applySidebarTreeTheme(s.tree.AsControl())
@@ -521,6 +566,8 @@ func (s *SchemaPanel) filterTables(query string) {
 	q := strings.ToLower(query)
 	s.tree.Clear()
 	s.tree.SetColumns(2)
+	s.tree.SetColumnExpand(0, true)
+	s.tree.SetColumnExpand(1, false)
 	root := s.tree.CreateItem()
 
 	// Group: Tables
@@ -1837,6 +1884,49 @@ func (a *App) initMainWindow() {
 			}
 			return json.Marshal(map[string]any{"tabCount": 0})
 		})
+
+		a.ControlServer.SetSQLExecutor(func(connName, sql string, limit int) (*control.SQLResult, error) {
+			w := a.activeWindow()
+			if w == nil {
+				return nil, fmt.Errorf("no active window")
+			}
+
+			// Find connection by name (empty = active connection)
+			var conn *Connection
+			if connName == "" {
+				if w.activeConnIdx >= 0 && w.activeConnIdx < len(w.connections) {
+					conn = w.connections[w.activeConnIdx]
+				}
+			} else {
+				for _, c := range w.connections {
+					if c.Name == connName {
+						conn = c
+						break
+					}
+				}
+			}
+			if conn == nil {
+				return nil, fmt.Errorf("connection %q not found", connName)
+			}
+
+			result, err := conn.DB.Query(sql, 0, limit)
+			if err != nil {
+				return nil, err
+			}
+			columns := result.Columns
+			if columns == nil {
+				columns = []string{}
+			}
+			rows := result.Rows
+			if rows == nil {
+				rows = [][]string{}
+			}
+			return &control.SQLResult{
+				Columns: columns,
+				Rows:    rows,
+				Total:   result.Total,
+			}, nil
+		})
 	}
 }
 
@@ -1845,8 +1935,9 @@ func (a *App) showGatewayScreen() {
 	screen := new(GatewayScreen)
 	screen.SetGateways(a.GatewayConfig.Gateways)
 	screen.OnConnect = func(entry models.GatewayEntry, auth *bfaws.AuthManager, tunnel *bfaws.TunnelManager) {
-		// Hide gateway screen and transition to connected mode
+		// Replace gateway screen with loading indicator
 		screen.AsCanvasItem().SetVisible(false)
+		a.showGatewayLoading(entry.Name)
 		a.onGatewayConnected(entry, auth, tunnel)
 	}
 	screen.OnOpenLocal = func() {
@@ -1867,6 +1958,42 @@ func (a *App) showGatewayScreen() {
 		child.QueueFree()
 	}
 	w.emptyView.AsNode().AddChild(screen.AsNode())
+}
+
+func (a *App) showGatewayLoading(name string) {
+	w := a.mainWin
+	// Clear emptyView children (gateway screen is hidden but still a child)
+	for w.emptyView.AsNode().GetChildCount() > 0 {
+		child := w.emptyView.AsNode().GetChild(0)
+		if !child.IsInsideTree() {
+			break
+		}
+		w.emptyView.AsNode().RemoveChild(child)
+		child.QueueFree()
+	}
+
+	loadingBox := VBoxContainer.New()
+	loadingBox.AsControl().SetSizeFlagsHorizontal(Control.SizeShrinkCenter)
+	loadingBox.AsControl().SetSizeFlagsVertical(Control.SizeShrinkCenter)
+	loadingBox.AsControl().AddThemeConstantOverride("separation", 12)
+
+	titleLabel := Label.New()
+	titleLabel.SetText("Connecting to " + name + "...")
+	titleLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(16))
+	titleLabel.AsControl().AddThemeColorOverride("font_color", colorText)
+	titleLabel.SetHorizontalAlignment(1)
+
+	statusLabel := Label.New()
+	statusLabel.SetText("Loading schema...")
+	statusLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(12))
+	statusLabel.AsControl().AddThemeColorOverride("font_color", colorTextDim)
+	statusLabel.SetHorizontalAlignment(1)
+
+	loadingBox.AsNode().AddChild(titleLabel.AsNode())
+	loadingBox.AsNode().AddChild(statusLabel.AsNode())
+	w.emptyView.AsNode().AddChild(loadingBox.AsNode())
+
+	w.statusBar.SetStatus("Connecting to " + name + "...")
 }
 
 func (a *App) onGatewayConnected(entry models.GatewayEntry, auth *bfaws.AuthManager, tunnel *bfaws.TunnelManager) {

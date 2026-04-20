@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 
+	"bufflehead/internal/db"
 	"bufflehead/internal/models"
 
 	"graphics.gd/classdb/Button"
@@ -21,13 +22,35 @@ type GatewayInfoPanel struct {
 	VBoxContainer.Extension[GatewayInfoPanel] `gd:"GatewayInfoPanel"`
 
 	entry        models.GatewayEntry
+	tables       []db.TableInfo
 	statusLabel  Label.Instance
 	uptimeLabel  Label.Instance
+	aiSnippetBox VBoxContainer.Instance // container for AI prompt snippet, populated after tables load
 	OnDisconnect func()
 }
 
 func (p *GatewayInfoPanel) SetEntry(entry models.GatewayEntry) {
 	p.entry = entry
+}
+
+func (p *GatewayInfoPanel) SetTables(tables []db.TableInfo) {
+	p.tables = tables
+	if p.aiSnippetBox.AsNode().GetChildCount() > 0 {
+		// Clear and rebuild
+		for p.aiSnippetBox.AsNode().GetChildCount() > 0 {
+			child := p.aiSnippetBox.AsNode().GetChild(0)
+			p.aiSnippetBox.AsNode().RemoveChild(child)
+			child.QueueFree()
+		}
+	}
+	prompt := p.buildAIPrompt()
+	// Truncate display to keep it readable
+	display := prompt
+	if len(display) > 600 {
+		display = display[:600] + "\n..."
+	}
+	snippet := p.makeSnippet("AI Prompt", display, prompt)
+	p.aiSnippetBox.AsNode().AddChild(snippet.AsNode())
 }
 
 func (p *GatewayInfoPanel) Ready() {
@@ -106,6 +129,22 @@ func (p *GatewayInfoPanel) Ready() {
 	mcpDisplay := fmt.Sprintf(`{"mcpServers":{"pg":{"command":"npx","args":["-y","@modelcontextprotocol/server-postgres","%s"]}}}`, connURL)
 	content.AsNode().AddChild(p.makeSnippet("Claude MCP config", mcpDisplay, mcpConfig).AsNode())
 
+	// AI Prompt snippet (placeholder — populated when SetTables is called)
+	p.aiSnippetBox = VBoxContainer.New()
+	p.aiSnippetBox.AsControl().AddThemeConstantOverride("separation", 4)
+	content.AsNode().AddChild(p.aiSnippetBox.AsNode())
+
+	// If tables are already set, build the snippet now
+	if len(p.tables) > 0 {
+		prompt := p.buildAIPrompt()
+		display := prompt
+		if len(display) > 600 {
+			display = display[:600] + "\n..."
+		}
+		snippet := p.makeSnippet("AI Prompt", display, prompt)
+		p.aiSnippetBox.AsNode().AddChild(snippet.AsNode())
+	}
+
 	// Disconnect button
 	disconnectBtn := Button.New()
 	disconnectBtn.SetText("Disconnect")
@@ -120,6 +159,10 @@ func (p *GatewayInfoPanel) Ready() {
 
 	scroll.AsNode().AddChild(content.AsNode())
 	p.AsNode().AddChild(scroll.AsNode())
+}
+
+func (p *GatewayInfoPanel) buildAIPrompt() string {
+	return buildAIPrompt(p.entry, p.tables)
 }
 
 func (p *GatewayInfoPanel) SetStatus(status string) {

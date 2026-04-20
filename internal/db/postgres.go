@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os/user"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	rdsauth "github.com/aws/aws-sdk-go-v2/feature/rds/auth"
@@ -34,9 +35,12 @@ func NewPostgresIAM(connectHost string, connectPort int, rdsEndpoint, dbName, us
 	return newPostgres(connectHost, connectPort, dbName, user, token, "require")
 }
 
-func newPostgres(host string, port int, dbName, user, password, sslMode string) (*PostgresDB, error) {
+func newPostgres(host string, port int, dbName, dbUser, password, sslMode string) (*PostgresDB, error) {
 	dsn := fmt.Sprintf("host=%s port=%d dbname=%s user=%s password=%s sslmode=%s",
-		host, port, dbName, user, password, sslMode)
+		host, port, dbName, dbUser, password, sslMode)
+	if u, err := user.Current(); err == nil {
+		dsn += " application_name=" + u.Username
+	}
 
 	conn, err := sql.Open("pgx", dsn)
 	if err != nil {

@@ -177,6 +177,9 @@ func (d *DB) Query(virtualSQL string, offset, limit int) (*QueryResult, error) {
 
 // formatValue converts a scanned database value to its display string.
 func formatValue(v any) string {
+	if v == nil {
+		return ""
+	}
 	switch val := v.(type) {
 	case []byte:
 		if len(val) == 16 {
