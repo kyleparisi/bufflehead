@@ -50,6 +50,17 @@ type ResizeData struct {
 	Scale  float64 `json:"scale,omitempty"`
 }
 
+// DesignerClickData is the payload for designer hover/click.
+type DesignerClickData struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+}
+
+// DesignerFindData is the payload for designer find-by-name.
+type DesignerFindData struct {
+	Name string `json:"name"`
+}
+
 // StateProvider returns the current app state as JSON.
 type StateProvider func() (json.RawMessage, error)
 
@@ -158,6 +169,36 @@ func (s *Server) Start() {
 
 	mux.HandleFunc("POST /nav-forward", func(w http.ResponseWriter, r *http.Request) {
 		s.handleCommand(w, r, "nav_forward")
+	})
+
+	mux.HandleFunc("POST /designer-open", func(w http.ResponseWriter, r *http.Request) {
+		s.handleCommand(w, r, "designer_open")
+	})
+
+	mux.HandleFunc("POST /designer-close", func(w http.ResponseWriter, r *http.Request) {
+		s.handleCommand(w, r, "designer_close")
+	})
+
+	mux.HandleFunc("POST /designer-find", func(w http.ResponseWriter, r *http.Request) {
+		s.handleCommand(w, r, "designer_find")
+	})
+
+	mux.HandleFunc("POST /designer-click", func(w http.ResponseWriter, r *http.Request) {
+		s.handleCommand(w, r, "designer_click")
+	})
+
+	mux.HandleFunc("GET /designer-state", func(w http.ResponseWriter, r *http.Request) {
+		cmd := &Command{
+			Action: "designer_state",
+			result: make(chan Result, 1),
+		}
+		s.commands <- cmd
+		res := <-cmd.result
+		w.Header().Set("Content-Type", "application/json")
+		if !res.OK {
+			w.WriteHeader(400)
+		}
+		json.NewEncoder(w).Encode(res)
 	})
 
 	mux.HandleFunc("GET /screenshot", func(w http.ResponseWriter, r *http.Request) {

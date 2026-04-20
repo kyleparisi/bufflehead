@@ -15,6 +15,7 @@ import (
 	"graphics.gd/classdb/Control"
 	"graphics.gd/classdb/HBoxContainer"
 	"graphics.gd/classdb/HSplitContainer"
+	"graphics.gd/classdb/SplitContainer"
 	"graphics.gd/classdb/Label"
 	"graphics.gd/classdb/MarginContainer"
 	"graphics.gd/classdb/PanelContainer"
@@ -51,9 +52,10 @@ type AppWindow struct {
 	statusBar  *StatusBar
 	tabBar     TabBar.Instance
 	tabBarWrap MarginContainer.Instance
+	mainColumn   VBoxContainer.Instance // tabBar + split
 	split        HSplitContainer.Instance
 	sidebarCol   VBoxContainer.Instance // left side of split, holds per-tab sidebars
-	contentCol   VBoxContainer.Instance // right side of split, holds tabbar + per-tab content
+	contentCol   VBoxContainer.Instance // right side of split, holds per-tab content
 	emptyView    VBoxContainer.Instance
 
 	// Connection rail
@@ -80,12 +82,14 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 	w.results = make(chan DBResult, 16)
 
 	bg := PanelContainer.New()
+	bg.AsNode().SetName("bg")
 	bg.AsControl().SetAnchorsAndOffsetsPreset(Control.PresetFullRect)
 	bg.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	bg.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
 	applyPanelBg(bg.AsControl(), colorBg)
 
 	outerVBox := VBoxContainer.New()
+	outerVBox.AsNode().SetName("outerVBox")
 	outerVBox.AsControl().SetAnchorsAndOffsetsPreset(Control.PresetFullRect)
 	outerVBox.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	outerVBox.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
@@ -96,11 +100,11 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 
 	// (toolbar removed)
 
-	// Tab bar - slightly more breathing room
+	// Tab bar
 	w.tabBarWrap = MarginContainer.New()
 	w.tabBarWrap.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
-	w.tabBarWrap.AsControl().AddThemeConstantOverride("margin_left", 12)
-	w.tabBarWrap.AsControl().AddThemeConstantOverride("margin_right", 12)
+	w.tabBarWrap.AsControl().AddThemeConstantOverride("margin_left", 10)
+	w.tabBarWrap.AsControl().AddThemeConstantOverride("margin_right", 10)
 	w.tabBarWrap.AsControl().AddThemeConstantOverride("margin_top", 0)
 	w.tabBarWrap.AsControl().AddThemeConstantOverride("margin_bottom", 0)
 
@@ -119,17 +123,16 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 	w.split = HSplitContainer.New()
 	w.split.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	w.split.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
-	w.split.AsSplitContainer().SetSplitOffset(220)
+	w.split.AsSplitContainer().SetSplitOffset(248)
 	w.split.AsControl().AddThemeConstantOverride("separation", 1)
 	w.split.AsControl().SetClipContents(true)
 
-	// Content column (tab bar + per-tab content) — right side of outer split
+	// Content column (holds per-tab outerWrap only; tabBar lives above split)
 	w.contentCol = VBoxContainer.New()
 	w.contentCol.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	w.contentCol.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
 	w.contentCol.AsControl().AddThemeConstantOverride("separation", 0)
 	w.contentCol.AsControl().SetClipContents(true)
-	w.contentCol.AsNode().AddChild(w.tabBarWrap.AsNode())
 
 	// Sidebar column: holds per-tab sidebars (show/hide)
 	w.sidebarCol = VBoxContainer.New()
@@ -141,14 +144,14 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 	w.split.AsNode().AddChild(w.sidebarCol.AsNode())
 	w.split.AsNode().AddChild(w.contentCol.AsNode())
 
-	// Status bar - more padding for breathing room
+	// Status bar — 26px, left-weighted
 	statusWrap := PanelContainer.New()
 	applyPanelBg(statusWrap.AsControl(), colorBgSidebar)
 	statusMargin := MarginContainer.New()
-	statusMargin.AsControl().AddThemeConstantOverride("margin_top", 6)
+	statusMargin.AsControl().AddThemeConstantOverride("margin_top", 3)
 	statusMargin.AsControl().AddThemeConstantOverride("margin_left", 12)
-	statusMargin.AsControl().AddThemeConstantOverride("margin_right", 12)
-	statusMargin.AsControl().AddThemeConstantOverride("margin_bottom", 6)
+	statusMargin.AsControl().AddThemeConstantOverride("margin_right", 10)
+	statusMargin.AsControl().AddThemeConstantOverride("margin_bottom", 3)
 
 	w.statusBar = new(StatusBar)
 	w.statusBar.OnPrevPage = func() {
@@ -223,33 +226,36 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 	emptyCenter.AsNode().AddChild(emptyHint.AsNode())
 	w.emptyView.AsNode().AddChild(emptyCenter.AsNode())
 
-	// Connection rail (far-left column)
+	// Connection rail (far-left column) — 48px with "+" add button
 	w.connRailWrap = PanelContainer.New()
+	w.connRailWrap.AsNode().SetName("connRailWrap")
 	w.connRailWrap.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
-	w.connRailWrap.AsControl().SetCustomMinimumSize(Vector2.New(scaled(36), 0))
-	applyPanelBg(w.connRailWrap.AsControl(), colorBgDarker)
+	w.connRailWrap.AsControl().SetCustomMinimumSize(Vector2.New(scaled(48), 0))
+	applyPanelBg(w.connRailWrap.AsControl(), colorBgSidebar)
 
 	railMargin := MarginContainer.New()
+	railMargin.AsNode().SetName("railMargin")
 	railMargin.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	railMargin.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
-	railMargin.AsControl().AddThemeConstantOverride("margin_top", 4)
-	railMargin.AsControl().AddThemeConstantOverride("margin_left", 4)
-	railMargin.AsControl().AddThemeConstantOverride("margin_right", 4)
-	railMargin.AsControl().AddThemeConstantOverride("margin_bottom", 4)
+	railMargin.AsControl().AddThemeConstantOverride("margin_top", 10)
+	railMargin.AsControl().AddThemeConstantOverride("margin_left", 8)
+	railMargin.AsControl().AddThemeConstantOverride("margin_right", 8)
+	railMargin.AsControl().AddThemeConstantOverride("margin_bottom", 10)
 
 	w.connRail = VBoxContainer.New()
+	w.connRail.AsNode().SetName("connRail")
 	w.connRail.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
-	w.connRail.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
-	w.connRail.AsControl().AddThemeConstantOverride("separation", 4)
+	w.connRail.AsControl().AddThemeConstantOverride("separation", 6)
 
 	railMargin.AsNode().AddChild(w.connRail.AsNode())
 	w.connRailWrap.AsNode().AddChild(railMargin.AsNode())
 
 	// Memory connection is always index 0
 	memBtn := Button.New()
+	memBtn.AsNode().SetName("memBtn")
 	memBtn.SetText("mem")
 	memBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(10))
-	memBtn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(36), scaled(36)))
+	memBtn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(32), scaled(32)))
 	memBtn.SetClipText(true)
 	applyActiveButtonTheme(memBtn.AsControl()) // active by default
 	memWorker := NewConnWorker(w.duck, w.results)
@@ -269,20 +275,59 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 		w.selectConnection(0)
 	})
 
-	// Content area (rail | main)
-	contentHBox := HBoxContainer.New()
-	contentHBox.AsControl().SetAnchorsAndOffsetsPreset(Control.PresetFullRect)
-	contentHBox.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
-	contentHBox.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
-	contentHBox.AsControl().AddThemeConstantOverride("separation", 0)
-	contentHBox.AsNode().AddChild(w.connRailWrap.AsNode())
-	contentHBox.AsNode().AddChild(w.split.AsNode())
-	contentHBox.AsNode().AddChild(w.emptyView.AsNode())
+	// Push a flexible spacer so added connections appear after mem,
+	// and the "+ add connection" tile sits at the bottom of the rail.
+	railSpacer := Control.New()
+	railSpacer.AsNode().SetName("railSpacer")
+	railSpacer.SetSizeFlagsVertical(Control.SizeExpandFill)
+	w.connRail.AsNode().AddChild(railSpacer.AsNode())
 
-	// Assemble — tab bar is added per-tab inside rightPanel now
-	outerVBox.AsNode().AddChild(w.titleBar.AsNode())
-	outerVBox.AsNode().AddChild(contentHBox.AsNode())
-	outerVBox.AsNode().AddChild(statusWrap.AsNode())
+	addConnBtn := Button.New()
+	addConnBtn.AsNode().SetName("addConnBtn")
+	addConnBtn.SetText("+")
+	addConnBtn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(32), scaled(32)))
+	addConnBtn.AsControl().SetTooltipText("Open database…")
+	addConnBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(14))
+	applySecondaryButtonTheme(addConnBtn.AsControl())
+	w.connRail.AsNode().AddChild(addConnBtn.AsNode())
+
+	// Content area (rail | (tabBar + split))
+	w.mainColumn = VBoxContainer.New()
+	w.mainColumn.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	w.mainColumn.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
+	w.mainColumn.AsControl().AddThemeConstantOverride("separation", 0)
+	w.mainColumn.AsNode().AddChild(w.tabBarWrap.AsNode())
+	w.mainColumn.AsNode().AddChild(w.split.AsNode())
+
+	// Right column: titlebar + main content + status bar
+	rightColumn := VBoxContainer.New()
+	rightColumn.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	rightColumn.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
+	rightColumn.AsControl().AddThemeConstantOverride("separation", 0)
+
+	// Status bar top border
+	statusLine := PanelContainer.New()
+	statusLine.AsControl().SetCustomMinimumSize(Vector2.New(0, 1))
+	statusLine.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	applyPanelBg(statusLine.AsControl(), colorBorder)
+
+	rightColumn.AsNode().AddChild(w.titleBar.AsNode())
+	rightColumn.AsNode().AddChild(w.mainColumn.AsNode())
+	rightColumn.AsNode().AddChild(w.emptyView.AsNode())
+	rightColumn.AsNode().AddChild(statusLine.AsNode())
+	rightColumn.AsNode().AddChild(statusWrap.AsNode())
+
+	// Outer HBox: connRail (full height) | rightColumn
+	outerHBox := HBoxContainer.New()
+	outerHBox.AsNode().SetName("outerHBox")
+	outerHBox.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	outerHBox.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
+	outerHBox.AsControl().AddThemeConstantOverride("separation", 0)
+	outerHBox.AsNode().AddChild(w.connRailWrap.AsNode())
+	outerHBox.AsNode().AddChild(rightColumn.AsNode())
+
+	// Assemble — outerVBox only holds the HBox now (+ emptyView when no tabs)
+	outerVBox.AsNode().AddChild(outerHBox.AsNode())
 
 	bg.AsNode().AddChild(outerVBox.AsNode())
 
@@ -321,7 +366,7 @@ func (w *AppWindow) addNewTab() {
 	nextTabID++
 	ts := &tabState{State: models.NewAppState(), connIdx: 0, tabID: tid} // default to Memory connection
 
-	// Sidebar - 12px horizontal, 8px vertical padding
+	// Sidebar — 10px gutters, 8px vertical padding
 	ts.sidebarWrap = PanelContainer.New()
 	ts.sidebarWrap.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
 	ts.sidebarWrap.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
@@ -332,8 +377,8 @@ func (w *AppWindow) addNewTab() {
 	sidebarMargin.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	sidebarMargin.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
 	sidebarMargin.AsControl().AddThemeConstantOverride("margin_top", 8)
-	sidebarMargin.AsControl().AddThemeConstantOverride("margin_left", 12)
-	sidebarMargin.AsControl().AddThemeConstantOverride("margin_right", 12)
+	sidebarMargin.AsControl().AddThemeConstantOverride("margin_left", 10)
+	sidebarMargin.AsControl().AddThemeConstantOverride("margin_right", 10)
 	sidebarMargin.AsControl().AddThemeConstantOverride("margin_bottom", 8)
 
 	sidebarVBox := VBoxContainer.New()
@@ -341,24 +386,28 @@ func (w *AppWindow) addNewTab() {
 	sidebarVBox.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
 	sidebarVBox.AsControl().AddThemeConstantOverride("separation", 8)
 
-	// Tab selector: Items | History (TablePlus-style)
+	// Segmented control: Items | History
+	selectorTrack := PanelContainer.New()
+	selectorTrack.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	applySegmentedControlTrack(selectorTrack.AsControl())
+
 	selectorRow := HBoxContainer.New()
-	selectorRow.AsControl().AddThemeConstantOverride("separation", 0)
+	selectorRow.AsControl().AddThemeConstantOverride("separation", 2)
+	selectorRow.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 
 	schemaBtn := Button.New()
 	schemaBtn.SetText("Items")
-	schemaBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(13))
 	schemaBtn.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
-	applySidebarTabTheme(schemaBtn.AsControl(), true)
+	applySegmentedTab(schemaBtn.AsControl(), true)
 
 	historyBtn := Button.New()
 	historyBtn.SetText("History")
-	historyBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(13))
 	historyBtn.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
-	applySidebarTabTheme(historyBtn.AsControl(), false)
+	applySegmentedTab(historyBtn.AsControl(), false)
 
 	selectorRow.AsNode().AddChild(schemaBtn.AsNode())
 	selectorRow.AsNode().AddChild(historyBtn.AsNode())
+	selectorTrack.AsNode().AddChild(selectorRow.AsNode())
 
 	ts.schema = new(SchemaPanel)
 	ts.schema.OnColumnsChanged = func(selected []string) {
@@ -382,20 +431,20 @@ func (w *AppWindow) addNewTab() {
 	schemaBtn.AsBaseButton().OnPressed(func() {
 		ts.schema.AsCanvasItem().SetVisible(true)
 		ts.historyPanel.AsCanvasItem().SetVisible(false)
-		applySidebarTabTheme(schemaBtn.AsControl(), true)
-		applySidebarTabTheme(historyBtn.AsControl(), false)
+		applySegmentedTab(schemaBtn.AsControl(), true)
+		applySegmentedTab(historyBtn.AsControl(), false)
 	})
 	historyBtn.AsBaseButton().OnPressed(func() {
 		ts.schema.AsCanvasItem().SetVisible(false)
 		ts.historyPanel.AsCanvasItem().SetVisible(true)
-		applySidebarTabTheme(schemaBtn.AsControl(), false)
-		applySidebarTabTheme(historyBtn.AsControl(), true)
+		applySegmentedTab(schemaBtn.AsControl(), false)
+		applySegmentedTab(historyBtn.AsControl(), true)
 		if w.history != nil {
 			ts.historyPanel.SetHistory(w.history.All())
 		}
 	})
 
-	sidebarVBox.AsNode().AddChild(selectorRow.AsNode())
+	sidebarVBox.AsNode().AddChild(selectorTrack.AsNode())
 	sidebarVBox.AsNode().AddChild(ts.schema.AsNode())
 	sidebarVBox.AsNode().AddChild(ts.historyPanel.AsNode())
 	sidebarMargin.AsNode().AddChild(sidebarVBox.AsNode())
@@ -408,6 +457,8 @@ func (w *AppWindow) addNewTab() {
 	ts.rightPanel.AsControl().AddThemeConstantOverride("separation", 1)
 	ts.rightPanel.AsControl().SetCustomMinimumSize(Vector2.New(scaled(200), 0)) // min width for data grid
 	ts.rightPanel.AsControl().SetClipContents(true)
+	ts.rightPanel.AsSplitContainer().SetDraggerVisibility(SplitContainer.DraggerHiddenCollapsed)
+	ts.rightPanel.AsSplitContainer().SetSplitOffset(int(scaled(220))) // give editor ~220px
 
 	ts.sqlPanel = new(SQLPanel)
 	ts.sqlPanel.OnRunQuery = func(sql string) {
@@ -419,10 +470,10 @@ func (w *AppWindow) addNewTab() {
 	}
 	sqlWrap := MarginContainer.New()
 	sqlWrap.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
-	sqlWrap.AsControl().AddThemeConstantOverride("margin_top", 6)
-	sqlWrap.AsControl().AddThemeConstantOverride("margin_left", 8)
-	sqlWrap.AsControl().AddThemeConstantOverride("margin_right", 8)
-	sqlWrap.AsControl().AddThemeConstantOverride("margin_bottom", 4)
+	sqlWrap.AsControl().AddThemeConstantOverride("margin_top", 8)
+	sqlWrap.AsControl().AddThemeConstantOverride("margin_left", 10)
+	sqlWrap.AsControl().AddThemeConstantOverride("margin_right", 10)
+	sqlWrap.AsControl().AddThemeConstantOverride("margin_bottom", 6)
 	sqlWrap.AsNode().AddChild(ts.sqlPanel.AsNode())
 
 	ts.dataGrid = new(DataGrid)
@@ -487,16 +538,69 @@ func (w *AppWindow) addNewTab() {
 	detailMargin := MarginContainer.New()
 	detailMargin.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	detailMargin.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
-	detailMargin.AsControl().AddThemeConstantOverride("margin_top", 6)
-	detailMargin.AsControl().AddThemeConstantOverride("margin_left", 6)
-	detailMargin.AsControl().AddThemeConstantOverride("margin_right", 6)
-	detailMargin.AsControl().AddThemeConstantOverride("margin_bottom", 4)
+	detailMargin.AsControl().AddThemeConstantOverride("margin_top", 8)
+	detailMargin.AsControl().AddThemeConstantOverride("margin_left", 10)
+	detailMargin.AsControl().AddThemeConstantOverride("margin_right", 10)
+	detailMargin.AsControl().AddThemeConstantOverride("margin_bottom", 6)
 	detailMargin.AsNode().AddChild(ts.detailPanel.AsNode())
 	ts.detailWrap.AsNode().AddChild(detailMargin.AsNode())
 	ts.detailWrap.AsCanvasItem().SetVisible(false) // hidden until row clicked
 
+	// Results header (32px): dot + "Results" + row count / empty state
+	resultsHeader := HBoxContainer.New()
+	resultsHeader.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	resultsHeader.AsControl().SetCustomMinimumSize(Vector2.New(0, scaled(32)))
+	resultsHeader.AsControl().AddThemeConstantOverride("separation", 8)
+
+	resultsHeaderMargin := MarginContainer.New()
+	resultsHeaderMargin.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	resultsHeaderMargin.AsControl().AddThemeConstantOverride("margin_left", 12)
+	resultsHeaderMargin.AsControl().AddThemeConstantOverride("margin_right", 12)
+	resultsHeaderMargin.AsControl().AddThemeConstantOverride("margin_top", 0)
+	resultsHeaderMargin.AsControl().AddThemeConstantOverride("margin_bottom", 0)
+
+	resultsHeaderInner := HBoxContainer.New()
+	resultsHeaderInner.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	resultsHeaderInner.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
+	resultsHeaderInner.AsControl().AddThemeConstantOverride("separation", 14)
+
+	ts.resultsDot = Label.New()
+	ts.resultsDot.SetText("●")
+	ts.resultsDot.AsControl().AddThemeFontSizeOverride("font_size", fontSize(8))
+	ts.resultsDot.AsControl().AddThemeColorOverride("font_color", colorTextDim)
+
+	resultsTitle := Label.New()
+	resultsTitle.SetText("Results")
+	resultsTitle.AsControl().AddThemeFontSizeOverride("font_size", fontSize(12))
+	resultsTitle.AsControl().AddThemeColorOverride("font_color", colorText)
+
+	ts.resultsLabel = Label.New()
+	ts.resultsLabel.SetText("Run a query to see results")
+	ts.resultsLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
+	ts.resultsLabel.AsControl().AddThemeColorOverride("font_color", colorTextDim)
+
+	resultsHeaderInner.AsNode().AddChild(ts.resultsDot.AsNode())
+	resultsHeaderInner.AsNode().AddChild(resultsTitle.AsNode())
+	resultsHeaderInner.AsNode().AddChild(ts.resultsLabel.AsNode())
+	resultsHeaderMargin.AsNode().AddChild(resultsHeaderInner.AsNode())
+	resultsHeader.AsNode().AddChild(resultsHeaderMargin.AsNode())
+
+	// Results header panel with background
+	resultsHeaderWrap := PanelContainer.New()
+	applyPanelBg(resultsHeaderWrap.AsControl(), colorBgSidebar)
+	resultsHeaderWrap.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	resultsHeaderWrap.AsNode().AddChild(resultsHeader.AsNode())
+
+	// Results area: header + data grid
+	resultsVBox := VBoxContainer.New()
+	resultsVBox.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	resultsVBox.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
+	resultsVBox.AsControl().AddThemeConstantOverride("separation", 0)
+	resultsVBox.AsNode().AddChild(resultsHeaderWrap.AsNode())
+	resultsVBox.AsNode().AddChild(ts.dataGrid.AsNode())
+
 	ts.rightPanel.AsNode().AddChild(sqlWrap.AsNode())
-	ts.rightPanel.AsNode().AddChild(ts.dataGrid.AsNode())
+	ts.rightPanel.AsNode().AddChild(resultsVBox.AsNode())
 
 	// Inner split: content | detail
 	ts.outerWrap = HSplitContainer.New()
@@ -627,8 +731,7 @@ func (w *AppWindow) updateTabTitle(idx int) {
 }
 
 func (w *AppWindow) showEmptyView() {
-	w.split.AsCanvasItem().SetVisible(false)
-	w.tabBarWrap.AsCanvasItem().SetVisible(false)
+	w.mainColumn.AsCanvasItem().SetVisible(false)
 	w.emptyView.AsCanvasItem().SetVisible(true)
 	w.titleBar.SetFileInfo("")
 	w.statusBar.SetStatus("No tabs open")
@@ -637,8 +740,7 @@ func (w *AppWindow) showEmptyView() {
 
 func (w *AppWindow) showTabView() {
 	w.emptyView.AsCanvasItem().SetVisible(false)
-	w.split.AsCanvasItem().SetVisible(true)
-	w.tabBarWrap.AsCanvasItem().SetVisible(true)
+	w.mainColumn.AsCanvasItem().SetVisible(true)
 }
 
 func (w *AppWindow) isDuckDBFile(path string) bool {
@@ -795,7 +897,7 @@ func (w *AppWindow) handleOpenDBResult(res DBResult) {
 	btn := Button.New()
 	btn.SetText(name)
 	btn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(10))
-	btn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(36), scaled(36)))
+	btn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(32), scaled(32)))
 	btn.SetClipText(true)
 	applySecondaryButtonTheme(btn.AsControl())
 	conn.button = btn
@@ -925,6 +1027,12 @@ func (w *AppWindow) handleQueryResult(res DBResult) {
 	ts.dataGrid.colTypes = schemaColTypes(ts.State.Schema, result.Columns)
 	ts.dataGrid.SetResult(result)
 	ts.dataGrid.UpdateColumnTitles(result.Columns, ts.State.SortColumn, ts.State.SortDir)
+
+	// Update results header
+	ts.resultsLabel.SetText(fmt.Sprintf("%d rows · %d ms", result.Total, res.Elapsed.Milliseconds()))
+	ts.resultsLabel.AsControl().AddThemeColorOverride("font_color", colorTextDim)
+	ts.resultsDot.AsControl().AddThemeColorOverride("font_color", colorSuccess)
+
 	start := ts.State.PageOffset + 1
 	end := ts.State.PageOffset + len(result.Rows)
 	w.statusBar.SetStatus(fmt.Sprintf("%d–%d of %d rows", start, end, result.Total))
@@ -1080,11 +1188,11 @@ func createMainWindowFromRoot(rootWin Window.Instance, duck *db.DB, history *mod
 	}
 
 	ui := aw.buildUI()
-	root := Control.New()
-	root.SetAnchorsAndOffsetsPreset(Control.PresetFullRect)
+	// Add to tree first, then set anchors (anchors require a parent)
+	rootWin.AsNode().AddChild(ui.AsNode())
 	ui.AsControl().SetAnchorsAndOffsetsPreset(Control.PresetFullRect)
-	root.AsNode().AddChild(ui.AsNode())
-	rootWin.AsNode().AddChild(root.AsNode())
+	ui.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	ui.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
 
 	rootWin.OnFilesDropped(func(files []string) {
 		for _, f := range files {
@@ -1115,12 +1223,10 @@ func createSecondaryWindow(duck *db.DB, history *models.QueryHistory, onNewWindo
 	}
 
 	ui := aw.buildUI()
-	// Need a Control root to anchor the UI
-	root := Control.New()
-	root.SetAnchorsAndOffsetsPreset(Control.PresetFullRect)
+	win.AsNode().AddChild(ui.AsNode())
 	ui.AsControl().SetAnchorsAndOffsetsPreset(Control.PresetFullRect)
-	root.AsNode().AddChild(ui.AsNode())
-	win.AsNode().AddChild(root.AsNode())
+	ui.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	ui.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
 
 
 

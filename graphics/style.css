@@ -1,0 +1,72 @@
+#railMargin {
+  font-size: 16px;
+  color: #000000;
+  width: 48px;
+  margin: 10px 8px 10px 8px;
+  h-sizing: expand-fill;
+  v-sizing: expand-fill;
+}
+
+#railSpacer {
+  font-size: 16px;
+  color: #000000;
+  width: 32px;
+  h-sizing: expand-fill;
+  v-sizing: expand-fill;
+}
+
+#connRail {
+  font-size: 16px;
+  color: #e6e6e6;
+  width: 32px;
+  gap: 6px;
+  h-sizing: expand-fill;
+  v-sizing: shrink-begin;
+}
+
+#root {
+  font-size: 16px;
+  color: #000000;
+  gap: 4px;
+  align-items: stretch;
+  h-sizing: expand-fill;
+  v-sizing: fill;
+}
+
+#connRailWrap {
+  font-size: 16px;
+  color: #000000;
+  width: 48px;
+  background-color: #1f2023;
+  padding: -1px -1px -1px -1px;
+  border-right: 1px solid #303236;
+  h-sizing: expand-fill;
+  v-sizing: expand-fill;
+}
+
+#addConnBtn {
+  font-size: 24px;
+  color: #9a9fa6;
+  width: 28px;
+  height: 28px;
+  background-color: #000000;
+  padding: 0px 10px 0px 10px;
+  border: 1px solid #303236;
+  border-radius: 6px;
+  h-sizing: expand-fill;
+  v-sizing: expand-fill;
+}
+
+#memBtn {
+  font-size: 10px;
+  color: #1a1b1e;
+  width: 32px;
+  height: 32px;
+  background-color: #4b8dff;
+  padding: 2px 2px 2px 2px;
+  border: 1px solid #4b8dff;
+  border-radius: 3px;
+  h-sizing: expand-fill;
+  v-sizing: expand-fill;
+}
+

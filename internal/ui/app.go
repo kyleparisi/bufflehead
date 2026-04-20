@@ -58,7 +58,9 @@ import (
 type TitleBar struct {
 	PanelContainer.Extension[TitleBar] `gd:"TitleBar"`
 
-	infoLabel  Label.Instance
+	connPill   Button.Instance
+	statusDot  Label.Instance
+	statusText Label.Instance
 	NavBackBtn Button.Instance
 	NavFwdBtn  Button.Instance
 	WindowID   int
@@ -76,72 +78,83 @@ func (t *TitleBar) Ready() {
 	applyTitleBarTheme(t.AsControl())
 	t.AsControl().SetMouseFilter(Control.MouseFilterStop)
 	t.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
-	t.AsControl().SetCustomMinimumSize(Vector2.New(0, scaled(42)))
+	t.AsControl().SetCustomMinimumSize(Vector2.New(0, scaled(38)))
 
 	margin := MarginContainer.New()
 	margin.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	margin.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
-	margin.AsControl().AddThemeConstantOverride("margin_top", 6)
+	margin.AsControl().AddThemeConstantOverride("margin_top", 0)
 	margin.AsControl().AddThemeConstantOverride("margin_left", 78) // clear macOS traffic lights
-	margin.AsControl().AddThemeConstantOverride("margin_right", 8)
-	margin.AsControl().AddThemeConstantOverride("margin_bottom", 6)
+	margin.AsControl().AddThemeConstantOverride("margin_right", 14)
+	margin.AsControl().AddThemeConstantOverride("margin_bottom", 0)
 
 	row := HBoxContainer.New()
 	row.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
-	row.AsControl().AddThemeConstantOverride("separation", 6)
+	row.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
+	row.AsControl().AddThemeConstantOverride("separation", 4)
 
-	// Nav buttons
+	// Nav buttons — compact icon style
 	t.NavBackBtn = Button.New()
 	t.NavBackBtn.SetText("◀")
-	t.NavBackBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
-	t.NavBackBtn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(24), 0))
-	applySecondaryButtonTheme(t.NavBackBtn.AsControl())
+	t.NavBackBtn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(20), scaled(20)))
+	applyIconButtonTheme(t.NavBackBtn.AsControl())
 	t.NavBackBtn.AsBaseButton().SetDisabled(true)
 	t.NavBackBtn.AsControl().SetMouseFilter(Control.MouseFilterStop)
 
 	t.NavFwdBtn = Button.New()
 	t.NavFwdBtn.SetText("▶")
-	t.NavFwdBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
-	t.NavFwdBtn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(24), 0))
-	applySecondaryButtonTheme(t.NavFwdBtn.AsControl())
+	t.NavFwdBtn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(20), scaled(20)))
+	applyIconButtonTheme(t.NavFwdBtn.AsControl())
 	t.NavFwdBtn.AsBaseButton().SetDisabled(true)
 	t.NavFwdBtn.AsControl().SetMouseFilter(Control.MouseFilterStop)
 
-	// Spacer after nav buttons
-	leftSpacer := Control.New()
-	leftSpacer.SetSizeFlagsHorizontal(Control.SizeExpandFill)
-	leftSpacer.AsControl().SetSizeFlagsStretchRatio(1)
+	// Vertical divider after nav buttons
+	divider := Control.New()
+	divider.SetCustomMinimumSize(Vector2.New(1, scaled(20)))
+	divider.SetSizeFlagsVertical(Control.SizeShrinkCenter)
+	applyPanelBg(divider, colorBorder)
 
-	// Connection info pill (centered, 50%)
-	pill := PanelContainer.New()
-	applyPillTheme(pill.AsControl())
-	pill.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
-	pill.AsControl().AsControl().SetSizeFlagsStretchRatio(2)
-	t.infoLabel = Label.New()
-	t.infoLabel.SetText("DuckDB  ·  In-Memory  ·  No file loaded")
-	t.infoLabel.AsControl().AddThemeColorOverride("font_color", colorText)
-	t.infoLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(13))
-	t.infoLabel.SetHorizontalAlignment(1) // center
-	pill.AsNode().AddChild(t.infoLabel.AsNode())
+	// Connection picker pill (left-aligned)
+	t.connPill = Button.New()
+	t.connPill.SetText("DuckDB · In-Memory")
+	applyConnectionPillTheme(t.connPill.AsControl())
+	t.connPill.AsControl().SetMouseFilter(Control.MouseFilterStop)
 
-	// Right spacer (25%)
-	rightSpacer := Control.New()
-	rightSpacer.SetSizeFlagsHorizontal(Control.SizeExpandFill)
-	rightSpacer.AsControl().SetSizeFlagsStretchRatio(1)
+	// Spacer
+	spacer := Control.New()
+	spacer.SetSizeFlagsHorizontal(Control.SizeExpandFill)
 
-	// Let all children pass mouse events through to the title bar for dragging
+	// Connection status: dot + "Connected"
+	statusRow := HBoxContainer.New()
+	statusRow.AsControl().AddThemeConstantOverride("separation", 4)
+
+	t.statusDot = Label.New()
+	t.statusDot.SetText("●")
+	t.statusDot.AsControl().AddThemeFontSizeOverride("font_size", fontSize(8))
+	t.statusDot.AsControl().AddThemeColorOverride("font_color", colorSuccess)
+
+	t.statusText = Label.New()
+	t.statusText.SetText("Connected")
+	t.statusText.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
+	t.statusText.AsControl().AddThemeColorOverride("font_color", colorTextDim)
+
+	statusRow.AsNode().AddChild(t.statusDot.AsNode())
+	statusRow.AsNode().AddChild(t.statusText.AsNode())
+
+	// Let children pass mouse events through for title bar dragging
 	margin.AsControl().SetMouseFilter(Control.MouseFilterPass)
 	row.AsControl().SetMouseFilter(Control.MouseFilterPass)
-	leftSpacer.SetMouseFilter(Control.MouseFilterPass)
-	pill.AsControl().SetMouseFilter(Control.MouseFilterPass)
-	t.infoLabel.AsControl().SetMouseFilter(Control.MouseFilterPass)
-	rightSpacer.SetMouseFilter(Control.MouseFilterPass)
+	spacer.SetMouseFilter(Control.MouseFilterPass)
+	statusRow.AsControl().SetMouseFilter(Control.MouseFilterPass)
+	t.statusDot.AsControl().SetMouseFilter(Control.MouseFilterPass)
+	t.statusText.AsControl().SetMouseFilter(Control.MouseFilterPass)
 
 	row.AsNode().AddChild(t.NavBackBtn.AsNode())
 	row.AsNode().AddChild(t.NavFwdBtn.AsNode())
-	row.AsNode().AddChild(leftSpacer.AsNode())
-	row.AsNode().AddChild(pill.AsNode())
-	row.AsNode().AddChild(rightSpacer.AsNode())
+	row.AsNode().AddChild(divider.AsNode())
+	row.AsNode().AddChild(t.connPill.AsNode())
+	row.AsNode().AddChild(spacer.AsNode())
+	row.AsNode().AddChild(statusRow.AsNode())
 
 	margin.AsNode().AddChild(row.AsNode())
 	t.AsNode().AddChild(margin.AsNode())
@@ -149,7 +162,7 @@ func (t *TitleBar) Ready() {
 
 func (t *TitleBar) SetFileInfo(path string) {
 	if path == "" {
-		t.infoLabel.SetText("DuckDB  ·  In-Memory")
+		t.connPill.SetText("DuckDB · In-Memory")
 		return
 	}
 	// Extract filename
@@ -167,17 +180,17 @@ func (t *TitleBar) SetFileInfo(path string) {
 	}
 	switch ext {
 	case ".duckdb", ".db", ".ddb":
-		t.infoLabel.SetText("DuckDB  ·  " + name)
+		t.connPill.SetText("DuckDB · " + name)
 	case ".parquet":
-		t.infoLabel.SetText("DuckDB  ·  In-Memory  ·  " + name)
+		t.connPill.SetText("DuckDB · In-Memory · " + name)
 	case ".csv":
-		t.infoLabel.SetText("DuckDB  ·  CSV  ·  " + name)
+		t.connPill.SetText("DuckDB · CSV · " + name)
 	case ".json":
-		t.infoLabel.SetText("DuckDB  ·  JSON  ·  " + name)
+		t.connPill.SetText("DuckDB · JSON · " + name)
 	case ".tsv":
-		t.infoLabel.SetText("DuckDB  ·  TSV  ·  " + name)
+		t.connPill.SetText("DuckDB · TSV · " + name)
 	default:
-		t.infoLabel.SetText("DuckDB  ·  " + name)
+		t.connPill.SetText("DuckDB · " + name)
 	}
 }
 
@@ -629,8 +642,9 @@ func (h *HistoryPanel) SetHistory(entries []models.HistoryEntry) {
 type SQLPanel struct {
 	VBoxContainer.Extension[SQLPanel] `gd:"SQLPanel"`
 
-	editor     CodeEdit.Instance
-	OnRunQuery func(sql string)
+	editor      CodeEdit.Instance
+	cursorLabel Label.Instance
+	OnRunQuery  func(sql string)
 
 	// Autocomplete data
 	columns []db.Column   // current schema columns
@@ -640,34 +654,76 @@ type SQLPanel struct {
 func (s *SQLPanel) Ready() {
 	s.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	s.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
-	s.AsControl().AddThemeConstantOverride("separation", 4)
+	s.AsControl().AddThemeConstantOverride("separation", 0)
 
-	// Top row: label + run button
-	row := HBoxContainer.New()
-	row.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
-	row.AsControl().AddThemeConstantOverride("separation", 6)
+	// Editor toolbar (36px): SQL label | divider | cursor info | spacer | Format | Explain | Run
+	toolbar := HBoxContainer.New()
+	toolbar.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	toolbar.AsControl().SetCustomMinimumSize(Vector2.New(0, scaled(36)))
+	toolbar.AsControl().AddThemeConstantOverride("separation", 10)
 
-	label := Label.New()
-	label.SetText("SQL")
-	applyLabelTheme(label.AsControl(), true)
-	label.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	// Toolbar margin
+	toolbarMargin := MarginContainer.New()
+	toolbarMargin.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	toolbarMargin.AsControl().AddThemeConstantOverride("margin_left", 12)
+	toolbarMargin.AsControl().AddThemeConstantOverride("margin_right", 12)
+	toolbarMargin.AsControl().AddThemeConstantOverride("margin_top", 4)
+	toolbarMargin.AsControl().AddThemeConstantOverride("margin_bottom", 4)
+
+	sqlLabel := Label.New()
+	sqlLabel.SetText("SQL")
+	sqlLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
+	sqlLabel.AsControl().AddThemeColorOverride("font_color", colorTextDim)
+
+	divider := Control.New()
+	divider.SetCustomMinimumSize(Vector2.New(1, scaled(14)))
+	divider.SetSizeFlagsVertical(Control.SizeShrinkCenter)
+	applyPanelBg(divider, colorBorder)
+
+	s.cursorLabel = Label.New()
+	s.cursorLabel.SetText("Ln 1, Col 1")
+	s.cursorLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
+	s.cursorLabel.AsControl().AddThemeColorOverride("font_color", colorTextMuted)
+
+	spacer := Control.New()
+	spacer.SetSizeFlagsHorizontal(Control.SizeExpandFill)
+
+	formatBtn := Button.New()
+	formatBtn.SetText("Format")
+	applyFlatButtonTheme(formatBtn.AsControl())
+
+	explainBtn := Button.New()
+	explainBtn.SetText("Explain")
+	applySecondaryButtonTheme(explainBtn.AsControl())
 
 	runBtn := Button.New()
-	runBtn.SetText("▶ Run")
-	applyButtonTheme(runBtn.AsControl())
+	runBtn.SetText("▶  Run   ⌘↵")
+	applyPrimaryCompactButtonTheme(runBtn.AsControl())
 	runBtn.AsBaseButton().OnPressed(func() {
 		if s.OnRunQuery != nil {
 			s.OnRunQuery(s.editor.AsTextEdit().Text())
 		}
 	})
 
-	row.AsNode().AddChild(label.AsNode())
-	row.AsNode().AddChild(runBtn.AsNode())
+	toolbar.AsNode().AddChild(sqlLabel.AsNode())
+	toolbar.AsNode().AddChild(divider.AsNode())
+	toolbar.AsNode().AddChild(s.cursorLabel.AsNode())
+	toolbar.AsNode().AddChild(spacer.AsNode())
+	toolbar.AsNode().AddChild(formatBtn.AsNode())
+	toolbar.AsNode().AddChild(explainBtn.AsNode())
+	toolbar.AsNode().AddChild(runBtn.AsNode())
+	toolbarMargin.AsNode().AddChild(toolbar.AsNode())
+
+	// Bottom border for toolbar
+	toolbarBorder := PanelContainer.New()
+	toolbarBorder.AsControl().SetCustomMinimumSize(Vector2.New(0, 1))
+	toolbarBorder.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	applyPanelBg(toolbarBorder.AsControl(), colorBorder)
 
 	s.editor = CodeEdit.New()
 	s.editor.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	s.editor.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
-	s.editor.AsControl().SetCustomMinimumSize(Vector2.New(0, scaled(80)))
+	s.editor.AsControl().SetCustomMinimumSize(Vector2.New(0, scaled(180)))
 	s.editor.SetGuttersDrawExecutingLines(false)
 	s.editor.SetGuttersDrawLineNumbers(true)
 	s.editor.SetGuttersDrawBreakpointsGutter(false)
@@ -690,8 +746,59 @@ func (s *SQLPanel) Ready() {
 		}
 	})
 
-	s.AsNode().AddChild(row.AsNode())
+	// Update cursor info on caret change
+	s.editor.AsTextEdit().OnCaretChanged(func() {
+		s.updateCursorInfo()
+	})
+	s.editor.AsTextEdit().OnTextChanged(func() {
+		s.updateCursorInfo()
+	})
+
+	s.AsNode().AddChild(toolbarMargin.AsNode())
+	s.AsNode().AddChild(toolbarBorder.AsNode())
 	s.AsNode().AddChild(s.editor.AsNode())
+}
+
+// updateCursorInfo refreshes the cursor position label (Ln/Col + statement count).
+func (s *SQLPanel) updateCursorInfo() {
+	te := s.editor.AsTextEdit()
+	line := te.GetCaretLine() + 1
+	col := te.GetCaretColumn() + 1
+	text := te.Text()
+	stmts := countStatements(text)
+	if stmts > 0 {
+		s.cursorLabel.SetText(fmt.Sprintf("Ln %d, Col %d · %d statements", line, col, stmts))
+	} else {
+		s.cursorLabel.SetText(fmt.Sprintf("Ln %d, Col %d", line, col))
+	}
+}
+
+// countStatements counts the number of SQL statements (semicolons outside strings).
+func countStatements(sql string) int {
+	count := 0
+	inString := false
+	var quote byte
+	for i := 0; i < len(sql); i++ {
+		c := sql[i]
+		if inString {
+			if c == quote {
+				inString = false
+			}
+		} else {
+			if c == '\'' || c == '"' {
+				inString = true
+				quote = c
+			} else if c == ';' {
+				count++
+			}
+		}
+	}
+	// Count trailing statement without semicolon
+	trimmed := strings.TrimSpace(sql)
+	if len(trimmed) > 0 && trimmed[len(trimmed)-1] != ';' {
+		count++
+	}
+	return count
 }
 
 func (s *SQLPanel) SetSQL(sql string) {
@@ -1439,8 +1546,8 @@ func (p *RowDetailPanel) Ready() {
 
 	searchWrap := MarginContainer.New()
 	searchWrap.AsControl().AddThemeConstantOverride("margin_top", 4)
-	searchWrap.AsControl().AddThemeConstantOverride("margin_left", 6)
-	searchWrap.AsControl().AddThemeConstantOverride("margin_right", 6)
+	searchWrap.AsControl().AddThemeConstantOverride("margin_left", 8)
+	searchWrap.AsControl().AddThemeConstantOverride("margin_right", 8)
 	searchWrap.AsControl().AddThemeConstantOverride("margin_bottom", 4)
 	searchWrap.AsNode().AddChild(p.searchBox.AsNode())
 
@@ -1479,9 +1586,9 @@ func (p *RowDetailPanel) Ready() {
 	fieldsMargin := MarginContainer.New()
 	fieldsMargin.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	fieldsMargin.AsControl().AddThemeConstantOverride("margin_top", 4)
-	fieldsMargin.AsControl().AddThemeConstantOverride("margin_left", 6)
-	fieldsMargin.AsControl().AddThemeConstantOverride("margin_right", 6)
-	fieldsMargin.AsControl().AddThemeConstantOverride("margin_bottom", 6)
+	fieldsMargin.AsControl().AddThemeConstantOverride("margin_left", 8)
+	fieldsMargin.AsControl().AddThemeConstantOverride("margin_right", 8)
+	fieldsMargin.AsControl().AddThemeConstantOverride("margin_bottom", 8)
 	fieldsMargin.AsNode().AddChild(p.fieldsList.AsNode())
 	p.scrollBox.AsNode().AddChild(fieldsMargin.AsNode())
 
@@ -1588,10 +1695,10 @@ func (p *RowDetailPanel) resolveValue(i int) string {
 type StatusBar struct {
 	HBoxContainer.Extension[StatusBar] `gd:"StatusBar"`
 
-	rowCount  Label.Instance
-	pageLabel Label.Instance
-	leftBtn   Button.Instance
-	rightBtn  Button.Instance
+	statusDot  Label.Instance
+	statusMsg  Label.Instance
+	rowCount   Label.Instance
+	pageLabel  Label.Instance
 
 	OnPrevPage        func()
 	OnNextPage        func()
@@ -1603,39 +1710,50 @@ type StatusBar struct {
 }
 
 func (s *StatusBar) Ready() {
-	s.AsControl().AddThemeConstantOverride("separation", 8)
+	s.AsControl().AddThemeConstantOverride("separation", 12)
+	s.AsControl().SetCustomMinimumSize(Vector2.New(0, scaled(26)))
 
-	// Left: pane toggle buttons with SVG icons
 	s.leftPaneVisible = true
 	s.rightPaneVisible = false
 
-	s.leftBtn = Button.New()
-	s.leftBtn.AsControl().SetTooltipText("Toggle Left Pane")
-	s.leftBtn.SetText("◧")
-	s.leftBtn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(28), scaled(22)))
-	applyToggleButtonTheme(s.leftBtn.AsControl(), true)
-	s.leftBtn.AsBaseButton().OnPressed(func() {
-		s.leftPaneVisible = !s.leftPaneVisible
-		applyToggleButtonTheme(s.leftBtn.AsControl(), s.leftPaneVisible)
-		if s.OnToggleLeftPane != nil {
-			s.OnToggleLeftPane()
-		}
-	})
+	// Left: status dot + "Ready" + "UTF-8" + "LF"
+	s.statusDot = Label.New()
+	s.statusDot.SetText("●")
+	s.statusDot.AsControl().AddThemeFontSizeOverride("font_size", fontSize(8))
+	s.statusDot.AsControl().AddThemeColorOverride("font_color", colorSuccess)
 
-	s.rightBtn = Button.New()
-	s.rightBtn.AsControl().SetTooltipText("Toggle Right Pane")
-	s.rightBtn.SetText("◨")
-	s.rightBtn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(28), scaled(22)))
-	applyToggleButtonTheme(s.rightBtn.AsControl(), false)
+	s.statusMsg = Label.New()
+	s.statusMsg.SetText("Ready")
+	applyStatusBarTheme(s.statusMsg.AsControl())
+
+	sep1 := Label.New()
+	sep1.SetText("·")
+	applyStatusBarTheme(sep1.AsControl())
+
+	encLabel := Label.New()
+	encLabel.SetText("UTF-8")
+	applyStatusBarTheme(encLabel.AsControl())
+
+	sep2 := Label.New()
+	sep2.SetText("·")
+	applyStatusBarTheme(sep2.AsControl())
+
+	lfLabel := Label.New()
+	lfLabel.SetText("LF")
+	applyStatusBarTheme(lfLabel.AsControl())
 
 	// Spacer
 	spacer := Control.New()
 	spacer.SetSizeFlagsHorizontal(Control.SizeExpandFill)
 
-	// Pagination controls
+	// Right: row count + pagination
+	s.rowCount = Label.New()
+	s.rowCount.SetText("")
+	applyStatusBarTheme(s.rowCount.AsControl())
+
 	prevBtn := Button.New()
 	prevBtn.SetText("◀")
-	applySecondaryButtonTheme(prevBtn.AsControl())
+	applyCompactSecondaryButtonTheme(prevBtn.AsControl())
 	prevBtn.AsBaseButton().OnPressed(func() {
 		if s.OnPrevPage != nil {
 			s.OnPrevPage()
@@ -1643,52 +1761,54 @@ func (s *StatusBar) Ready() {
 	})
 
 	s.pageLabel = Label.New()
-	s.pageLabel.SetText("Page 1")
+	s.pageLabel.SetText("Page 1 / 1")
 	applyStatusBarTheme(s.pageLabel.AsControl())
 
 	nextBtn := Button.New()
 	nextBtn.SetText("▶")
-	applySecondaryButtonTheme(nextBtn.AsControl())
+	applyCompactSecondaryButtonTheme(nextBtn.AsControl())
 	nextBtn.AsBaseButton().OnPressed(func() {
 		if s.OnNextPage != nil {
 			s.OnNextPage()
 		}
 	})
 
-	sep := Label.New()
-	sep.SetText("·")
-	applyStatusBarTheme(sep.AsControl())
-
-	// Right: row count
-	s.rowCount = Label.New()
-	s.rowCount.SetText("Ready")
-	applyStatusBarTheme(s.rowCount.AsControl())
-
-	s.rightBtn.AsBaseButton().OnPressed(func() {
-		s.rightPaneVisible = !s.rightPaneVisible
-		applyToggleButtonTheme(s.rightBtn.AsControl(), s.rightPaneVisible)
-		if s.OnToggleRightPane != nil {
-			s.OnToggleRightPane()
-		}
-	})
-
-	s.AsNode().AddChild(s.leftBtn.AsNode())
-	s.AsNode().AddChild(s.rightBtn.AsNode())
+	s.AsNode().AddChild(s.statusDot.AsNode())
+	s.AsNode().AddChild(s.statusMsg.AsNode())
+	s.AsNode().AddChild(sep1.AsNode())
+	s.AsNode().AddChild(encLabel.AsNode())
+	s.AsNode().AddChild(sep2.AsNode())
+	s.AsNode().AddChild(lfLabel.AsNode())
 	s.AsNode().AddChild(spacer.AsNode())
+	s.AsNode().AddChild(s.rowCount.AsNode())
 	s.AsNode().AddChild(prevBtn.AsNode())
 	s.AsNode().AddChild(s.pageLabel.AsNode())
 	s.AsNode().AddChild(nextBtn.AsNode())
-	s.AsNode().AddChild(sep.AsNode())
-	s.AsNode().AddChild(s.rowCount.AsNode())
 }
 
 func (s *StatusBar) SetRightPaneActive(active bool) {
 	s.rightPaneVisible = active
-	applyToggleButtonTheme(s.rightBtn.AsControl(), active)
 }
 
 func (s *StatusBar) SetStatus(msg string) {
-	s.rowCount.SetText(msg)
+	// Update the left status message and right row count
+	if strings.HasPrefix(msg, "Error") {
+		s.statusMsg.SetText("Error")
+		s.statusDot.AsControl().AddThemeColorOverride("font_color", colorSQLString) // red-ish for errors
+		s.rowCount.SetText(msg)
+	} else if strings.Contains(msg, "of") && strings.Contains(msg, "rows") {
+		s.statusMsg.SetText("Ready")
+		s.statusDot.AsControl().AddThemeColorOverride("font_color", colorSuccess)
+		s.rowCount.SetText(msg)
+	} else if msg == "Running…" || msg == "Loading…" || msg == "Opening database…" {
+		s.statusMsg.SetText(msg)
+		s.statusDot.AsControl().AddThemeColorOverride("font_color", colorAccent)
+		s.rowCount.SetText("")
+	} else {
+		s.statusMsg.SetText(msg)
+		s.statusDot.AsControl().AddThemeColorOverride("font_color", colorSuccess)
+		s.rowCount.SetText("")
+	}
 }
 
 func (s *StatusBar) SetPage(page, totalPages int) {
@@ -1698,16 +1818,18 @@ func (s *StatusBar) SetPage(page, totalPages int) {
 // ── Tab state ──────────────────────────────────────────────────────────────
 
 type tabState struct {
-	State        *models.AppState
-	schema       *SchemaPanel
-	historyPanel *HistoryPanel
-	sqlPanel     *SQLPanel
-	dataGrid     *DataGrid
-	detailPanel  *RowDetailPanel
-	connIdx      int    // index into AppWindow.connections (-1 = in-memory)
-	navigating   bool   // true during back/forward nav — skip history+nav recording
-	tabID        uint64 // unique ID for matching async results
-	generation   uint64 // incremented on each new query to discard stale results
+	State         *models.AppState
+	schema        *SchemaPanel
+	historyPanel  *HistoryPanel
+	sqlPanel      *SQLPanel
+	dataGrid      *DataGrid
+	detailPanel   *RowDetailPanel
+	resultsLabel  Label.Instance  // results header: "Results  100 rows · 42 ms"
+	resultsDot    Label.Instance  // green dot in results header
+	connIdx       int    // index into AppWindow.connections (-1 = in-memory)
+	navigating    bool   // true during back/forward nav — skip history+nav recording
+	tabID         uint64 // unique ID for matching async results
+	generation    uint64 // incremented on each new query to discard stale results
 
 	// Container nodes for show/hide on tab switch
 	sidebarWrap PanelContainer.Instance
@@ -1731,7 +1853,9 @@ type App struct {
 	secondWins   []*AppWindow             `gd:"-"`
 	appMenu      *AppMenu                 `gd:"-"`
 	history      *models.QueryHistory     `gd:"-"`
-	pendingInit  bool                     `gd:"-"`
+	designer     *DesignMode              `gd:"-"`
+	pendingInit    bool                     `gd:"-"`
+	pendingLayout  bool                     `gd:"-"`
 	prevKeys     map[Input.Key]bool       `gd:"-"`
 	cachedState  json.RawMessage          `gd:"-"` // updated on main thread each frame
 }
@@ -1749,6 +1873,7 @@ func (a *App) activeWindow() *AppWindow {
 func (a *App) Ready() {
 	initScale()
 	a.history = models.NewQueryHistory()
+	a.designer = NewDesignMode()
 	a.pendingInit = true
 }
 
@@ -1759,6 +1884,8 @@ func (a *App) initMainWindow() {
 		a.mainWin.titleBar.WindowID = rootWin.GetWindowId()
 		a.mainWin.addNewTab()
 		rootWin.MoveToCenter()
+
+		a.pendingLayout = true
 
 		// Handle close — quit the app when main window is closed
 		rootWin.OnCloseRequested(func() {
@@ -1961,6 +2088,46 @@ func (a *App) justPressed(key Input.Key) bool {
 	return pressed && !was
 }
 
+func (a *App) Input(event InputEvent.Instance) {
+	if !a.designer.IsActive() {
+		return
+	}
+	mb, ok := Object.As[InputEventMouseButton.Instance](event)
+	if !ok {
+		return
+	}
+	// Don't intercept clicks that land on the inspector window
+	screenPos := DisplayServer.MouseGetPosition()
+	if a.designer.IsOverInspector(Vector2.New(float32(screenPos.X), float32(screenPos.Y))) {
+		return
+	}
+	tree, treeOk := Object.As[SceneTree.Instance](Engine.GetMainLoop())
+	if mb.AsInputEvent().IsPressed() {
+		switch mb.ButtonIndex() {
+		case Input.MouseButtonLeft:
+			localPos := a.AsCanvasItem().GetGlobalMousePosition()
+			a.designer.HandleClick(localPos)
+			if treeOk {
+				tree.Root().AsViewport().SetInputAsHandled()
+			}
+		case Input.MouseButtonWheelUp:
+			if Input.IsKeyPressed(Input.KeyAlt) {
+				a.designer.HandleScroll(1)
+				if treeOk {
+					tree.Root().AsViewport().SetInputAsHandled()
+				}
+			}
+		case Input.MouseButtonWheelDown:
+			if Input.IsKeyPressed(Input.KeyAlt) {
+				a.designer.HandleScroll(-1)
+				if treeOk {
+					tree.Root().AsViewport().SetInputAsHandled()
+				}
+			}
+		}
+	}
+}
+
 func (a *App) stopAllWorkers() {
 	if a.mainWin != nil {
 		a.mainWin.stopWorkers()
@@ -2003,20 +2170,50 @@ func (a *App) Process(delta Float.X) {
 		a.pendingInit = false
 		a.prevKeys = make(map[Input.Key]bool)
 		a.initMainWindow()
+		return // let one frame pass before applying layout
+	}
+	if a.pendingLayout {
+		a.pendingLayout = false
+		if tree, ok := Object.As[SceneTree.Instance](Engine.GetMainLoop()); ok {
+			ApplyStylesheetToTree(tree.Root().AsNode())
+		}
 	}
 
 	// Poll keyboard shortcuts (works across all windows)
 	if Input.IsKeyPressed(Input.KeyMeta) || Input.IsKeyPressed(Input.KeyCtrl) {
-		shortcuts := []Input.Key{Input.KeyQ, Input.KeyN, Input.KeyT, Input.KeyW, Input.KeyO, Input.KeyBracketleft, Input.KeyBracketright}
+		shortcuts := []Input.Key{Input.KeyQ, Input.KeyN, Input.KeyT, Input.KeyW, Input.KeyO, Input.KeyBracketleft, Input.KeyBracketright, Input.KeyD}
 		for _, k := range shortcuts {
 			if a.justPressed(k) {
-				a.handleShortcut(k, a.activeWindow())
+				// Cmd+Shift+D: toggle design mode
+				if k == Input.KeyD {
+					if Input.IsKeyPressed(Input.KeyShift) {
+						// Use the scene tree root window as the root for hit-testing
+						if tree, ok := Object.As[SceneTree.Instance](Engine.GetMainLoop()); ok {
+							a.designer.ToggleFromWindow(tree.Root())
+						}
+					}
+				} else {
+					a.handleShortcut(k, a.activeWindow())
+				}
 			}
 		}
 	} else {
 		// Clear all tracked keys when cmd isn't held
 		for k := range a.prevKeys {
 			a.prevKeys[k] = false
+		}
+	}
+
+	// Design mode: hover highlight (click + scroll handled in Input())
+	if a.designer.IsActive() {
+		screenPos := DisplayServer.MouseGetPosition()
+		overInspector := a.designer.IsOverInspector(Vector2.New(float32(screenPos.X), float32(screenPos.Y)))
+		if !overInspector {
+			localPos := a.AsCanvasItem().GetGlobalMousePosition()
+			altHeld := Input.IsKeyPressed(Input.KeyAlt)
+			if !altHeld {
+				a.designer.HandleHover(localPos)
+			}
 		}
 	}
 
@@ -2280,6 +2477,57 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 			cmd.Respond(control.Result{Error: "no active window"})
 		}
 
+	case "designer_open":
+		if !a.designer.IsActive() {
+			if tree, ok := Object.As[SceneTree.Instance](Engine.GetMainLoop()); ok {
+				a.designer.ToggleFromWindow(tree.Root())
+			}
+		}
+		cmd.Respond(control.Result{OK: true})
+
+	case "designer_close":
+		if a.designer.IsActive() {
+			a.designer.Close()
+		}
+		cmd.Respond(control.Result{OK: true})
+
+	case "designer_find":
+		var d control.DesignerFindData
+		if err := json.Unmarshal(cmd.Data, &d); err != nil {
+			cmd.Respond(control.Result{Error: err.Error()})
+			return
+		}
+		info := a.designer.FindAndSelect(d.Name)
+		if info == nil {
+			cmd.Respond(control.Result{Error: "node not found or designer not active"})
+			return
+		}
+		data, _ := json.Marshal(info)
+		cmd.Respond(control.Result{OK: true, Data: data})
+
+	case "designer_click":
+		var d control.DesignerClickData
+		if err := json.Unmarshal(cmd.Data, &d); err != nil {
+			cmd.Respond(control.Result{Error: err.Error()})
+			return
+		}
+		info := a.designer.ClickAt(float32(d.X), float32(d.Y))
+		if info == nil {
+			cmd.Respond(control.Result{Error: "no node at position or designer not active"})
+			return
+		}
+		data, _ := json.Marshal(info)
+		cmd.Respond(control.Result{OK: true, Data: data})
+
+	case "designer_state":
+		info := a.designer.SelectedInfo()
+		if info == nil {
+			cmd.Respond(control.Result{OK: true, Data: json.RawMessage(`null`)})
+			return
+		}
+		data, _ := json.Marshal(info)
+		cmd.Respond(control.Result{OK: true, Data: data})
+
 	default:
 		cmd.Respond(control.Result{Error: "unknown action: " + cmd.Action})
 	}
@@ -2311,6 +2559,10 @@ func walkNode(buf *bytes.Buffer, node Node.Instance, parentPath string) {
 	if ctrl, ok := Object.As[Control.Instance](node); ok {
 		size := ctrl.Size()
 		fmt.Fprintf(buf, "size = Vector2(%v, %v)\n", size.X, size.Y)
+		ms := ctrl.CustomMinimumSize()
+		if ms.X != 0 || ms.Y != 0 {
+			fmt.Fprintf(buf, "custom_minimum_size = Vector2(%v, %v)\n", ms.X, ms.Y)
+		}
 	}
 
 	// Emit type-specific properties

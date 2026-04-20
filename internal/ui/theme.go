@@ -36,16 +36,15 @@ func initScale() {
 		return // fallback: keep 1.0
 	}
 
-	// Map physical pixel height to a discrete scale factor.
 	var scale float64
 	switch {
-	case physH <= 1080: // 1080p
+	case physH <= 1080:
 		scale = 1.0
-	case physH <= 1440: // QHD
+	case physH <= 1440:
 		scale = 1.33
-	case physH <= 2160: // Retina laptops, 4K
-		scale = 1.5
-	default: // 5K, 8K+
+	case physH <= 2160:
+		scale = 2.0
+	default:
 		scale = 2.0
 	}
 
@@ -62,34 +61,38 @@ func scaled(base float32) float32 {
 	return base * float32(uiScale)
 }
 
-// Dark theme palette (TablePlus-inspired)
+// Dark theme palette — cool-neutral with blue undertone
 var (
-	colorBg         = Color.RGBA{R: 0.11, G: 0.11, B: 0.12, A: 1}  // #1C1C1E
-	colorBgSidebar  = Color.RGBA{R: 0.14, G: 0.14, B: 0.16, A: 1}  // #242428
-	colorBgDarker   = Color.RGBA{R: 0.094, G: 0.094, B: 0.10, A: 1} // #18181A
-	colorBgPanel    = Color.RGBA{R: 0.165, G: 0.165, B: 0.18, A: 1} // #2A2A2E
-	colorBgInput    = Color.RGBA{R: 0.165, G: 0.165, B: 0.18, A: 1} // #2A2A2E
-	colorBgHeader   = Color.RGBA{R: 0.145, G: 0.145, B: 0.16, A: 1} // #252528
-	colorRowOdd     = Color.RGBA{R: 0.11, G: 0.11, B: 0.12, A: 1}  // #1C1C1E
-	colorRowEven    = Color.RGBA{R: 0.133, G: 0.133, B: 0.15, A: 1} // #222226
-	colorBorder     = Color.RGBA{R: 0.227, G: 0.227, B: 0.243, A: 1} // #3A3A3E
-	colorBorderDim  = Color.RGBA{R: 0.18, G: 0.18, B: 0.20, A: 1}   // #2E2E32
-	colorText       = Color.RGBA{R: 0.90, G: 0.90, B: 0.90, A: 1}  // #E5E5E5
-	colorTextBright = Color.RGBA{R: 1.0, G: 1.0, B: 1.0, A: 1}     // #FFFFFF
-	colorTextDim    = Color.RGBA{R: 0.333, G: 0.333, B: 0.345, A: 1} // #555558
-	colorTextMuted  = Color.RGBA{R: 0.557, G: 0.557, B: 0.576, A: 1} // #8E8E93
-	colorAccent     = Color.RGBA{R: 0.29, G: 0.494, B: 0.969, A: 1} // #4A7EF7
-	colorSelected   = Color.RGBA{R: 0.118, G: 0.227, B: 0.435, A: 1} // #1E3A6F
-	colorBtnNormal  = Color.RGBA{R: 0.165, G: 0.165, B: 0.18, A: 1} // #2A2A2E
-	colorBtnHover   = Color.RGBA{R: 0.22, G: 0.22, B: 0.235, A: 1} // #38383C
+	colorBg         = Color.RGBA{R: 0.102, G: 0.106, B: 0.118, A: 1} // #1a1b1e — window body
+	colorBgSidebar  = Color.RGBA{R: 0.125, G: 0.129, B: 0.141, A: 1} // #202124 — sidebars, panels
+	colorBgDarker   = Color.RGBA{R: 0.125, G: 0.129, B: 0.141, A: 1} // #202124 — connection rail
+	colorBgPanel    = Color.RGBA{R: 0.149, G: 0.157, B: 0.173, A: 1} // #26282c — inputs, tabs (bgElev)
+	colorBgInput    = Color.RGBA{R: 0.149, G: 0.157, B: 0.173, A: 1} // #26282c — input fields
+	colorBgHeader   = Color.RGBA{R: 0.125, G: 0.129, B: 0.141, A: 1} // #202124 — table headers
+	colorBgRaised   = Color.RGBA{R: 0.180, G: 0.188, B: 0.212, A: 1} // #2e3036 — hover/selected
+	colorRowOdd     = Color.RGBA{R: 0.102, G: 0.106, B: 0.118, A: 1} // #1a1b1e
+	colorRowEven    = Color.RGBA{R: 0.110, G: 0.114, B: 0.129, A: 1} // #1c1d21
+	colorBorder     = Color.RGBA{R: 0.188, G: 0.196, B: 0.212, A: 1} // #303236 — dividers (line)
+	colorBorderDim  = Color.RGBA{R: 0.188, G: 0.196, B: 0.212, A: 1} // #303236
+	colorBorderStrong = Color.RGBA{R: 0.227, G: 0.235, B: 0.259, A: 1} // #3a3c42 — input borders
+	colorText       = Color.RGBA{R: 0.910, G: 0.918, B: 0.929, A: 1} // #e8eaed — primary text
+	colorTextBright = Color.RGBA{R: 0.910, G: 0.918, B: 0.929, A: 1} // #e8eaed
+	colorTextDim    = Color.RGBA{R: 0.420, G: 0.439, B: 0.463, A: 1} // #6b7076 — tertiary (textSubtle)
+	colorTextMuted  = Color.RGBA{R: 0.604, G: 0.627, B: 0.651, A: 1} // #9aa0a6 — secondary
+	colorAccent     = Color.RGBA{R: 0.298, G: 0.553, B: 1.0, A: 1}   // #4c8dff — oklch blue
+	colorAccentHover = Color.RGBA{R: 0.373, G: 0.608, B: 1.0, A: 1}  // #5f9bff
+	colorSelected   = Color.RGBA{R: 0.298, G: 0.553, B: 1.0, A: 0.16} // accent at 16% for selection
+	colorSuccess    = Color.RGBA{R: 0.290, G: 0.871, B: 0.502, A: 1}  // #4ade80 — connected/ready
+	colorBtnNormal  = Color.RGBA{R: 0.149, G: 0.157, B: 0.173, A: 1} // #26282c (bgElev)
+	colorBtnHover   = Color.RGBA{R: 0.180, G: 0.188, B: 0.212, A: 1} // #2e3036 (bgRaised)
 
 	// SQL syntax highlighting
-	colorSQLKeyword  = Color.RGBA{R: 0.40, G: 0.60, B: 1.0, A: 1}  // #6699FF — brighter blue
-	colorSQLString   = Color.RGBA{R: 0.80, G: 0.58, B: 0.38, A: 1} // #CC9460 — warm orange
-	colorSQLNumber   = Color.RGBA{R: 0.70, G: 0.85, B: 0.55, A: 1} // #B3D98C — green
-	colorSQLComment  = Color.RGBA{R: 0.42, G: 0.42, B: 0.435, A: 1} // #6B6B6F — muted tone
-	colorSQLSymbol   = Color.RGBA{R: 0.65, G: 0.65, B: 0.667, A: 1} // #A6A6AA — blue-tinted gray
-	colorSQLFunction = Color.RGBA{R: 0.85, G: 0.75, B: 0.50, A: 1} // #D9BF80 — gold
+	colorSQLKeyword  = Color.RGBA{R: 0.78, G: 0.57, B: 0.92, A: 1}  // #c792ea — purple keywords
+	colorSQLString   = Color.RGBA{R: 0.65, G: 0.84, B: 0.65, A: 1}  // #a5d6a7 — green strings
+	colorSQLNumber   = Color.RGBA{R: 1.0, G: 0.72, B: 0.42, A: 1}   // #ffb86c — orange numbers
+	colorSQLComment  = Color.RGBA{R: 0.42, G: 0.44, B: 0.463, A: 1} // #6b7076 — subtle
+	colorSQLSymbol   = Color.RGBA{R: 0.604, G: 0.627, B: 0.651, A: 1} // #9aa0a6
+	colorSQLFunction = Color.RGBA{R: 0.85, G: 0.75, B: 0.50, A: 1}  // #d9bf80 — gold
 )
 
 func makeStyleBox(bg Color.RGBA, radius int, border int, borderColor Color.RGBA) StyleBoxFlat.Instance {
@@ -110,97 +113,93 @@ func makeStyleBoxPadded(bg Color.RGBA, radius int, border int, borderColor Color
 }
 
 func applyButtonTheme(c Control.Instance) {
-	// Premium CTA button with vivid accent blue
-	normal := makeStyleBox(colorAccent, 6, 0, colorBorder)
-	normal.AsStyleBox().SetContentMarginLeft(14)
-	normal.AsStyleBox().SetContentMarginRight(14)
-	normal.AsStyleBox().SetContentMarginTop(8)
-	normal.AsStyleBox().SetContentMarginBottom(8)
+	normal := makeStyleBox(colorAccent, 5, 0, colorBorder)
+	normal.AsStyleBox().SetContentMarginLeft(12)
+	normal.AsStyleBox().SetContentMarginRight(12)
+	normal.AsStyleBox().SetContentMarginTop(5)
+	normal.AsStyleBox().SetContentMarginBottom(5)
 
-	hover := makeStyleBox(Color.RGBA{R: 0.353, G: 0.557, B: 1.0, A: 1}, 6, 0, colorBorder) // #5A8EFF
-	hover.AsStyleBox().SetContentMarginLeft(14)
-	hover.AsStyleBox().SetContentMarginRight(14)
-	hover.AsStyleBox().SetContentMarginTop(8)
-	hover.AsStyleBox().SetContentMarginBottom(8)
+	hover := makeStyleBox(colorAccentHover, 5, 0, colorBorder)
+	hover.AsStyleBox().SetContentMarginLeft(12)
+	hover.AsStyleBox().SetContentMarginRight(12)
+	hover.AsStyleBox().SetContentMarginTop(5)
+	hover.AsStyleBox().SetContentMarginBottom(5)
 
-	pressed := makeStyleBox(Color.RGBA{R: 0.227, G: 0.431, B: 0.906, A: 1}, 6, 0, colorBorder) // #3A6EE7
-	pressed.AsStyleBox().SetContentMarginLeft(14)
-	pressed.AsStyleBox().SetContentMarginRight(14)
-	pressed.AsStyleBox().SetContentMarginTop(8)
-	pressed.AsStyleBox().SetContentMarginBottom(8)
+	pressed := makeStyleBox(Color.RGBA{R: 0.247, G: 0.490, B: 0.941, A: 1}, 5, 0, colorBorder)
+	pressed.AsStyleBox().SetContentMarginLeft(12)
+	pressed.AsStyleBox().SetContentMarginRight(12)
+	pressed.AsStyleBox().SetContentMarginTop(5)
+	pressed.AsStyleBox().SetContentMarginBottom(5)
 
 	c.AddThemeStyleboxOverride("normal", normal.AsStyleBox())
 	c.AddThemeStyleboxOverride("hover", hover.AsStyleBox())
 	c.AddThemeStyleboxOverride("pressed", pressed.AsStyleBox())
 	c.AddThemeColorOverride("font_color", colorTextBright)
 	c.AddThemeColorOverride("font_hover_color", colorTextBright)
-	c.AddThemeFontSizeOverride("font_size", fontSize(13))
+	c.AddThemeFontSizeOverride("font_size", fontSize(12))
 }
 
 func applySecondaryButtonTheme(c Control.Instance) {
-	// Secondary button with 6px radius
-	normal := makeStyleBox(colorBtnNormal, 6, 1, colorBorder)
-	normal.AsStyleBox().SetContentMarginLeft(14)
-	normal.AsStyleBox().SetContentMarginRight(14)
-	normal.AsStyleBox().SetContentMarginTop(8)
-	normal.AsStyleBox().SetContentMarginBottom(8)
+	normal := makeStyleBox(colorBtnNormal, 5, 1, colorBorder)
+	normal.AsStyleBox().SetContentMarginLeft(10)
+	normal.AsStyleBox().SetContentMarginRight(10)
+	normal.AsStyleBox().SetContentMarginTop(4)
+	normal.AsStyleBox().SetContentMarginBottom(4)
 
-	hover := makeStyleBox(colorBtnHover, 6, 1, colorBorder)
-	hover.AsStyleBox().SetContentMarginLeft(14)
-	hover.AsStyleBox().SetContentMarginRight(14)
-	hover.AsStyleBox().SetContentMarginTop(8)
-	hover.AsStyleBox().SetContentMarginBottom(8)
+	hover := makeStyleBox(colorBtnHover, 5, 1, colorBorder)
+	hover.AsStyleBox().SetContentMarginLeft(10)
+	hover.AsStyleBox().SetContentMarginRight(10)
+	hover.AsStyleBox().SetContentMarginTop(4)
+	hover.AsStyleBox().SetContentMarginBottom(4)
 
 	c.AddThemeStyleboxOverride("normal", normal.AsStyleBox())
 	c.AddThemeStyleboxOverride("hover", hover.AsStyleBox())
 	c.AddThemeStyleboxOverride("pressed", hover.AsStyleBox())
 	c.AddThemeColorOverride("font_color", colorTextMuted)
 	c.AddThemeColorOverride("font_hover_color", colorText)
-	c.AddThemeFontSizeOverride("font_size", fontSize(13))
+	c.AddThemeFontSizeOverride("font_size", fontSize(12))
 }
 
 func applySidebarTabTheme(c Control.Instance, active bool) {
-	transparent := Color.RGBA{R: 0, G: 0, B: 0, A: 0}
 	if active {
-		bg := makeStyleBox(transparent, 0, 0, transparent)
-		bg.SetBorderWidthBottom(2)
-		bg.SetBorderColor(colorAccent)
+		bg := makeStyleBox(colorBgRaised, 5, 0, colorBgRaised)
 		sb := bg.AsStyleBox()
-		sb.SetContentMarginTop(6)
-		sb.SetContentMarginBottom(6)
-		sb.SetContentMarginLeft(8)
-		sb.SetContentMarginRight(8)
+		sb.SetContentMarginTop(4)
+		sb.SetContentMarginBottom(4)
+		sb.SetContentMarginLeft(12)
+		sb.SetContentMarginRight(12)
 		c.AddThemeStyleboxOverride("normal", sb)
 		c.AddThemeStyleboxOverride("hover", sb)
 		c.AddThemeStyleboxOverride("pressed", sb)
-		c.AddThemeColorOverride("font_color", colorTextBright)
-		c.AddThemeColorOverride("font_hover_color", colorTextBright)
+		c.AddThemeColorOverride("font_color", colorText)
+		c.AddThemeColorOverride("font_hover_color", colorText)
 	} else {
-		bg := makeStyleBox(transparent, 0, 0, transparent)
+		transparent := Color.RGBA{R: 0, G: 0, B: 0, A: 0}
+		bg := makeStyleBox(transparent, 5, 0, transparent)
 		sb := bg.AsStyleBox()
-		sb.SetContentMarginTop(6)
-		sb.SetContentMarginBottom(8)
-		sb.SetContentMarginLeft(8)
-		sb.SetContentMarginRight(8)
+		sb.SetContentMarginTop(4)
+		sb.SetContentMarginBottom(4)
+		sb.SetContentMarginLeft(12)
+		sb.SetContentMarginRight(12)
 		c.AddThemeStyleboxOverride("normal", sb)
 		c.AddThemeStyleboxOverride("hover", sb)
 		c.AddThemeStyleboxOverride("pressed", sb)
-		c.AddThemeColorOverride("font_color", colorTextDim)
+		c.AddThemeColorOverride("font_color", colorTextMuted)
 		c.AddThemeColorOverride("font_hover_color", colorTextMuted)
 	}
 }
 
 func applyToggleButtonTheme(c Control.Instance, active bool) {
 	if active {
-		bg := makeStyleBoxPadded(colorBtnHover, 3, 1, colorBorder, 3)
+		bg := makeStyleBoxPadded(colorBtnHover, 3, 1, colorBorder, 2)
 		c.AddThemeStyleboxOverride("normal", bg.AsStyleBox())
 		c.AddThemeStyleboxOverride("hover", bg.AsStyleBox())
 		c.AddThemeStyleboxOverride("pressed", bg.AsStyleBox())
 		c.AddThemeColorOverride("font_color", colorTextBright)
 	} else {
-		bg := makeStyleBoxPadded(colorBtnNormal, 3, 0, colorBtnNormal, 3)
+		bg := makeStyleBoxPadded(colorBtnNormal, 3, 0, colorBtnNormal, 2)
 		c.AddThemeStyleboxOverride("normal", bg.AsStyleBox())
-		hover := makeStyleBoxPadded(colorBtnHover, 3, 0, colorBtnHover, 3)
+		hover := makeStyleBoxPadded(colorBtnHover, 3, 0, colorBtnHover, 2)
 		c.AddThemeStyleboxOverride("hover", hover.AsStyleBox())
 		c.AddThemeStyleboxOverride("pressed", hover.AsStyleBox())
 		c.AddThemeColorOverride("font_color", colorTextDim)
@@ -208,7 +207,7 @@ func applyToggleButtonTheme(c Control.Instance, active bool) {
 }
 
 func applyActiveButtonTheme(c Control.Instance) {
-	active := makeStyleBoxPadded(colorAccent, 3, 1, colorAccent, 5)
+	active := makeStyleBoxPadded(colorAccent, 3, 1, colorAccent, 2)
 	c.AddThemeStyleboxOverride("normal", active.AsStyleBox())
 	c.AddThemeStyleboxOverride("hover", active.AsStyleBox())
 	c.AddThemeStyleboxOverride("pressed", active.AsStyleBox())
@@ -217,14 +216,22 @@ func applyActiveButtonTheme(c Control.Instance) {
 }
 
 func applyInputTheme(c Control.Instance) {
-	normal := makeStyleBoxPadded(colorBgInput, 3, 1, colorBorder, 5)
-	focus := makeStyleBoxPadded(colorBgInput, 3, 1, colorAccent, 5)
+	normal := makeStyleBoxPadded(colorBgPanel, 6, 1, colorBorder, 0)
+	normal.AsStyleBox().SetContentMarginLeft(10)
+	normal.AsStyleBox().SetContentMarginRight(10)
+	normal.AsStyleBox().SetContentMarginTop(6)
+	normal.AsStyleBox().SetContentMarginBottom(6)
+	focus := makeStyleBoxPadded(colorBgPanel, 6, 1, colorAccent, 0)
+	focus.AsStyleBox().SetContentMarginLeft(10)
+	focus.AsStyleBox().SetContentMarginRight(10)
+	focus.AsStyleBox().SetContentMarginTop(6)
+	focus.AsStyleBox().SetContentMarginBottom(6)
 	c.AddThemeStyleboxOverride("normal", normal.AsStyleBox())
 	c.AddThemeStyleboxOverride("focus", focus.AsStyleBox())
 	c.AddThemeStyleboxOverride("read_only", normal.AsStyleBox())
 	c.AddThemeColorOverride("font_color", colorText)
 	c.AddThemeColorOverride("font_placeholder_color", colorTextDim)
-	c.AddThemeFontSizeOverride("font_size", fontSize(13))
+	c.AddThemeFontSizeOverride("font_size", fontSize(12))
 }
 
 func applyTreeTheme(c Control.Instance) {
@@ -254,8 +261,8 @@ func applyTreeTheme(c Control.Instance) {
 	c.AddThemeColorOverride("title_button_color", colorTextMuted)
 	c.AddThemeFontSizeOverride("font_size", fontSize(13))
 
-	// Row hover - vivid blue tint (#1E3050)
-	hover := makeStyleBox(Color.RGBA{R: 0.118, G: 0.188, B: 0.314, A: 1}, 0, 0, colorBorder)
+	// Row hover — subtle blue tint
+	hover := makeStyleBox(Color.RGBA{R: 0.298, G: 0.553, B: 1.0, A: 0.08}, 0, 0, colorBorder)
 	hover.AsStyleBox().SetContentMarginAll(4)
 	c.AddThemeStyleboxOverride("hover", hover.AsStyleBox())
 	c.AddThemeStyleboxOverride("hovered", hover.AsStyleBox())
@@ -279,8 +286,8 @@ func applySidebarTreeTheme(c Control.Instance) {
 }
 
 func applyTextEditTheme(c Control.Instance) {
-	normal := makeStyleBoxPadded(colorBgInput, 3, 1, colorBorder, 6)
-	focus := makeStyleBoxPadded(colorBgInput, 3, 1, colorAccent, 6)
+	normal := makeStyleBoxPadded(colorBg, 0, 0, colorBg, 0)
+	focus := makeStyleBoxPadded(colorBg, 0, 0, colorBg, 0)
 	c.AddThemeStyleboxOverride("normal", normal.AsStyleBox())
 	c.AddThemeStyleboxOverride("focus", focus.AsStyleBox())
 	c.AddThemeColorOverride("font_color", colorText)
@@ -297,23 +304,189 @@ func applyLabelTheme(c Control.Instance, dim bool) {
 }
 
 func applyStatusBarTheme(c Control.Instance) {
-	c.AddThemeColorOverride("font_color", colorTextMuted)
-	c.AddThemeFontSizeOverride("font_size", fontSize(13))
+	c.AddThemeColorOverride("font_color", colorTextDim)
+	c.AddThemeFontSizeOverride("font_size", fontSize(11))
 }
 
-// Title bar colors
+// Toolbar colors
 var (
-	colorTitleBar  = Color.RGBA{R: 0.11, G: 0.11, B: 0.12, A: 1}  // #1C1C1E (same as main bg)
-	colorTitlePill = Color.RGBA{R: 0.22, G: 0.22, B: 0.235, A: 1} // #38383C
+	colorTitleBar  = Color.RGBA{R: 0.165, G: 0.169, B: 0.184, A: 1} // #2a2b2f
+	colorTitlePill = Color.RGBA{R: 0.149, G: 0.157, B: 0.173, A: 1} // #26282c (bgElev)
 )
 
 func applyTitleBarTheme(c Control.Instance) {
-	applyPanelBg(c, colorTitleBar)
+	sb := makeStyleBox(colorTitleBar, 0, 0, colorTitleBar)
+	sb.SetBorderWidthBottom(1)
+	sb.SetBorderColor(colorBorder)
+	c.AddThemeStyleboxOverride("panel", sb.AsStyleBox())
+}
+
+// applyPrimaryCompactButtonTheme is a smaller variant of applyButtonTheme
+// used for inline CTAs like "Run" inside editor headers.
+func applyPrimaryCompactButtonTheme(c Control.Instance) {
+	normal := makeStyleBox(colorAccent, 5, 0, colorBorder)
+	normal.AsStyleBox().SetContentMarginLeft(12)
+	normal.AsStyleBox().SetContentMarginRight(12)
+	normal.AsStyleBox().SetContentMarginTop(5)
+	normal.AsStyleBox().SetContentMarginBottom(5)
+
+	hover := makeStyleBox(Color.RGBA{R: 0.353, G: 0.557, B: 1.0, A: 1}, 5, 0, colorBorder)
+	hover.AsStyleBox().SetContentMarginLeft(12)
+	hover.AsStyleBox().SetContentMarginRight(12)
+	hover.AsStyleBox().SetContentMarginTop(5)
+	hover.AsStyleBox().SetContentMarginBottom(5)
+
+	pressed := makeStyleBox(Color.RGBA{R: 0.227, G: 0.431, B: 0.906, A: 1}, 5, 0, colorBorder)
+	pressed.AsStyleBox().SetContentMarginLeft(12)
+	pressed.AsStyleBox().SetContentMarginRight(12)
+	pressed.AsStyleBox().SetContentMarginTop(5)
+	pressed.AsStyleBox().SetContentMarginBottom(5)
+
+	c.AddThemeStyleboxOverride("normal", normal.AsStyleBox())
+	c.AddThemeStyleboxOverride("hover", hover.AsStyleBox())
+	c.AddThemeStyleboxOverride("pressed", pressed.AsStyleBox())
+	c.AddThemeColorOverride("font_color", colorTextBright)
+	c.AddThemeColorOverride("font_hover_color", colorTextBright)
+	c.AddThemeFontSizeOverride("font_size", fontSize(12))
+}
+
+// applyCompactSecondaryButtonTheme — pagination/status-bar buttons.
+func applyCompactSecondaryButtonTheme(c Control.Instance) {
+	normal := makeStyleBox(colorBtnNormal, 3, 1, colorBorder)
+	normal.AsStyleBox().SetContentMarginLeft(6)
+	normal.AsStyleBox().SetContentMarginRight(6)
+	normal.AsStyleBox().SetContentMarginTop(1)
+	normal.AsStyleBox().SetContentMarginBottom(1)
+	hover := makeStyleBox(colorBtnHover, 3, 1, colorBorder)
+	hover.AsStyleBox().SetContentMarginLeft(6)
+	hover.AsStyleBox().SetContentMarginRight(6)
+	hover.AsStyleBox().SetContentMarginTop(1)
+	hover.AsStyleBox().SetContentMarginBottom(1)
+	c.AddThemeStyleboxOverride("normal", normal.AsStyleBox())
+	c.AddThemeStyleboxOverride("hover", hover.AsStyleBox())
+	c.AddThemeStyleboxOverride("pressed", hover.AsStyleBox())
+	c.AddThemeColorOverride("font_color", colorTextMuted)
+	c.AddThemeColorOverride("font_hover_color", colorText)
+	c.AddThemeFontSizeOverride("font_size", fontSize(11))
+}
+
+// applySegmentedControlTrack wraps the Items/History tab row.
+func applySegmentedControlTrack(c Control.Instance) {
+	sb := makeStyleBox(colorBgInput, 6, 1, colorBorder)
+	sb.AsStyleBox().SetContentMarginAll(2)
+	c.AddThemeStyleboxOverride("panel", sb.AsStyleBox())
+}
+
+// applySegmentedTab replaces applySidebarTabTheme for segmented controls.
+func applySegmentedTab(c Control.Instance, active bool) {
+	if active {
+		sb := makeStyleBox(colorBgRaised, 5, 0, colorBgRaised)
+		sb.AsStyleBox().SetContentMarginTop(4)
+		sb.AsStyleBox().SetContentMarginBottom(4)
+		sb.AsStyleBox().SetContentMarginLeft(12)
+		sb.AsStyleBox().SetContentMarginRight(12)
+		c.AddThemeStyleboxOverride("normal", sb.AsStyleBox())
+		c.AddThemeStyleboxOverride("hover", sb.AsStyleBox())
+		c.AddThemeStyleboxOverride("pressed", sb.AsStyleBox())
+		c.AddThemeColorOverride("font_color", colorTextBright)
+		c.AddThemeColorOverride("font_hover_color", colorTextBright)
+	} else {
+		empty := StyleBoxEmpty.New()
+		empty.AsStyleBox().SetContentMarginTop(4)
+		empty.AsStyleBox().SetContentMarginBottom(4)
+		empty.AsStyleBox().SetContentMarginLeft(12)
+		empty.AsStyleBox().SetContentMarginRight(12)
+		c.AddThemeStyleboxOverride("normal", empty.AsStyleBox())
+		c.AddThemeStyleboxOverride("hover", empty.AsStyleBox())
+		c.AddThemeStyleboxOverride("pressed", empty.AsStyleBox())
+		c.AddThemeColorOverride("font_color", colorTextMuted)
+		c.AddThemeColorOverride("font_hover_color", colorText)
+	}
+	c.AddThemeFontSizeOverride("font_size", fontSize(12))
 }
 
 func applyPillTheme(c Control.Instance) {
-	pill := makeStyleBoxPadded(colorTitlePill, 6, 0, colorBorder, 6)
+	pill := makeStyleBoxPadded(colorTitlePill, 6, 1, colorBorder, 6)
 	c.AddThemeStyleboxOverride("panel", pill.AsStyleBox())
+}
+
+// applyConnectionPillTheme styles a button as a clickable connection picker pill.
+func applyConnectionPillTheme(c Control.Instance) {
+	normal := makeStyleBox(colorBgPanel, 6, 1, colorBorder)
+	normal.AsStyleBox().SetContentMarginLeft(12)
+	normal.AsStyleBox().SetContentMarginRight(12)
+	normal.AsStyleBox().SetContentMarginTop(5)
+	normal.AsStyleBox().SetContentMarginBottom(5)
+
+	hover := makeStyleBox(colorBgRaised, 6, 1, colorBorder)
+	hover.AsStyleBox().SetContentMarginLeft(12)
+	hover.AsStyleBox().SetContentMarginRight(12)
+	hover.AsStyleBox().SetContentMarginTop(5)
+	hover.AsStyleBox().SetContentMarginBottom(5)
+
+	c.AddThemeStyleboxOverride("normal", normal.AsStyleBox())
+	c.AddThemeStyleboxOverride("hover", hover.AsStyleBox())
+	c.AddThemeStyleboxOverride("pressed", hover.AsStyleBox())
+	c.AddThemeColorOverride("font_color", colorText)
+	c.AddThemeColorOverride("font_hover_color", colorText)
+	c.AddThemeFontSizeOverride("font_size", fontSize(12))
+}
+
+// applyFlatButtonTheme styles a button as flat text (no background).
+func applyFlatButtonTheme(c Control.Instance) {
+	transparent := Color.RGBA{R: 0, G: 0, B: 0, A: 0}
+	normal := makeStyleBox(transparent, 0, 0, transparent)
+	normal.AsStyleBox().SetContentMarginLeft(6)
+	normal.AsStyleBox().SetContentMarginRight(6)
+	normal.AsStyleBox().SetContentMarginTop(2)
+	normal.AsStyleBox().SetContentMarginBottom(2)
+
+	hover := makeStyleBox(colorBtnHover, 3, 0, colorBtnHover)
+	hover.AsStyleBox().SetContentMarginLeft(6)
+	hover.AsStyleBox().SetContentMarginRight(6)
+	hover.AsStyleBox().SetContentMarginTop(2)
+	hover.AsStyleBox().SetContentMarginBottom(2)
+
+	c.AddThemeStyleboxOverride("normal", normal.AsStyleBox())
+	c.AddThemeStyleboxOverride("hover", hover.AsStyleBox())
+	c.AddThemeStyleboxOverride("pressed", hover.AsStyleBox())
+	c.AddThemeColorOverride("font_color", colorTextMuted)
+	c.AddThemeColorOverride("font_hover_color", colorText)
+	c.AddThemeFontSizeOverride("font_size", fontSize(12))
+}
+
+// applyIconButtonTheme styles a small transparent icon button (26x26).
+func applyIconButtonTheme(c Control.Instance) {
+	transparent := Color.RGBA{R: 0, G: 0, B: 0, A: 0}
+	normal := makeStyleBox(transparent, 3, 0, transparent)
+	normal.AsStyleBox().SetContentMarginAll(2)
+
+	hover := makeStyleBox(colorBtnHover, 3, 0, colorBtnHover)
+	hover.AsStyleBox().SetContentMarginAll(2)
+
+	c.AddThemeStyleboxOverride("normal", normal.AsStyleBox())
+	c.AddThemeStyleboxOverride("hover", hover.AsStyleBox())
+	c.AddThemeStyleboxOverride("pressed", hover.AsStyleBox())
+	c.AddThemeColorOverride("font_color", colorTextMuted)
+	c.AddThemeColorOverride("font_hover_color", colorText)
+	c.AddThemeFontSizeOverride("font_size", fontSize(11))
+}
+
+// applyDashedButtonTheme styles a button with a dashed border (for "+" add affordance).
+func applyDashedButtonTheme(c Control.Instance) {
+	transparent := Color.RGBA{R: 0, G: 0, B: 0, A: 0}
+	normal := makeStyleBox(transparent, 4, 1, colorBorder)
+	normal.AsStyleBox().SetContentMarginAll(2)
+
+	hover := makeStyleBox(colorBtnHover, 4, 1, colorBorderStrong)
+	hover.AsStyleBox().SetContentMarginAll(2)
+
+	c.AddThemeStyleboxOverride("normal", normal.AsStyleBox())
+	c.AddThemeStyleboxOverride("hover", hover.AsStyleBox())
+	c.AddThemeStyleboxOverride("pressed", hover.AsStyleBox())
+	c.AddThemeColorOverride("font_color", colorTextMuted)
+	c.AddThemeColorOverride("font_hover_color", colorText)
+	c.AddThemeFontSizeOverride("font_size", fontSize(12))
 }
 
 func applyPanelBg(c Control.Instance, bg Color.RGBA) {
@@ -322,9 +495,9 @@ func applyPanelBg(c Control.Instance, bg Color.RGBA) {
 }
 
 func applyTabBarTheme(c Control.Instance) {
-	c.AddThemeFontSizeOverride("font_size", fontSize(13))
-	c.AddThemeColorOverride("font_selected_color", colorTextBright)
-	c.AddThemeColorOverride("font_unselected_color", colorTextDim)
+	c.AddThemeFontSizeOverride("font_size", fontSize(12))
+	c.AddThemeColorOverride("font_selected_color", colorText)
+	c.AddThemeColorOverride("font_unselected_color", colorTextMuted)
 	c.AddThemeColorOverride("font_hovered_color", colorText)
 
 	// Mono system font
@@ -332,39 +505,41 @@ func applyTabBarTheme(c Control.Instance) {
 	mono.SetFontNames([]string{"SF Mono", "Menlo", "monospace"})
 	c.AddThemeFontOverride("font", mono.AsFont())
 
-	// Tighter tab padding
+	// Active tab: accent bottom border
 	active := StyleBoxFlat.New()
-	active.SetBgColor(colorBgSidebar)
-	active.SetCornerRadiusAll(3)
-	active.AsStyleBox().SetContentMarginLeft(6)
-	active.AsStyleBox().SetContentMarginTop(2)
-	active.AsStyleBox().SetContentMarginRight(6)
-	active.AsStyleBox().SetContentMarginBottom(2)
+	active.SetBgColor(colorBg)
+	active.SetCornerRadiusAll(0)
+	active.SetBorderWidthBottom(2)
+	active.SetBorderColor(colorAccent)
+	active.AsStyleBox().SetContentMarginLeft(10)
+	active.AsStyleBox().SetContentMarginTop(6)
+	active.AsStyleBox().SetContentMarginRight(10)
+	active.AsStyleBox().SetContentMarginBottom(6)
 	c.AddThemeStyleboxOverride("tab_selected", active.AsStyleBox())
 
+	// Inactive tab
 	inactive := StyleBoxFlat.New()
-	inactive.SetBgColor(colorBg)
-	inactive.SetCornerRadiusAll(3)
-	inactive.AsStyleBox().SetContentMarginLeft(6)
-	inactive.AsStyleBox().SetContentMarginTop(2)
-	inactive.AsStyleBox().SetContentMarginRight(6)
-	inactive.AsStyleBox().SetContentMarginBottom(2)
+	inactive.SetBgColor(Color.RGBA{R: 0, G: 0, B: 0, A: 0})
+	inactive.SetCornerRadiusAll(0)
+	inactive.AsStyleBox().SetContentMarginLeft(10)
+	inactive.AsStyleBox().SetContentMarginTop(6)
+	inactive.AsStyleBox().SetContentMarginRight(10)
+	inactive.AsStyleBox().SetContentMarginBottom(6)
 	c.AddThemeStyleboxOverride("tab_unselected", inactive.AsStyleBox())
 
+	// Hovered tab
 	hovered := StyleBoxFlat.New()
 	hovered.SetBgColor(colorBtnHover)
-	hovered.SetCornerRadiusAll(3)
-	hovered.AsStyleBox().SetContentMarginLeft(6)
-	hovered.AsStyleBox().SetContentMarginTop(2)
-	hovered.AsStyleBox().SetContentMarginRight(6)
-	hovered.AsStyleBox().SetContentMarginBottom(2)
+	hovered.SetCornerRadiusAll(0)
+	hovered.AsStyleBox().SetContentMarginLeft(10)
+	hovered.AsStyleBox().SetContentMarginTop(6)
+	hovered.AsStyleBox().SetContentMarginRight(10)
+	hovered.AsStyleBox().SetContentMarginBottom(6)
 	c.AddThemeStyleboxOverride("tab_hovered", hovered.AsStyleBox())
 
 	// Spacing
-	c.AddThemeConstantOverride("h_separation", 4)
+	c.AddThemeConstantOverride("h_separation", 0)
 
-	// Small close icon (8x8 X at 80% opacity)
-	// Close icon from SVG (Lucide "x" icon) at 80% opacity
 	closeIcon := makeCloseIconSVG()
 	c.AddThemeIconOverride("close", closeIcon.AsTexture2D())
 }

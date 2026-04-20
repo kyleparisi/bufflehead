@@ -3,6 +3,7 @@
 Requires the app to be running headless on port 9900.
 Run via: test/integration_test.sh (which builds, launches Godot, then runs pytest)
 """
+import json
 import re
 import time
 from pathlib import Path
@@ -89,6 +90,16 @@ def find_node(tscn_text, cls, ancestor=None):
             if not has_ancestor:
                 continue
         return n
+    return None
+
+
+def find_node_by_name(tscn_text, name):
+    """Find a node by its name (last path segment)."""
+    nodes = parse_tscn(tscn_text)
+    for n in nodes:
+        node_name = n["path"].split("/")[-1] if "/" in n["path"] else n["path"]
+        if node_name == name:
+            return n
     return None
 
 
@@ -463,3 +474,244 @@ class TestMultiRowSelect:
         """Out-of-range index in multi-select returns an error."""
         result = post("select-row", {"rows": [0, 999]})
         assert result.get("ok") is not True
+
+
+class TestDesigner:
+    """Tests for the layout designer / inspector."""
+
+    def setup_method(self):
+        close_all_tabs()
+        open_file(SAMPLE)
+        post("designer-open")
+        time.sleep(0.3)
+
+    def teardown_method(self):
+        post("designer-close")
+        time.sleep(0.1)
+
+    def _designer_state(self):
+        r = requests.get(f"{BASE_URL}/designer-state")
+        return r.json()
+
+    def _designer_find(self, name):
+        return post("designer-find", {"name": name})
+
+    def _designer_click(self, x, y):
+        return post("designer-click", {"x": x, "y": y})
+
+    def test_designer_opens(self):
+        """Designer can be toggled on via control API."""
+        s = self._designer_state()
+        assert s["ok"] is True
+        # No selection yet — data should be null
+        assert s.get("data") is None
+
+    def test_find_node_by_name(self):
+        """Can find and select a node by its Godot name."""
+        # The ui-tree should have Button nodes; find the first one
+        tree = ui_tree()
+        nodes = parse_tscn(tree)
+        buttons = [n for n in nodes if n["type"] == "Button"]
+        assert len(buttons) > 0, "Should have at least one Button in the tree"
+        # Use the first button's name
+        btn_name = buttons[0]["path"].split("/")[-1]
+        result = self._designer_find(btn_name)
+        assert result["ok"] is True
+        info = result["data"]
+        assert info["name"] == btn_name
+        assert info["type"] == "Button"
+
+    def test_button_rect_is_reasonable(self):
+        """A button's rect should be small, not the size of the whole window."""
+        tree = ui_tree()
+        nodes = parse_tscn(tree)
+        buttons = [n for n in nodes if n["type"] == "Button"]
+        assert len(buttons) > 0
+
+        btn_name = buttons[0]["path"].split("/")[-1]
+        result = self._designer_find(btn_name)
+        assert result["ok"] is True
+        info = result["data"]
+
+        # A button should NOT be larger than 300x300 (generous upper bound)
+        assert info["sizeW"] < 300, (
+            f"Button {btn_name!r} width {info['sizeW']} is too large — "
+            f"should be a small button, not a container"
+        )
+        assert info["sizeH"] < 300, (
+            f"Button {btn_name!r} height {info['sizeH']} is too large — "
+            f"should be a small button, not a container"
+        )
+
+    def test_size_matches_global_rect(self):
+        """Size() and GetGlobalRect().Size should agree."""
+        tree = ui_tree()
+        nodes = parse_tscn(tree)
+        buttons = [n for n in nodes if n["type"] == "Button"]
+        assert len(buttons) > 0
+
+        btn_name = buttons[0]["path"].split("/")[-1]
+        result = self._designer_find(btn_name)
+        assert result["ok"] is True
+        info = result["data"]
+
+        # Size() should equal GetGlobalRect().Size
+        assert abs(info["sizeW"] - info["rectSizeW"]) < 1, (
+            f"Size().X={info['sizeW']} != GetGlobalRect().Size.X={info['rectSizeW']}"
+        )
+        assert abs(info["sizeH"] - info["rectSizeH"]) < 1, (
+            f"Size().Y={info['sizeH']} != GetGlobalRect().Size.Y={info['rectSizeH']}"
+        )
+
+    def test_global_position_matches_rect(self):
+        """GlobalPosition() and GetGlobalRect().Position should agree."""
+        tree = ui_tree()
+        nodes = parse_tscn(tree)
+        buttons = [n for n in nodes if n["type"] == "Button"]
+        assert len(buttons) > 0
+
+        btn_name = buttons[0]["path"].split("/")[-1]
+        result = self._designer_find(btn_name)
+        assert result["ok"] is True
+        info = result["data"]
+
+        assert abs(info["globalPosX"] - info["rectPosX"]) < 1, (
+            f"GlobalPosition.X={info['globalPosX']} != GetGlobalRect.Position.X={info['rectPosX']}"
+        )
+        assert abs(info["globalPosY"] - info["rectPosY"]) < 1, (
+            f"GlobalPosition.Y={info['globalPosY']} != GetGlobalRect.Position.Y={info['rectPosY']}"
+        )
+
+    def test_click_at_button_position_selects_button(self):
+        """Clicking at a button's center should select it (or a deeper child)."""
+        tree = ui_tree()
+        nodes = parse_tscn(tree)
+        buttons = [n for n in nodes if n["type"] == "Button"]
+        assert len(buttons) > 0
+
+        btn_name = buttons[0]["path"].split("/")[-1]
+        find_result = self._designer_find(btn_name)
+        assert find_result["ok"] is True
+        info = find_result["data"]
+
+        # Click at the center of the button
+        cx = info["globalPosX"] + info["sizeW"] / 2
+        cy = info["globalPosY"] + info["sizeH"] / 2
+        click_result = self._designer_click(cx, cy)
+        assert click_result["ok"] is True
+        click_info = click_result["data"]
+
+        # The clicked node should be at this position with a reasonable size
+        assert click_info["sizeW"] < 300, (
+            f"Clicked node {click_info['name']!r} width {click_info['sizeW']} is too large"
+        )
+        assert click_info["sizeH"] < 300, (
+            f"Clicked node {click_info['name']!r} height {click_info['sizeH']} is too large"
+        )
+
+    def test_tree_selection_highlights_correct_node(self):
+        """Selecting a node in the inspector tree positions the highlight overlay
+        exactly over that node's rect in the main view."""
+        tree = ui_tree()
+        nodes = parse_tscn(tree)
+
+        # Test several node types to cover containers, buttons, and panels
+        targets = []
+        for cls in ("Button", "VBoxContainer", "PanelContainer", "Label"):
+            found = [n for n in nodes if n["type"] == cls]
+            if found:
+                targets.append(found[0]["path"].split("/")[-1])
+        assert len(targets) >= 2, "Need at least 2 different node types to test"
+
+        for name in targets:
+            result = self._designer_find(name)
+            assert result["ok"] is True, f"Could not find node {name!r}"
+            info = result["data"]
+
+            # Highlight must be visible after selection
+            assert info["highlightVisible"] is True, (
+                f"Highlight should be visible after selecting {name!r}"
+            )
+
+            # Highlight position must match selected node's GlobalPosition
+            assert abs(info["highlightX"] - info["globalPosX"]) < 1, (
+                f"Node {name!r}: highlight X={info['highlightX']} != "
+                f"node globalPosX={info['globalPosX']}"
+            )
+            assert abs(info["highlightY"] - info["globalPosY"]) < 1, (
+                f"Node {name!r}: highlight Y={info['highlightY']} != "
+                f"node globalPosY={info['globalPosY']}"
+            )
+
+            # Highlight size must match selected node's Size
+            assert abs(info["highlightW"] - info["sizeW"]) < 1, (
+                f"Node {name!r}: highlight W={info['highlightW']} != "
+                f"node sizeW={info['sizeW']}"
+            )
+            assert abs(info["highlightH"] - info["sizeH"]) < 1, (
+                f"Node {name!r}: highlight H={info['highlightH']} != "
+                f"node sizeH={info['sizeH']}"
+            )
+
+
+class TestLayoutOverrides:
+    """Verify that graphics/layout.json overrides are applied on boot."""
+
+    LAYOUT_FILE = Path(__file__).resolve().parent.parent / "graphics" / "layout.json"
+
+    def _load_layout(self):
+        with open(self.LAYOUT_FILE) as f:
+            return json.load(f)
+
+    def _parse_vector2(self, val):
+        """Parse 'Vector2(x, y)' string into (x, y) floats."""
+        m = re.match(r"Vector2\(([^,]+),\s*([^)]+)\)", val)
+        assert m, f"Cannot parse Vector2: {val}"
+        return float(m.group(1)), float(m.group(2))
+
+    def test_layout_file_exists(self):
+        assert self.LAYOUT_FILE.exists(), "graphics/layout.json must exist"
+
+    def test_layout_paths_resolve(self):
+        """Every node path in layout.json should exist in the ui-tree."""
+        layout = self._load_layout()
+        tree = ui_tree()
+        nodes = parse_tscn(tree)
+        all_paths = set()
+        for n in nodes:
+            # Reconstruct full path: root name is the first node with no parent
+            all_paths.add(n["path"])
+        for path in layout:
+            # layout.json uses /root/... but tscn paths are relative
+            # strip leading /root/ to get relative path
+            rel = path.lstrip("/root/") if path.startswith("/root/") else path
+            # The root node itself has path "" in tscn, children use name or parent/name
+            found = any(
+                p == rel or p.endswith("/" + rel.split("/")[-1])
+                for p in all_paths
+            )
+            node_name = path.split("/")[-1]
+            node = find_node_by_name(tree, node_name)
+            assert node is not None, (
+                f"Node {node_name!r} from layout.json path {path!r} "
+                f"not found in ui-tree"
+            )
+
+    def test_min_width_applied(self):
+        """connRailWrap should have min_width from layout.json."""
+        layout = self._load_layout()
+        tree = ui_tree()
+        for path, props in layout.items():
+            if "min_width" not in props:
+                continue
+            node_name = path.split("/")[-1]
+            node = find_node_by_name(tree, node_name)
+            assert node is not None, f"Node {node_name!r} not found"
+            assert "custom_minimum_size" in node["props"], (
+                f"Node {node_name!r} missing custom_minimum_size in ui-tree"
+            )
+            x, _ = self._parse_vector2(node["props"]["custom_minimum_size"])
+            expected = props["min_width"]
+            assert x == expected, (
+                f"Node {node_name!r}: min_width={x}, expected {expected}"
+            )
