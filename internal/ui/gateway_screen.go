@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -1089,6 +1090,20 @@ func (g *GatewayScreen) onCardAction(idx int) {
 }
 
 func (g *GatewayScreen) startGatewayConnection(card *gatewayCard) {
+	// Check for required CLI tools before attempting connection.
+	if missing := bfaws.CheckPrerequisites(); len(missing) > 0 {
+		msg := "Missing required tools: " + strings.Join(missing, ", ")
+		if slices.Contains(missing, "session-manager-plugin") {
+			msg += "\nInstall with: brew install --cask session-manager-plugin"
+		}
+		if slices.Contains(missing, "aws") {
+			msg += "\nInstall with: brew install awscli"
+		}
+		card.loginErr = msg
+		card.needsUpdate = true
+		return
+	}
+
 	entry := card.entry
 	auth := card.auth
 
