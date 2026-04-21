@@ -1904,23 +1904,35 @@ func (a *App) initMainWindow() {
 			if conn == nil {
 				return nil, fmt.Errorf("connection %q not found", connName)
 			}
-
-			result, err := conn.DB.Query(sql, 0, limit)
-			if err != nil {
-				return nil, err
+			if conn.worker == nil {
+				return nil, fmt.Errorf("connection %q has no worker", conn.Name)
 			}
-			columns := result.Columns
+
+			// Route through the connection's worker so all queries are serialized
+			// on a single goroutine — no concurrent access to the underlying sql.DB.
+			reply := make(chan SQLReply, 1)
+			conn.worker.Send(DBRequest{
+				Kind:     ReqSQL,
+				UserSQL:  sql,
+				Limit:    limit,
+				SQLReply: reply,
+			})
+			res := <-reply
+			if res.Err != nil {
+				return nil, res.Err
+			}
+			columns := res.Result.Columns
 			if columns == nil {
 				columns = []string{}
 			}
-			rows := result.Rows
+			rows := res.Result.Rows
 			if rows == nil {
 				rows = [][]string{}
 			}
 			return &control.SQLResult{
 				Columns: columns,
 				Rows:    rows,
-				Total:   result.Total,
+				Total:   res.Result.Total,
 			}, nil
 		})
 	}

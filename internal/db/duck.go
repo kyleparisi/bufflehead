@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"encoding/hex"
 	"fmt"
@@ -50,6 +51,11 @@ func OpenDB(path string) (*DB, error) {
 		return nil, fmt.Errorf("open duckdb db: %w", err)
 	}
 	return &DB{conn: conn}, nil
+}
+
+// Ping verifies the connection is alive.
+func (d *DB) Ping(ctx context.Context) error {
+	return d.conn.PingContext(ctx)
 }
 
 // Close releases the connection.

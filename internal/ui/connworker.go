@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -18,6 +19,7 @@ const (
 	ReqOpenFile                         // Open a file: Schema + Metadata + Query
 	ReqOpenDB                           // Open a .duckdb file: OpenDB + Tables + TableSchema
 	ReqOpenGateway                      // Open a Postgres gateway connection
+	ReqSQL                              // Raw SQL via /sql endpoint (synchronous response)
 )
 
 // DBRequest is sent to a ConnWorker for processing.
@@ -33,6 +35,13 @@ type DBRequest struct {
 	Generation uint64
 	Navigating bool
 	ControlCmd *control.Command
+	SQLReply   chan SQLReply // for ReqSQL: synchronous response channel
+}
+
+// SQLReply is the synchronous response for ReqSQL requests.
+type SQLReply struct {
+	Result *db.QueryResult
+	Err    error
 }
 
 // DBResult is sent back from a ConnWorker after processing a request.
@@ -98,11 +107,37 @@ func (cw *ConnWorker) loop() {
 }
 
 func (cw *ConnWorker) handle(req DBRequest) {
+	// Health check before every operation to fail fast on dead connections.
+	pingCtx, pingCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	err := cw.db.Ping(pingCtx)
+	pingCancel()
+	if err != nil {
+		pingErr := fmt.Errorf("connection health check failed: %w", err)
+		switch req.Kind {
+		case ReqSQL:
+			req.SQLReply <- SQLReply{Err: pingErr}
+		default:
+			cw.results <- DBResult{
+				Kind:       req.Kind,
+				TabID:      req.TabID,
+				Generation: req.Generation,
+				Err:        pingErr,
+				ControlCmd: req.ControlCmd,
+				FilePath:   req.FilePath,
+				DBPath:     req.DBPath,
+				UserSQL:    req.UserSQL,
+			}
+		}
+		return
+	}
+
 	switch req.Kind {
 	case ReqQuery:
 		cw.handleQuery(req)
 	case ReqOpenFile:
 		cw.handleOpenFile(req)
+	case ReqSQL:
+		cw.handleSQL(req)
 	}
 }
 
@@ -124,6 +159,11 @@ func (cw *ConnWorker) handleQuery(req DBRequest) {
 		FilePath:   req.FilePath,
 		UserSQL:    req.UserSQL,
 	}
+}
+
+func (cw *ConnWorker) handleSQL(req DBRequest) {
+	result, err := cw.db.Query(req.UserSQL, 0, req.Limit)
+	req.SQLReply <- SQLReply{Result: result, Err: err}
 }
 
 func (cw *ConnWorker) handleOpenFile(req DBRequest) {

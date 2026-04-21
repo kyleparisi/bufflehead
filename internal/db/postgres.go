@@ -66,6 +66,11 @@ func newPostgres(host string, port int, dbName, dbUser, password, sslMode string
 	return &PostgresDB{conn: conn, dbName: dbName}, nil
 }
 
+// Ping verifies the connection is alive.
+func (p *PostgresDB) Ping(ctx context.Context) error {
+	return p.conn.PingContext(ctx)
+}
+
 // Close releases the connection pool.
 func (p *PostgresDB) Close() error {
 	return p.conn.Close()
