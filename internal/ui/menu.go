@@ -19,11 +19,12 @@ type AppMenu struct {
 	recentMenu  RID.NativeMenu
 	recentPaths []string
 
-	OnOpenFile   func()            // triggers native file dialog
-	OnOpenRecent func(path string) // opens a specific recent file
-	OnNewTab     func()            // creates new tab (⌘T)
-	OnCloseTab   func()            // closes current tab (⌘W)
-	OnNewWindow  func()            // creates new window (⌘N)
+	OnOpenFile    func()            // triggers native file dialog
+	OnOpenRecent  func(path string) // opens a specific recent file
+	OnNewTab      func()            // creates new tab (⌘T)
+	OnCloseTab    func()            // closes current tab (⌘W)
+	OnNewWindow   func()            // creates new window (⌘N)
+	OnOpenGateway func()            // shows gateway connection screen
 }
 
 func (m *AppMenu) Setup() {
@@ -56,6 +57,15 @@ func (m *AppMenu) Setup() {
 			m.OnOpenFile()
 		}
 	}, nil, nil, Input.Key(Input.KeyMaskMeta)|Input.KeyO)
+
+	// Connect to Gateway… (Cmd+G)
+	NativeMenu.AddItem(m.fileMenu, "Connect to Gateway…", func(tag any) {
+		if m.OnOpenGateway != nil {
+			m.OnOpenGateway()
+		}
+	}, nil, nil, Input.Key(Input.KeyMaskMeta)|Input.KeyG)
+
+	NativeMenu.AddSeparator(m.fileMenu)
 
 	// Close Tab (Cmd+W)
 	NativeMenu.AddItem(m.fileMenu, "Close Tab", func(tag any) {

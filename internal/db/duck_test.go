@@ -200,7 +200,7 @@ func TestFormatValue(t *testing.T) {
 		{"empty bytes", []byte{}, ""},
 		{"int", 42, "42"},
 		{"string", "foo", "foo"},
-		{"nil", nil, "<nil>"},
+		{"nil", nil, ""},
 		{"decimal", duckdb.Decimal{Width: 18, Scale: 2, Value: big.NewInt(123456)}, "1234.56"},
 		{"decimal zero", duckdb.Decimal{Width: 10, Scale: 4, Value: big.NewInt(0)}, "0"},
 	}

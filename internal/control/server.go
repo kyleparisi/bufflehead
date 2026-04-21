@@ -50,6 +50,24 @@ type ResizeData struct {
 	Scale  float64 `json:"scale,omitempty"`
 }
 
+// SQLRequest is the payload for the direct /sql endpoint.
+type SQLRequest struct {
+	SQL        string `json:"sql"`
+	Connection string `json:"connection,omitempty"` // connection name (default: active connection)
+	Limit      int    `json:"limit,omitempty"`      // max rows (default: 100)
+}
+
+// SQLResult is the response from the /sql endpoint.
+type SQLResult struct {
+	Columns []string   `json:"columns"`
+	Rows    [][]string `json:"rows"`
+	Total   int64      `json:"total"`
+	Error   string     `json:"error,omitempty"`
+}
+
+// SQLExecutor runs a SQL query against a named connection and returns results.
+type SQLExecutor func(connName, sql string, limit int) (*SQLResult, error)
+
 // StateProvider returns the current app state as JSON.
 type StateProvider func() (json.RawMessage, error)
 
@@ -57,6 +75,7 @@ type StateProvider func() (json.RawMessage, error)
 type Server struct {
 	commands      chan *Command
 	stateProvider StateProvider
+	sqlExecutor   SQLExecutor
 	port          int
 	mu            sync.Mutex
 }
@@ -76,6 +95,13 @@ func (s *Server) SetStateProvider(fn StateProvider) {
 	s.stateProvider = fn
 }
 
+// SetSQLExecutor sets the callback for POST /sql.
+func (s *Server) SetSQLExecutor(fn SQLExecutor) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sqlExecutor = fn
+}
+
 // Commands returns the channel the main loop reads from.
 func (s *Server) Commands() <-chan *Command {
 	return s.commands
@@ -86,8 +112,8 @@ func (c *Command) Respond(r Result) {
 	c.result <- r
 }
 
-// Start launches the HTTP server in a goroutine.
-func (s *Server) Start() {
+// buildMux creates the HTTP handler with all routes registered.
+func buildMux(s *Server) *http.ServeMux {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /state", func(w http.ResponseWriter, r *http.Request) {
@@ -205,6 +231,51 @@ func (s *Server) Start() {
 		w.Write(res.RawBytes)
 	})
 
+	mux.HandleFunc("POST /sql", func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		executor := s.sqlExecutor
+		s.mu.Unlock()
+
+		if executor == nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(500)
+			json.NewEncoder(w).Encode(SQLResult{Error: "no sql executor configured"})
+			return
+		}
+
+		var req SQLRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(400)
+			json.NewEncoder(w).Encode(SQLResult{Error: "bad json: " + err.Error()})
+			return
+		}
+		if req.SQL == "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(400)
+			json.NewEncoder(w).Encode(SQLResult{Error: "sql is required"})
+			return
+		}
+		if req.Limit <= 0 {
+			req.Limit = 100
+		}
+
+		result, err := executor(req.Connection, req.SQL, req.Limit)
+		w.Header().Set("Content-Type", "application/json")
+		if err != nil {
+			w.WriteHeader(400)
+			json.NewEncoder(w).Encode(SQLResult{Error: err.Error()})
+			return
+		}
+		json.NewEncoder(w).Encode(result)
+	})
+
+	return mux
+}
+
+// Start launches the HTTP server in a goroutine.
+func (s *Server) Start() {
+	mux := buildMux(s)
 	go func() {
 		addr := fmt.Sprintf("127.0.0.1:%d", s.port)
 		fmt.Printf("Control server: http://%s\n", addr)

@@ -5,6 +5,7 @@ import (
 
 	"bufflehead/internal/control"
 	"bufflehead/internal/db"
+	"bufflehead/internal/models"
 	"bufflehead/internal/ui"
 
 	"graphics.gd/classdb/SceneTree"
@@ -27,12 +28,22 @@ func main() {
 	}
 	defer duck.Close()
 
+	// Load gateway config (optional — nil if no config file exists)
+	gatewayCfg, err := models.LoadGatewayConfig()
+	if err != nil {
+		log.Printf("gateway config: %v", err)
+	}
+
 	ctrlServer := control.New(9900)
 	ctrlServer.Start()
+
+	bookmarkStore := models.NewBookmarkStore()
 
 	app := new(ui.App)
 	app.Duck = duck
 	app.ControlServer = ctrlServer
+	app.GatewayConfig = gatewayCfg
+	app.BookmarkStore = bookmarkStore
 	SceneTree.Add(app.AsNode())
 
 	startup.Scene()

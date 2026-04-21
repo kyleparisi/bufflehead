@@ -177,6 +177,9 @@ func (d *DB) Query(virtualSQL string, offset, limit int) (*QueryResult, error) {
 
 // formatValue converts a scanned database value to its display string.
 func formatValue(v any) string {
+	if v == nil {
+		return ""
+	}
 	switch val := v.(type) {
 	case []byte:
 		if len(val) == 16 {
@@ -219,6 +222,9 @@ func (d *DB) Metadata(path string) (map[string]string, error) {
 	}
 	return meta, nil
 }
+
+// Verify DB implements Querier at compile time.
+var _ Querier = (*DB)(nil)
 
 // DefaultQuery builds a simple SELECT * for a given parquet path.
 func DefaultQuery(path string) string {

@@ -1,18 +1,23 @@
 package ui
 
 import (
+	"fmt"
+	"time"
+
 	"bufflehead/internal/control"
 	"bufflehead/internal/db"
-	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
 )
 
 // DBRequestKind identifies the type of database request.
 type DBRequestKind int
 
 const (
-	ReqQuery    DBRequestKind = iota // Execute a paginated query
-	ReqOpenFile                      // Open a file: Schema + Metadata + Query
-	ReqOpenDB                        // Open a .duckdb file: OpenDB + Tables + TableSchema
+	ReqQuery       DBRequestKind = iota // Execute a paginated query
+	ReqOpenFile                         // Open a file: Schema + Metadata + Query
+	ReqOpenDB                           // Open a .duckdb file: OpenDB + Tables + TableSchema
+	ReqOpenGateway                      // Open a Postgres gateway connection
 )
 
 // DBRequest is sent to a ConnWorker for processing.
@@ -40,7 +45,7 @@ type DBResult struct {
 	Query      *db.QueryResult
 	Schema     []db.Column
 	Metadata   map[string]string
-	DB         *db.DB
+	Querier    db.Querier
 	Tables     []db.TableInfo
 	Err        error
 	ControlCmd *control.Command
@@ -50,9 +55,9 @@ type DBResult struct {
 	VirtualSQL string
 }
 
-// ConnWorker owns a *db.DB handle and processes requests sequentially.
+// ConnWorker owns a db.Querier handle and processes requests sequentially.
 type ConnWorker struct {
-	db       *db.DB
+	db       db.Querier
 	requests chan DBRequest
 	results  chan DBResult
 	done     chan struct{}
@@ -60,7 +65,7 @@ type ConnWorker struct {
 
 // NewConnWorker creates a worker for the given database connection.
 // Results are sent to the shared results channel.
-func NewConnWorker(database *db.DB, results chan DBResult) *ConnWorker {
+func NewConnWorker(database db.Querier, results chan DBResult) *ConnWorker {
 	return &ConnWorker{
 		db:       database,
 		requests: make(chan DBRequest, 16),
@@ -122,8 +127,23 @@ func (cw *ConnWorker) handleQuery(req DBRequest) {
 }
 
 func (cw *ConnWorker) handleOpenFile(req DBRequest) {
+	// handleOpenFile requires DuckDB-specific methods (Schema, Metadata).
+	duck, ok := cw.db.(*db.DB)
+	if !ok {
+		cw.results <- DBResult{
+			Kind:       ReqOpenFile,
+			TabID:      req.TabID,
+			Generation: req.Generation,
+			Err:        fmt.Errorf("open file requires DuckDB connection"),
+			ControlCmd: req.ControlCmd,
+			FilePath:   req.FilePath,
+			UserSQL:    req.UserSQL,
+		}
+		return
+	}
+
 	// Step 1: Schema
-	cols, err := cw.db.Schema(req.FilePath)
+	cols, err := duck.Schema(req.FilePath)
 	if err != nil {
 		cw.results <- DBResult{
 			Kind:       ReqOpenFile,
@@ -138,11 +158,11 @@ func (cw *ConnWorker) handleOpenFile(req DBRequest) {
 	}
 
 	// Step 2: Metadata (optional — continue on error)
-	meta, _ := cw.db.Metadata(req.FilePath)
+	meta, _ := duck.Metadata(req.FilePath)
 
 	// Step 3: Query
 	start := time.Now()
-	result, queryErr := cw.db.Query(req.VirtualSQL, req.Offset, req.Limit)
+	result, queryErr := duck.Query(req.VirtualSQL, req.Offset, req.Limit)
 	elapsed := time.Since(start)
 
 	cw.results <- DBResult{
@@ -203,10 +223,93 @@ func RunOpenDB(dbPath string, tabID, generation uint64, cmd *control.Command, re
 			Kind:       ReqOpenDB,
 			TabID:      tabID,
 			Generation: generation,
-			DB:         dbConn,
+			Querier:    dbConn,
 			Tables:     tables,
 			ControlCmd: cmd,
 			DBPath:     dbPath,
+		}
+	}()
+}
+
+// RunOpenGateway connects to a Postgres database in a one-shot goroutine,
+// listing tables and schemas, then sending the result.
+// If awsCfg is non-nil, IAM auth is used (rdsEndpoint is the real RDS host:port
+// for token generation, while host:port is the local tunnel endpoint).
+// statusFunc is an optional callback for progress updates (may be nil).
+func RunOpenGateway(host string, port int, rdsEndpoint, dbName, user, password string,
+	awsCfg *aws.Config, tabID, generation uint64, results chan DBResult, statusFunc func(string)) {
+	go func() {
+		if statusFunc != nil {
+			statusFunc("Connecting to database...")
+		}
+
+		// Use a timeout so we don't hang forever if the tunnel isn't relaying data
+		type pgResult struct {
+			conn *db.PostgresDB
+			err  error
+		}
+		ch := make(chan pgResult, 1)
+		go func() {
+			var pgConn *db.PostgresDB
+			var err error
+			if awsCfg != nil {
+				pgConn, err = db.NewPostgresIAM(host, port, rdsEndpoint, dbName, user, *awsCfg)
+			} else {
+				pgConn, err = db.NewPostgres(host, port, dbName, user, password)
+			}
+			ch <- pgResult{pgConn, err}
+		}()
+
+		var pgConn *db.PostgresDB
+		var err error
+		select {
+		case r := <-ch:
+			pgConn, err = r.conn, r.err
+		case <-time.After(30 * time.Second):
+			err = fmt.Errorf("connection timed out after 30s — tunnel may not be forwarding data")
+		}
+
+		if err != nil {
+			results <- DBResult{
+				Kind:       ReqOpenGateway,
+				TabID:      tabID,
+				Generation: generation,
+				Err:        err,
+			}
+			return
+		}
+
+		if statusFunc != nil {
+			statusFunc("Loading tables...")
+		}
+
+		tables, err := pgConn.Tables()
+		if err != nil {
+			pgConn.Close()
+			results <- DBResult{
+				Kind:       ReqOpenGateway,
+				TabID:      tabID,
+				Generation: generation,
+				Err:        err,
+			}
+			return
+		}
+
+		if statusFunc != nil {
+			statusFunc(fmt.Sprintf("Loading schema for %d tables...", len(tables)))
+		}
+
+		for i := range tables {
+			cols, _ := pgConn.TableSchema(tables[i].Name)
+			tables[i].Columns = cols
+		}
+
+		results <- DBResult{
+			Kind:       ReqOpenGateway,
+			TabID:      tabID,
+			Generation: generation,
+			Querier:    pgConn,
+			Tables:     tables,
 		}
 	}()
 }

@@ -7,8 +7,12 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
+	bfaws "bufflehead/internal/aws"
 	"bufflehead/internal/completion"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"bufflehead/internal/control"
 	"bufflehead/internal/db"
 	"bufflehead/internal/models"
@@ -58,10 +62,13 @@ import (
 type TitleBar struct {
 	PanelContainer.Extension[TitleBar] `gd:"TitleBar"`
 
-	infoLabel  Label.Instance
-	NavBackBtn Button.Instance
-	NavFwdBtn  Button.Instance
-	WindowID   int
+	infoLabel     Label.Instance
+	copyBtn       Button.Instance
+	aiPrompt      string
+	NavBackBtn    Button.Instance
+	NavFwdBtn     Button.Instance
+	WindowID      int
+	resetCopyText bool // set by goroutine, read by Process on main thread
 }
 
 func (t *TitleBar) GuiInput(event InputEvent.Instance) {
@@ -117,12 +124,38 @@ func (t *TitleBar) Ready() {
 	applyPillTheme(pill.AsControl())
 	pill.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	pill.AsControl().AsControl().SetSizeFlagsStretchRatio(2)
+
+	pillRow := HBoxContainer.New()
+	pillRow.AsControl().AddThemeConstantOverride("separation", 6)
+	pillRow.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+
 	t.infoLabel = Label.New()
 	t.infoLabel.SetText("DuckDB  ·  In-Memory  ·  No file loaded")
 	t.infoLabel.AsControl().AddThemeColorOverride("font_color", colorText)
 	t.infoLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(13))
 	t.infoLabel.SetHorizontalAlignment(1) // center
-	pill.AsNode().AddChild(t.infoLabel.AsNode())
+	t.infoLabel.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+
+	t.copyBtn = Button.New()
+	t.copyBtn.SetText("AI ⎘")
+	t.copyBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(10))
+	applySecondaryButtonTheme(t.copyBtn.AsControl())
+	t.copyBtn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(40), 0))
+	t.copyBtn.AsCanvasItem().SetVisible(false)
+	t.copyBtn.AsBaseButton().OnPressed(func() {
+		if t.aiPrompt != "" {
+			DisplayServer.ClipboardSet(t.aiPrompt)
+			t.copyBtn.SetText("Copied!")
+			go func() {
+				<-time.After(1500 * time.Millisecond)
+				t.resetCopyText = true
+			}()
+		}
+	})
+
+	pillRow.AsNode().AddChild(t.infoLabel.AsNode())
+	pillRow.AsNode().AddChild(t.copyBtn.AsNode())
+	pill.AsNode().AddChild(pillRow.AsNode())
 
 	// Right spacer (25%)
 	rightSpacer := Control.New()
@@ -134,6 +167,7 @@ func (t *TitleBar) Ready() {
 	row.AsControl().SetMouseFilter(Control.MouseFilterPass)
 	leftSpacer.SetMouseFilter(Control.MouseFilterPass)
 	pill.AsControl().SetMouseFilter(Control.MouseFilterPass)
+	pillRow.AsControl().SetMouseFilter(Control.MouseFilterPass)
 	t.infoLabel.AsControl().SetMouseFilter(Control.MouseFilterPass)
 	rightSpacer.SetMouseFilter(Control.MouseFilterPass)
 
@@ -145,6 +179,23 @@ func (t *TitleBar) Ready() {
 
 	margin.AsNode().AddChild(row.AsNode())
 	t.AsNode().AddChild(margin.AsNode())
+}
+
+func (t *TitleBar) Process(delta Float.X) {
+	if t.resetCopyText {
+		t.resetCopyText = false
+		t.copyBtn.SetText("AI ⎘")
+	}
+}
+
+func (t *TitleBar) SetConnectionInfo(driver, name, dbName string) {
+	t.infoLabel.SetText(driver + "  ·  " + name + "  ·  " + dbName)
+}
+
+func (t *TitleBar) SetAIPrompt(prompt string) {
+	t.aiPrompt = prompt
+	t.copyBtn.AsCanvasItem().SetVisible(prompt != "")
+	t.copyBtn.SetText("AI ⎘")
 }
 
 func (t *TitleBar) SetFileInfo(path string) {
@@ -267,6 +318,7 @@ func (s *SchemaPanel) Ready() {
 	})
 
 	s.tree = Tree.New()
+	s.tree.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	s.tree.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
 	s.tree.SetHideRoot(true)
 	applySidebarTreeTheme(s.tree.AsControl())
@@ -513,6 +565,8 @@ func (s *SchemaPanel) filterTables(query string) {
 	q := strings.ToLower(query)
 	s.tree.Clear()
 	s.tree.SetColumns(2)
+	s.tree.SetColumnExpand(0, true)
+	s.tree.SetColumnExpand(1, false)
 	root := s.tree.CreateItem()
 
 	// Group: Tables
@@ -1723,6 +1777,8 @@ type App struct {
 
 	Duck          *db.DB          `gd:"-"`
 	ControlServer *control.Server `gd:"-"`
+	GatewayConfig *models.GatewayConfig `gd:"-"`
+	BookmarkStore *models.BookmarkStore  `gd:"-"`
 
 	// Legacy accessor — points to active window's active tab state
 	State *models.AppState `gd:"-"`
@@ -1757,11 +1813,14 @@ func (a *App) initMainWindow() {
 		rootWin := tree.Root().AsWindow()
 		a.mainWin = createMainWindowFromRoot(rootWin, a.Duck, a.history, func() { a.newWindow() })
 		a.mainWin.titleBar.WindowID = rootWin.GetWindowId()
+
 		a.mainWin.addNewTab()
 		rootWin.MoveToCenter()
 
 		// Handle close — quit the app when main window is closed
 		rootWin.OnCloseRequested(func() {
+			// Stop any gateway tunnels
+			a.stopGatewayTunnels()
 			tree.Quit()
 		})
 	}
@@ -1806,6 +1865,9 @@ func (a *App) initMainWindow() {
 		OnNewWindow: func() {
 			a.newWindow()
 		},
+		OnOpenGateway: func() {
+			a.openGatewayScreen()
+		},
 	}
 	a.appMenu.Setup()
 
@@ -1818,6 +1880,166 @@ func (a *App) initMainWindow() {
 			}
 			return json.Marshal(map[string]any{"tabCount": 0})
 		})
+
+		a.ControlServer.SetSQLExecutor(func(connName, sql string, limit int) (*control.SQLResult, error) {
+			w := a.activeWindow()
+			if w == nil {
+				return nil, fmt.Errorf("no active window")
+			}
+
+			// Find connection by name (empty = active connection)
+			var conn *Connection
+			if connName == "" {
+				if w.activeConnIdx >= 0 && w.activeConnIdx < len(w.connections) {
+					conn = w.connections[w.activeConnIdx]
+				}
+			} else {
+				for _, c := range w.connections {
+					if c.Name == connName {
+						conn = c
+						break
+					}
+				}
+			}
+			if conn == nil {
+				return nil, fmt.Errorf("connection %q not found", connName)
+			}
+
+			result, err := conn.DB.Query(sql, 0, limit)
+			if err != nil {
+				return nil, err
+			}
+			columns := result.Columns
+			if columns == nil {
+				columns = []string{}
+			}
+			rows := result.Rows
+			if rows == nil {
+				rows = [][]string{}
+			}
+			return &control.SQLResult{
+				Columns: columns,
+				Rows:    rows,
+				Total:   result.Total,
+			}, nil
+		})
+	}
+}
+
+func (a *App) showGatewayScreen() {
+	w := a.mainWin
+	screen := new(GatewayScreen)
+	screen.SetConfig(a.GatewayConfig)
+	screen.SetBookmarks(a.BookmarkStore)
+	screen.OnConnect = func(entry models.GatewayEntry, auth *bfaws.AuthManager, tunnel *bfaws.TunnelManager) {
+		// Replace gateway screen with loading indicator
+		screen.AsCanvasItem().SetVisible(false)
+		a.showGatewayLoading(entry.Name)
+		a.onGatewayConnected(entry, auth, tunnel)
+	}
+	// Add gateway screen to emptyView (which is already visible)
+	// Clear default empty view children and add gateway screen
+	for w.emptyView.AsNode().GetChildCount() > 0 {
+		child := w.emptyView.AsNode().GetChild(0)
+		w.emptyView.AsNode().RemoveChild(child)
+		child.QueueFree()
+	}
+	w.emptyView.AsNode().AddChild(screen.AsNode())
+}
+
+func (a *App) showGatewayLoading(name string) {
+	w := a.mainWin
+	// Clear emptyView children (gateway screen is hidden but still a child)
+	for w.emptyView.AsNode().GetChildCount() > 0 {
+		child := w.emptyView.AsNode().GetChild(0)
+		if !child.IsInsideTree() {
+			break
+		}
+		w.emptyView.AsNode().RemoveChild(child)
+		child.QueueFree()
+	}
+
+	loadingBox := VBoxContainer.New()
+	loadingBox.AsControl().SetSizeFlagsHorizontal(Control.SizeShrinkCenter)
+	loadingBox.AsControl().SetSizeFlagsVertical(Control.SizeShrinkCenter)
+	loadingBox.AsControl().AddThemeConstantOverride("separation", 12)
+
+	titleLabel := Label.New()
+	titleLabel.SetText("Connecting to " + name + "...")
+	titleLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(16))
+	titleLabel.AsControl().AddThemeColorOverride("font_color", colorText)
+	titleLabel.SetHorizontalAlignment(1)
+
+	statusLabel := Label.New()
+	statusLabel.SetText("Loading schema...")
+	statusLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(12))
+	statusLabel.AsControl().AddThemeColorOverride("font_color", colorTextDim)
+	statusLabel.SetHorizontalAlignment(1)
+
+	loadingBox.AsNode().AddChild(titleLabel.AsNode())
+	loadingBox.AsNode().AddChild(statusLabel.AsNode())
+	w.emptyView.AsNode().AddChild(loadingBox.AsNode())
+	w.gatewayLoadingLabel = statusLabel
+
+	w.statusBar.SetStatus("Connecting to " + name + "...")
+}
+
+func (a *App) onGatewayConnected(entry models.GatewayEntry, auth *bfaws.AuthManager, tunnel *bfaws.TunnelManager) {
+	w := a.mainWin
+	password := entry.ResolvePassword()
+
+	// For IAM auth, pass the AWS config; for password auth, pass nil
+	var awsCfg *aws.Config
+	if entry.UseIAMAuth() {
+		cfg := auth.Config()
+		awsCfg = &cfg
+	}
+
+	// rdsEndpoint is the real RDS host:port (for IAM token generation)
+	rdsEndpoint := fmt.Sprintf("%s:%d", entry.RDSHost, entry.RDSPort)
+
+	// Connect to Postgres via the tunnel (127.0.0.1:localPort)
+	RunOpenGateway("127.0.0.1", entry.LocalPort, rdsEndpoint, entry.DBName, entry.DBUser, password,
+		awsCfg, nextTabID, 0, w.results, func(msg string) {
+			w.gatewayLoadingMsg = msg
+		})
+	nextTabID++
+
+	// Store gateway info for creating the connection after async result
+	w.pendingGateway = &GatewayConnection{
+		Config: entry,
+		Auth:   auth,
+		Tunnel: tunnel,
+	}
+}
+
+func (a *App) openGatewayScreen() {
+	// Reload config from disk each time so edits are picked up
+	cfg, err := models.LoadGatewayConfig()
+	if err != nil {
+		fmt.Printf("gateway config error: %v\n", err)
+	}
+	if cfg == nil {
+		cfg = &models.GatewayConfig{}
+	}
+
+	a.GatewayConfig = cfg
+	a.showGatewayScreen()
+
+	// Show the empty view (which now contains the gateway screen)
+	w := a.mainWin
+	w.emptyView.AsCanvasItem().SetVisible(true)
+	w.split.AsCanvasItem().SetVisible(false)
+}
+
+func (a *App) stopGatewayTunnels() {
+	if a.mainWin == nil {
+		return
+	}
+	for _, conn := range a.mainWin.connections {
+		if conn.Gateway != nil && conn.Gateway.Tunnel != nil {
+			conn.Gateway.Tunnel.Stop()
+		}
 	}
 }
 
@@ -1943,6 +2165,8 @@ func (a *App) handleShortcut(key Input.Key, w *AppWindow) {
 		if a.appMenu != nil && a.appMenu.OnOpenFile != nil {
 			a.appMenu.OnOpenFile()
 		}
+	case Input.KeyG:
+		a.openGatewayScreen()
 	case Input.KeyBracketleft:
 		if w != nil {
 			w.navBack()
@@ -2007,7 +2231,7 @@ func (a *App) Process(delta Float.X) {
 
 	// Poll keyboard shortcuts (works across all windows)
 	if Input.IsKeyPressed(Input.KeyMeta) || Input.IsKeyPressed(Input.KeyCtrl) {
-		shortcuts := []Input.Key{Input.KeyQ, Input.KeyN, Input.KeyT, Input.KeyW, Input.KeyO, Input.KeyBracketleft, Input.KeyBracketright}
+		shortcuts := []Input.Key{Input.KeyQ, Input.KeyN, Input.KeyT, Input.KeyW, Input.KeyO, Input.KeyG, Input.KeyBracketleft, Input.KeyBracketright}
 		for _, k := range shortcuts {
 			if a.justPressed(k) {
 				a.handleShortcut(k, a.activeWindow())
@@ -2068,6 +2292,11 @@ func (a *App) pollResults() {
 			}
 		}
 	nextWindow:
+		// Update gateway loading label if background status changed
+		if w.gatewayLoadingMsg != "" && w.pendingGateway != nil {
+			w.gatewayLoadingLabel.SetText(w.gatewayLoadingMsg)
+			w.gatewayLoadingMsg = ""
+		}
 	}
 }
 
@@ -2348,6 +2577,8 @@ func RegisterAll() {
 	classdb.Register[HistoryPanel]()
 	classdb.Register[RowDetailPanel]()
 	classdb.Register[StatusBar]()
+	classdb.Register[GatewayScreen]()
+	classdb.Register[GatewayInfoPanel]()
 	classdb.Register[App]()
 }
 

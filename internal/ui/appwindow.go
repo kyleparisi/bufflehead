@@ -2,8 +2,10 @@ package ui
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
+	bfaws "bufflehead/internal/aws"
 	"bufflehead/internal/control"
 	"bufflehead/internal/db"
 	"bufflehead/internal/models"
@@ -13,28 +15,42 @@ import (
 	"graphics.gd/classdb/BoxContainer"
 	"graphics.gd/classdb/Button"
 	"graphics.gd/classdb/Control"
+	"graphics.gd/classdb/DisplayServer"
 	"graphics.gd/classdb/HBoxContainer"
 	"graphics.gd/classdb/HSplitContainer"
+	"graphics.gd/classdb/Input"
+	"graphics.gd/classdb/InputEvent"
+	"graphics.gd/classdb/InputEventMouseButton"
 	"graphics.gd/classdb/Label"
 	"graphics.gd/classdb/MarginContainer"
 	"graphics.gd/classdb/PanelContainer"
+	"graphics.gd/classdb/PopupMenu"
 	"graphics.gd/classdb/TabBar"
 	"graphics.gd/classdb/VBoxContainer"
 	"graphics.gd/classdb/VSplitContainer"
 	"graphics.gd/classdb/Window"
 	"graphics.gd/variant/Float"
+	"graphics.gd/variant/Object"
 	"graphics.gd/variant/Vector2"
 	"graphics.gd/variant/Vector2i"
 )
 
 // Connection represents an open database connection.
 type Connection struct {
-	Name   string
-	Path   string
-	DB     *db.DB
-	Tables []db.TableInfo
-	button Button.Instance
-	worker *ConnWorker
+	Name    string
+	Path    string
+	DB      db.Querier
+	Tables  []db.TableInfo
+	button  Button.Instance
+	worker  *ConnWorker
+	Gateway *GatewayConnection // nil for local connections
+}
+
+// GatewayConnection holds the gateway-specific state for a remote connection.
+type GatewayConnection struct {
+	Config models.GatewayEntry
+	Auth   *bfaws.AuthManager
+	Tunnel *bfaws.TunnelManager
 }
 
 var nextTabID uint64
@@ -68,6 +84,11 @@ type AppWindow struct {
 	skipPoll  bool // skip one frame of result polling so "Running…" renders
 
 	navWired bool
+
+	// Gateway
+	pendingGateway      *GatewayConnection
+	gatewayLoadingLabel Label.Instance
+	gatewayLoadingMsg   string // set by background goroutine, read by Process
 
 	// Callbacks
 	onNewWindow func()
@@ -265,9 +286,7 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 	w.connections = append(w.connections, memConn)
 	w.connRail.AsNode().AddChild(memBtn.AsNode())
 	w.activeConnIdx = 0
-	memBtn.AsBaseButton().OnPressed(func() {
-		w.selectConnection(0)
-	})
+	w.wireConnButton(memBtn, 0)
 
 	// Content area (rail | main)
 	contentHBox := HBoxContainer.New()
@@ -767,7 +786,7 @@ func (w *AppWindow) handleOpenDBResult(res DBResult) {
 
 	path := res.DBPath
 	tables := res.Tables
-	dbConn := res.DB
+	dbConn := res.Querier
 
 	// Extract short name from path
 	name := path
@@ -800,21 +819,19 @@ func (w *AppWindow) handleOpenDBResult(res DBResult) {
 	applySecondaryButtonTheme(btn.AsControl())
 	conn.button = btn
 
-	idx := len(w.connections)
+	dbIdx := len(w.connections)
 	w.connections = append(w.connections, conn)
 	w.connRail.AsNode().AddChild(btn.AsNode())
 	w.connRailWrap.AsCanvasItem().SetVisible(true)
 
-	btn.AsBaseButton().OnPressed(func() {
-		w.selectConnection(idx)
-	})
+	w.wireConnButton(btn, dbIdx)
 
 	// Create a new tab bound to this connection
 	w.addNewTab()
 	ts := w.currentTab()
 	if ts != nil {
 		ts.State.IsDatabase = true
-		ts.connIdx = idx
+		ts.connIdx = dbIdx
 		ts.schema.SetTables(conn.Tables)
 		ts.sqlPanel.SetCompletionTables(conn.Tables)
 		ts.schema.OnTableClicked = func(tableName string) {
@@ -829,7 +846,7 @@ func (w *AppWindow) handleOpenDBResult(res DBResult) {
 	}
 
 	// Highlight this connection in the rail
-	w.selectConnection(idx)
+	w.selectConnection(dbIdx)
 
 	w.statusBar.SetStatus(fmt.Sprintf("Connected: %s (%d tables/views)", name, len(tables)))
 	if res.ControlCmd != nil {
@@ -852,6 +869,14 @@ func (w *AppWindow) selectConnection(idx int) {
 		}
 	}
 
+	// Show/hide AI prompt copy button based on connection type
+	conn := w.connections[idx]
+	if conn.Gateway != nil {
+		w.titleBar.SetAIPrompt(buildAIPrompt(conn.Gateway.Config, conn.Tables))
+	} else {
+		w.titleBar.SetAIPrompt("")
+	}
+
 	// Find the first tab bound to this connection and switch to it
 	for i, ts := range w.tabs {
 		if ts.connIdx == idx {
@@ -859,6 +884,107 @@ func (w *AppWindow) selectConnection(idx int) {
 			return
 		}
 	}
+}
+
+// wireConnButton sets up left-click (select) and right-click (context menu) on a rail button.
+func (w *AppWindow) wireConnButton(btn Button.Instance, idx int) {
+	btn.AsBaseButton().OnPressed(func() {
+		w.selectConnection(idx)
+	})
+	btn.AsControl().OnGuiInput(func(event InputEvent.Instance) {
+		mb, ok := Object.As[InputEventMouseButton.Instance](event)
+		if !ok {
+			return
+		}
+		if mb.ButtonIndex() == Input.MouseButtonRight && mb.AsInputEvent().IsPressed() {
+			w.showConnContextMenu(idx)
+		}
+	})
+}
+
+func (w *AppWindow) showConnContextMenu(idx int) {
+	if idx < 0 || idx >= len(w.connections) {
+		return
+	}
+	conn := w.connections[idx]
+
+	popup := PopupMenu.New()
+	popup.AddItem("Close " + conn.Name)
+
+	popup.OnIdPressed(func(id int) {
+		if id == 0 {
+			w.closeConnection(idx)
+		}
+		popup.AsNode().QueueFree()
+	})
+	popup.AsWindow().OnCloseRequested(func() {
+		popup.AsNode().QueueFree()
+	})
+
+	w.connRail.AsNode().AddChild(popup.AsNode())
+	popup.AsWindow().SetPosition(DisplayServer.MouseGetPosition())
+	popup.AsWindow().Popup()
+}
+
+// closeConnection closes a connection, removes its tabs, and cleans up resources.
+// Index 0 (in-memory DuckDB) cannot be closed.
+func (w *AppWindow) closeConnection(idx int) {
+	if idx <= 0 || idx >= len(w.connections) {
+		return
+	}
+	conn := w.connections[idx]
+
+	// Close tabs bound to this connection (iterate backwards to avoid index shifts)
+	for i := len(w.tabs) - 1; i >= 0; i-- {
+		if w.tabs[i].connIdx == idx {
+			w.closeTab(i)
+		}
+	}
+
+	// Stop worker
+	if conn.worker != nil {
+		conn.worker.Stop()
+	}
+
+	// Stop tunnel
+	if conn.Gateway != nil && conn.Gateway.Tunnel != nil {
+		conn.Gateway.Tunnel.Stop()
+	}
+
+	// Close DB connection
+	if conn.DB != nil {
+		conn.DB.Close()
+	}
+
+	// Remove button from rail
+	w.connRail.AsNode().RemoveChild(conn.button.AsNode())
+	conn.button.AsNode().QueueFree()
+
+	// Remove from connections slice
+	w.connections = append(w.connections[:idx], w.connections[idx+1:]...)
+
+	// Fix connIdx on remaining tabs (any pointing above idx need to shift down)
+	for _, ts := range w.tabs {
+		if ts.connIdx > idx {
+			ts.connIdx--
+		}
+	}
+
+	// Fix activeConnIdx
+	if w.activeConnIdx == idx {
+		w.activeConnIdx = 0
+		w.selectConnection(0)
+	} else if w.activeConnIdx > idx {
+		w.activeConnIdx--
+	}
+
+	// Hide rail if only memory connection remains
+	if len(w.connections) <= 1 {
+		w.connRailWrap.AsCanvasItem().SetVisible(false)
+	}
+
+	// Clear AI prompt if it was from this connection
+	w.titleBar.SetAIPrompt("")
 }
 
 // findTab returns the tabState with the given tabID, or nil if not found.
@@ -880,7 +1006,115 @@ func (w *AppWindow) handleDBResult(res DBResult) {
 		w.handleOpenFileResult(res)
 	case ReqOpenDB:
 		w.handleOpenDBResult(res)
+	case ReqOpenGateway:
+		w.handleOpenGatewayResult(res)
 	}
+}
+
+// handleOpenGatewayResult processes the result of an async gateway (Postgres) open.
+func (w *AppWindow) handleOpenGatewayResult(res DBResult) {
+	if res.Err != nil {
+		w.statusBar.SetStatus("Gateway error: " + res.Err.Error())
+		if ts := w.currentTab(); ts != nil {
+			ts.dataGrid.ShowError(res.Err.Error())
+		}
+		return
+	}
+
+	gw := w.pendingGateway
+	w.pendingGateway = nil
+	if gw == nil {
+		return
+	}
+
+	name := gw.Config.Name
+	pgConn := res.Querier
+	tables := res.Tables
+
+	// Create worker
+	pgWorker := NewConnWorker(pgConn, w.results)
+	pgWorker.Start()
+
+	conn := &Connection{
+		Name:    name,
+		Path:    fmt.Sprintf("postgresql://localhost:%d/%s", gw.Config.LocalPort, gw.Config.DBName),
+		DB:      pgConn,
+		Tables:  tables,
+		worker:  pgWorker,
+		Gateway: gw,
+	}
+
+	// Add button to rail
+	btn := Button.New()
+	btn.SetText(name)
+	btn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(10))
+	btn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(36), scaled(36)))
+	btn.SetClipText(true)
+	applySecondaryButtonTheme(btn.AsControl())
+	conn.button = btn
+
+	gwIdx := len(w.connections)
+	w.connections = append(w.connections, conn)
+	w.connRail.AsNode().AddChild(btn.AsNode())
+	w.connRailWrap.AsCanvasItem().SetVisible(true)
+
+	w.wireConnButton(btn, gwIdx)
+
+	// Create a new tab bound to this connection
+	w.addNewTab()
+	ts := w.currentTab()
+	if ts != nil {
+		ts.State.IsDatabase = true
+		ts.connIdx = gwIdx
+		ts.schema.SetTables(conn.Tables)
+		ts.sqlPanel.SetCompletionTables(conn.Tables)
+		ts.schema.OnTableClicked = func(tableName string) {
+			ts.State.ActiveTable = tableName
+			ts.State.UserSQL = fmt.Sprintf("SELECT * FROM %s", tableName)
+			ts.State.PageOffset = 0
+			ts.State.SortColumn = ""
+			ts.State.SortDir = models.SortNone
+			ts.sqlPanel.SetSQL(ts.State.UserSQL)
+			w.runCurrentQuery(nil)
+		}
+
+		// Update title bar for Postgres
+		w.titleBar.SetConnectionInfo("PostgreSQL", name, gw.Config.DBName)
+
+		// Build AI prompt with schema for the copy button
+		w.titleBar.SetAIPrompt(buildAIPrompt(gw.Config, tables))
+	}
+
+	w.selectConnection(gwIdx)
+	w.statusBar.SetStatus(fmt.Sprintf("Connected: %s (%d tables/views)", name, len(tables)))
+}
+
+func buildAIPrompt(entry models.GatewayEntry, tables []db.TableInfo) string {
+	connName := entry.Name
+
+	var b strings.Builder
+	b.WriteString("I have a PostgreSQL database you can query.\n")
+	b.WriteString(fmt.Sprintf("Database: %s\n", entry.DBName))
+	b.WriteString(fmt.Sprintf("\nRun queries via HTTP (no auth needed, Bufflehead manages the connection):\n"))
+	b.WriteString(fmt.Sprintf("  curl -s -X POST http://localhost:9900/sql -d '{\"sql\":\"SELECT * FROM table LIMIT 10\",\"connection\":\"%s\"}'\n", connName))
+	b.WriteString("\nResponse format: {\"columns\":[...],\"rows\":[[...],...],\"total\":N}\n")
+
+	if len(tables) > 0 {
+		b.WriteString("\nSchema:\n")
+		for _, t := range tables {
+			var cols []string
+			for _, c := range t.Columns {
+				cols = append(cols, c.Name)
+			}
+			prefix := "- " + t.Name
+			if t.Type == "view" {
+				prefix = "- " + t.Name + " (view)"
+			}
+			b.WriteString(fmt.Sprintf("%s (%s)\n", prefix, strings.Join(cols, ", ")))
+		}
+	}
+
+	return b.String()
 }
 
 // handleQueryResult applies a query result to the UI.
