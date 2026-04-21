@@ -1,13 +1,13 @@
 package aws
 
 import (
-	"bufio"
+	"context"
 	"fmt"
 	"net"
-	"os/exec"
-	"strings"
 	"sync"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/config"
 )
 
 // TunnelStatus represents the state of an SSM tunnel.
@@ -45,20 +45,21 @@ type TunnelConfig struct {
 	AWSRegion  string
 }
 
-// TunnelManager manages an SSM port-forwarding subprocess.
+// TunnelManager manages an SSM port-forwarding session.
 type TunnelManager struct {
 	mu        sync.Mutex
-	process   *exec.Cmd
+	cancel    context.CancelFunc
 	localPort int
 	status    TunnelStatus
+	statusMsg string
 	lastError string
-	onStatus  func(TunnelStatus)
-	stopCh    chan struct{}
+	onStatus  func(TunnelStatus, string) // status + message
 }
 
 // NewTunnelManager creates a new tunnel manager.
 // onStatus is called (from a goroutine) whenever the tunnel status changes.
-func NewTunnelManager(onStatus func(TunnelStatus)) *TunnelManager {
+// The string parameter is a human-readable progress message.
+func NewTunnelManager(onStatus func(TunnelStatus, string)) *TunnelManager {
 	return &TunnelManager{
 		status:   TunnelDisconnected,
 		onStatus: onStatus,
@@ -70,6 +71,13 @@ func (t *TunnelManager) Status() TunnelStatus {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.status
+}
+
+// StatusMsg returns the current progress message.
+func (t *TunnelManager) StatusMsg() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.statusMsg
 }
 
 // LastError returns the last error message, if any.
@@ -86,24 +94,20 @@ func (t *TunnelManager) LocalPort() int {
 	return t.localPort
 }
 
-func (t *TunnelManager) setStatus(s TunnelStatus) {
+// setStatusLocked updates status and calls the callback WITHOUT holding the lock.
+func (t *TunnelManager) setStatusNotify(s TunnelStatus, msg string) {
+	t.mu.Lock()
 	t.status = s
-	if t.onStatus != nil {
-		t.onStatus(s)
+	t.statusMsg = msg
+	cb := t.onStatus
+	t.mu.Unlock()
+
+	if cb != nil {
+		cb(s, msg)
 	}
 }
 
-// Start launches the SSM port-forwarding session as a subprocess.
-//
-//	aws ssm start-session \
-//	  --target <instance-id> \
-//	  --document-name AWS-StartPortForwardingSessionToRemoteHost \
-//	  --parameters '{"host":["<rds-host>"],"portNumber":["<rds-port>"],"localPortNumber":["<local-port>"]}' \
-//	  --profile <profile> \
-//	  --region <region>
-//
-// Monitors stdout for "Port <port> opened" to confirm connection.
-// On unexpected exit, updates status.
+// Start launches the SSM port-forwarding session.
 func (t *TunnelManager) Start(cfg TunnelConfig) error {
 	t.mu.Lock()
 	if t.status == TunnelConnecting || t.status == TunnelConnected {
@@ -112,146 +116,110 @@ func (t *TunnelManager) Start(cfg TunnelConfig) error {
 	}
 	t.localPort = cfg.LocalPort
 	t.lastError = ""
-	t.setStatus(TunnelConnecting)
-	t.stopCh = make(chan struct{})
 	t.mu.Unlock()
 
-	params := fmt.Sprintf(`{"host":["%s"],"portNumber":["%d"],"localPortNumber":["%d"]}`,
-		cfg.RDSHost, cfg.RDSPort, cfg.LocalPort)
+	t.setStatusNotify(TunnelConnecting, "Loading AWS config...")
 
-	args := []string{
-		"ssm", "start-session",
-		"--target", cfg.InstanceID,
-		"--document-name", "AWS-StartPortForwardingSessionToRemoteHost",
-		"--parameters", params,
+	opts := []func(*config.LoadOptions) error{
+		config.WithRegion(cfg.AWSRegion),
 	}
 	if cfg.AWSProfile != "" {
-		args = append(args, "--profile", cfg.AWSProfile)
+		opts = append(opts, config.WithSharedConfigProfile(cfg.AWSProfile))
 	}
-	if cfg.AWSRegion != "" {
-		args = append(args, "--region", cfg.AWSRegion)
-	}
-
-	cmd := exec.Command("aws", args...)
-
-	stdout, err := cmd.StdoutPipe()
+	awsCfg, err := config.LoadDefaultConfig(context.Background(), opts...)
 	if err != nil {
 		t.mu.Lock()
 		t.lastError = err.Error()
-		t.setStatus(TunnelError)
 		t.mu.Unlock()
-		return err
+		t.setStatusNotify(TunnelError, err.Error())
+		return fmt.Errorf("load aws config: %w", err)
 	}
 
-	// Merge stderr into stdout for monitoring
-	cmd.Stderr = cmd.Stdout
-
-	if err := cmd.Start(); err != nil {
-		t.mu.Lock()
-		t.lastError = err.Error()
-		t.setStatus(TunnelError)
-		t.mu.Unlock()
-		return fmt.Errorf("start ssm session: %w", err)
-	}
-
+	ctx, cancel := context.WithCancel(context.Background())
 	t.mu.Lock()
-	t.process = cmd
+	t.cancel = cancel
 	t.mu.Unlock()
 
-	// Monitor stdout for readiness
-	portOpened := fmt.Sprintf("Port %d opened", cfg.LocalPort)
 	go func() {
-		scanner := bufio.NewScanner(stdout)
-		for scanner.Scan() {
-			line := scanner.Text()
-			if strings.Contains(line, portOpened) || strings.Contains(line, "Waiting for connections") {
-				t.mu.Lock()
-				t.setStatus(TunnelConnected)
-				t.mu.Unlock()
-			}
-		}
-	}()
+		err := PortForwardSession(ctx, awsCfg, cfg.InstanceID, cfg.RDSHost, cfg.RDSPort, cfg.LocalPort,
+			func() {
+				// Called when the listener is ready (handshake complete, port open)
+				t.setStatusNotify(TunnelConnected, fmt.Sprintf("Tunnel open on port %d", cfg.LocalPort))
+			},
+			func(msg string) {
+				// Progress updates from the SSM session — no lock contention
+				t.setStatusNotify(TunnelConnecting, msg)
+			},
+		)
 
-	// Monitor process exit
-	go func() {
-		err := cmd.Wait()
 		t.mu.Lock()
-		defer t.mu.Unlock()
-
-		select {
-		case <-t.stopCh:
-			// Intentional stop — set disconnected
-			t.setStatus(TunnelDisconnected)
-		default:
-			// Unexpected exit
+		cancelled := ctx.Err() != nil
+		if !cancelled {
 			if err != nil {
 				t.lastError = err.Error()
 			} else {
 				t.lastError = "session ended unexpectedly"
 			}
-			t.setStatus(TunnelError)
 		}
-		t.process = nil
+		t.cancel = nil
+		t.mu.Unlock()
+
+		if cancelled {
+			t.setStatusNotify(TunnelDisconnected, "")
+		} else {
+			t.setStatusNotify(TunnelError, t.LastError())
+		}
 	}()
 
 	return nil
 }
 
-// Stop sends SIGTERM to the subprocess and waits for exit.
+// Stop cancels the port forwarding session.
 func (t *TunnelManager) Stop() error {
 	t.mu.Lock()
-	proc := t.process
-	stopCh := t.stopCh
+	cancel := t.cancel
 	t.mu.Unlock()
 
-	if proc == nil || proc.Process == nil {
-		return nil
-	}
-
-	// Signal intentional stop
-	close(stopCh)
-
-	if err := proc.Process.Kill(); err != nil {
-		return fmt.Errorf("kill tunnel process: %w", err)
+	if cancel != nil {
+		cancel()
 	}
 	return nil
 }
 
-// IsPortReady does a TCP dial to localhost:PORT to verify the tunnel is accepting connections.
+// IsPortReady checks if the tunnel is connected.
 func (t *TunnelManager) IsPortReady() bool {
 	t.mu.Lock()
-	port := t.localPort
-	t.mu.Unlock()
-
-	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 1*time.Second)
-	if err != nil {
-		return false
-	}
-	conn.Close()
-	return true
+	defer t.mu.Unlock()
+	return t.status == TunnelConnected
 }
 
-// WaitReady blocks until the tunnel port is accepting TCP connections or timeout.
+// WaitReady blocks until the tunnel is connected or timeout.
 func (t *TunnelManager) WaitReady(timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		if t.IsPortReady() {
 			return nil
 		}
+		// Also check for error so we fail fast
+		t.mu.Lock()
+		s := t.status
+		e := t.lastError
+		t.mu.Unlock()
+		if s == TunnelError {
+			return fmt.Errorf("tunnel error: %s", e)
+		}
 		time.Sleep(500 * time.Millisecond)
 	}
 	return fmt.Errorf("tunnel not ready after %v", timeout)
 }
 
-// CheckPrerequisites verifies that the AWS CLI and session-manager-plugin are installed.
-// Returns a slice of missing tool names (empty if all present).
-func CheckPrerequisites() []string {
-	var missing []string
-	if _, err := exec.LookPath("aws"); err != nil {
-		missing = append(missing, "aws")
+// FindFreePort asks the OS for an available TCP port on localhost.
+func FindFreePort() (int, error) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return 0, fmt.Errorf("find free port: %w", err)
 	}
-	if _, err := exec.LookPath("session-manager-plugin"); err != nil {
-		missing = append(missing, "session-manager-plugin")
-	}
-	return missing
+	port := listener.Addr().(*net.TCPAddr).Port
+	listener.Close()
+	return port, nil
 }

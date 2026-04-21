@@ -11,7 +11,9 @@ import (
 
 // GatewayConfig is the top-level gateway configuration file structure.
 type GatewayConfig struct {
-	Gateways []GatewayEntry `yaml:"gateways"`
+	SSOStartURL string         `yaml:"sso_start_url,omitempty"`
+	SSORegion   string         `yaml:"sso_region,omitempty"`
+	Gateways    []GatewayEntry `yaml:"gateways"`
 }
 
 // GatewayEntry describes a single remote database gateway.
@@ -78,6 +80,19 @@ func LoadGatewayConfig() (*GatewayConfig, error) {
 	}
 
 	return &cfg, nil
+}
+
+// SaveGatewayConfig writes the gateway config back to disk.
+func SaveGatewayConfig(cfg *GatewayConfig) error {
+	path := gatewayConfigPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return fmt.Errorf("create config dir: %w", err)
+	}
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("marshal gateway config: %w", err)
+	}
+	return os.WriteFile(path, data, 0600)
 }
 
 // GatewayConfigPath returns the full path to the gateway config file.

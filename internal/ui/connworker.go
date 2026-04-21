@@ -235,16 +235,40 @@ func RunOpenDB(dbPath string, tabID, generation uint64, cmd *control.Command, re
 // listing tables and schemas, then sending the result.
 // If awsCfg is non-nil, IAM auth is used (rdsEndpoint is the real RDS host:port
 // for token generation, while host:port is the local tunnel endpoint).
+// statusFunc is an optional callback for progress updates (may be nil).
 func RunOpenGateway(host string, port int, rdsEndpoint, dbName, user, password string,
-	awsCfg *aws.Config, tabID, generation uint64, results chan DBResult) {
+	awsCfg *aws.Config, tabID, generation uint64, results chan DBResult, statusFunc func(string)) {
 	go func() {
+		if statusFunc != nil {
+			statusFunc("Connecting to database...")
+		}
+
+		// Use a timeout so we don't hang forever if the tunnel isn't relaying data
+		type pgResult struct {
+			conn *db.PostgresDB
+			err  error
+		}
+		ch := make(chan pgResult, 1)
+		go func() {
+			var pgConn *db.PostgresDB
+			var err error
+			if awsCfg != nil {
+				pgConn, err = db.NewPostgresIAM(host, port, rdsEndpoint, dbName, user, *awsCfg)
+			} else {
+				pgConn, err = db.NewPostgres(host, port, dbName, user, password)
+			}
+			ch <- pgResult{pgConn, err}
+		}()
+
 		var pgConn *db.PostgresDB
 		var err error
-		if awsCfg != nil {
-			pgConn, err = db.NewPostgresIAM(host, port, rdsEndpoint, dbName, user, *awsCfg)
-		} else {
-			pgConn, err = db.NewPostgres(host, port, dbName, user, password)
+		select {
+		case r := <-ch:
+			pgConn, err = r.conn, r.err
+		case <-time.After(30 * time.Second):
+			err = fmt.Errorf("connection timed out after 30s — tunnel may not be forwarding data")
 		}
+
 		if err != nil {
 			results <- DBResult{
 				Kind:       ReqOpenGateway,
@@ -253,6 +277,10 @@ func RunOpenGateway(host string, port int, rdsEndpoint, dbName, user, password s
 				Err:        err,
 			}
 			return
+		}
+
+		if statusFunc != nil {
+			statusFunc("Loading tables...")
 		}
 
 		tables, err := pgConn.Tables()
@@ -265,6 +293,10 @@ func RunOpenGateway(host string, port int, rdsEndpoint, dbName, user, password s
 				Err:        err,
 			}
 			return
+		}
+
+		if statusFunc != nil {
+			statusFunc(fmt.Sprintf("Loading schema for %d tables...", len(tables)))
 		}
 
 		for i := range tables {

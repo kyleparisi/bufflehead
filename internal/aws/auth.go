@@ -1,13 +1,16 @@
 package aws
 
 import (
-	"bufio"
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -18,6 +21,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/rds"
 	"github.com/aws/aws-sdk-go-v2/service/sso"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	"github.com/aws/aws-sdk-go-v2/service/ssooidc"
+	ssooidctypes "github.com/aws/aws-sdk-go-v2/service/ssooidc/types"
 )
 
 // CredentialStatus represents the state of AWS credentials for a profile.
@@ -104,47 +109,72 @@ type SSOLoginResult struct {
 	Line string // status line from aws sso login (URL, code, success message)
 }
 
-// SSOLogin launches `aws sso login --profile <name>` as a subprocess.
-// Returns a channel that streams each line of output (so the UI can show
-// the authorization URL and user code), then a final result with Err set
-// to nil on success or the error on failure.
+// SSOLogin starts an OIDC device authorization flow for the profile's SSO session.
+// Returns a channel that streams status lines (authorization URL, user code),
+// then a final result with Err set to nil on success or the error on failure.
 func (a *AuthManager) SSOLogin() <-chan SSOLoginResult {
-	ch := make(chan SSOLoginResult, 16)
-	go func() {
-		defer close(ch)
-		args := []string{"sso", "login"}
-		if a.profile != "" {
-			args = append(args, "--profile", a.profile)
-		}
-		cmd := exec.Command("aws", args...)
+	// Read the profile's sso-session config to get startURL + region
+	home, _ := os.UserHomeDir()
+	configPath := filepath.Join(home, ".aws", "config")
+	data, _ := os.ReadFile(configPath)
+	content := string(data)
 
-		stdout, err := cmd.StdoutPipe()
-		if err != nil {
-			ch <- SSOLoginResult{Err: fmt.Errorf("stdout pipe: %w", err)}
-			return
-		}
-		cmd.Stderr = cmd.Stdout
+	profileHeader := "[profile " + a.profile + "]"
+	idx := strings.Index(content, profileHeader)
+	if idx == -1 {
+		ch := make(chan SSOLoginResult, 1)
+		ch <- SSOLoginResult{Err: fmt.Errorf("profile %q not found in AWS config", a.profile)}
+		close(ch)
+		return ch
+	}
 
-		if err := cmd.Start(); err != nil {
-			ch <- SSOLoginResult{Err: fmt.Errorf("aws sso login: %w", err)}
-			return
-		}
+	// Find sso_session name in the profile section
+	section := content[idx:]
+	if nextIdx := strings.Index(section[1:], "\n["); nextIdx != -1 {
+		section = section[:nextIdx+1]
+	}
+	sessionName := parseConfigValue(section, "sso_session")
+	if sessionName == "" {
+		ch := make(chan SSOLoginResult, 1)
+		ch <- SSOLoginResult{Err: fmt.Errorf("profile %q has no sso_session configured", a.profile)}
+		close(ch)
+		return ch
+	}
 
-		scanner := bufio.NewScanner(stdout)
-		for scanner.Scan() {
-			line := strings.TrimSpace(scanner.Text())
-			if line != "" {
-				ch <- SSOLoginResult{Line: line}
+	// Find the sso-session block to get startURL and region
+	sessionHeader := "[sso-session " + sessionName + "]"
+	sidx := strings.Index(content, sessionHeader)
+	if sidx == -1 {
+		ch := make(chan SSOLoginResult, 1)
+		ch <- SSOLoginResult{Err: fmt.Errorf("sso-session %q not found in AWS config", sessionName)}
+		close(ch)
+		return ch
+	}
+	sessionSection := content[sidx:]
+	if nextIdx := strings.Index(sessionSection[1:], "\n["); nextIdx != -1 {
+		sessionSection = sessionSection[:nextIdx+1]
+	}
+	startURL := parseConfigValue(sessionSection, "sso_start_url")
+	ssoRegion := parseConfigValue(sessionSection, "sso_region")
+	if ssoRegion == "" {
+		ssoRegion = a.region
+	}
+
+	return runOIDCDeviceAuth(startURL, ssoRegion, sessionName)
+}
+
+// parseConfigValue extracts a value for a key from an INI section string.
+func parseConfigValue(section, key string) string {
+	for _, line := range strings.Split(section, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, key+" ") || strings.HasPrefix(line, key+"=") {
+			parts := strings.SplitN(line, "=", 2)
+			if len(parts) == 2 {
+				return strings.TrimSpace(parts[1])
 			}
 		}
-
-		if err := cmd.Wait(); err != nil {
-			ch <- SSOLoginResult{Err: fmt.Errorf("aws sso login: %w", err)}
-		} else {
-			ch <- SSOLoginResult{}
-		}
-	}()
-	return ch
+	}
+	return ""
 }
 
 // EnsureSSOSession checks if a [sso-session bufflehead] block exists in
@@ -187,42 +217,203 @@ func EnsureSSOSession(startURL, ssoRegion string) (string, error) {
 	return ssoSessionName, nil
 }
 
-// SSOSessionLogin launches `aws sso login --sso-session <name>`.
-// Returns a channel that streams output lines (authorization URL, user code)
+// SSOSessionLogin starts an OIDC device authorization flow for the named sso-session.
+// Returns a channel that streams status lines (authorization URL, user code)
 // and a final result.
 func SSOSessionLogin(sessionName string) <-chan SSOLoginResult {
+	// Read the sso-session block from ~/.aws/config
+	home, _ := os.UserHomeDir()
+	configPath := filepath.Join(home, ".aws", "config")
+	data, _ := os.ReadFile(configPath)
+	content := string(data)
+
+	sessionHeader := "[sso-session " + sessionName + "]"
+	idx := strings.Index(content, sessionHeader)
+	if idx == -1 {
+		ch := make(chan SSOLoginResult, 1)
+		ch <- SSOLoginResult{Err: fmt.Errorf("sso-session %q not found in AWS config", sessionName)}
+		close(ch)
+		return ch
+	}
+
+	section := content[idx:]
+	if nextIdx := strings.Index(section[1:], "\n["); nextIdx != -1 {
+		section = section[:nextIdx+1]
+	}
+	startURL := parseConfigValue(section, "sso_start_url")
+	ssoRegion := parseConfigValue(section, "sso_region")
+
+	return runOIDCDeviceAuth(startURL, ssoRegion, sessionName)
+}
+
+// runOIDCDeviceAuth performs the OIDC device authorization flow using the AWS SDK.
+// It registers a client, starts device authorization, polls for the token, and
+// writes the token to the SSO cache.
+func runOIDCDeviceAuth(startURL, ssoRegion, sessionName string) <-chan SSOLoginResult {
 	ch := make(chan SSOLoginResult, 16)
 	go func() {
 		defer close(ch)
-		cmd := exec.Command("aws", "sso", "login", "--sso-session", sessionName)
 
-		stdout, err := cmd.StdoutPipe()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+
+		cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(ssoRegion))
 		if err != nil {
-			ch <- SSOLoginResult{Err: fmt.Errorf("stdout pipe: %w", err)}
-			return
-		}
-		cmd.Stderr = cmd.Stdout
-
-		if err := cmd.Start(); err != nil {
-			ch <- SSOLoginResult{Err: fmt.Errorf("aws sso login: %w", err)}
+			ch <- SSOLoginResult{Err: fmt.Errorf("load aws config: %w", err)}
 			return
 		}
 
-		scanner := bufio.NewScanner(stdout)
-		for scanner.Scan() {
-			line := strings.TrimSpace(scanner.Text())
-			if line != "" {
-				ch <- SSOLoginResult{Line: line}
+		client := ssooidc.NewFromConfig(cfg)
+
+		// Step 1: Register client
+		ch <- SSOLoginResult{Line: "Registering OIDC client..."}
+		reg, err := client.RegisterClient(ctx, &ssooidc.RegisterClientInput{
+			ClientName: aws.String("bufflehead"),
+			ClientType: aws.String("public"),
+			Scopes:     []string{"sso:account:access"},
+		})
+		if err != nil {
+			ch <- SSOLoginResult{Err: fmt.Errorf("register client: %w", err)}
+			return
+		}
+
+		// Step 2: Start device authorization
+		deviceAuth, err := client.StartDeviceAuthorization(ctx, &ssooidc.StartDeviceAuthorizationInput{
+			ClientId:     reg.ClientId,
+			ClientSecret: reg.ClientSecret,
+			StartUrl:     aws.String(startURL),
+		})
+		if err != nil {
+			ch <- SSOLoginResult{Err: fmt.Errorf("start device authorization: %w", err)}
+			return
+		}
+
+		// Open the authorization URL in the user's browser
+		var authURL string
+		if deviceAuth.VerificationUriComplete != nil {
+			authURL = *deviceAuth.VerificationUriComplete
+		} else if deviceAuth.VerificationUri != nil {
+			authURL = *deviceAuth.VerificationUri
+		}
+
+		if authURL != "" {
+			openBrowser(authURL)
+			ch <- SSOLoginResult{Line: fmt.Sprintf("Opened browser for authorization:\n%s", authURL)}
+			if deviceAuth.UserCode != nil {
+				ch <- SSOLoginResult{Line: fmt.Sprintf("Confirmation code: %s", *deviceAuth.UserCode)}
 			}
 		}
 
-		if err := cmd.Wait(); err != nil {
-			ch <- SSOLoginResult{Err: fmt.Errorf("aws sso login: %w", err)}
-		} else {
-			ch <- SSOLoginResult{}
+		ch <- SSOLoginResult{Line: "Waiting for authorization..."}
+
+		// Step 3: Poll CreateToken until authorized
+		interval := time.Duration(deviceAuth.Interval) * time.Second
+		if interval == 0 {
+			interval = 5 * time.Second
 		}
+		deadline := time.Now().Add(time.Duration(deviceAuth.ExpiresIn) * time.Second)
+
+		var token *ssooidc.CreateTokenOutput
+		for time.Now().Before(deadline) {
+			token, err = client.CreateToken(ctx, &ssooidc.CreateTokenInput{
+				ClientId:     reg.ClientId,
+				ClientSecret: reg.ClientSecret,
+				DeviceCode:   deviceAuth.DeviceCode,
+				GrantType:    aws.String("urn:ietf:params:oauth:grant-type:device_code"),
+			})
+			if err == nil {
+				break
+			}
+
+			var pendingErr *ssooidctypes.AuthorizationPendingException
+			if errors.As(err, &pendingErr) {
+				time.Sleep(interval)
+				continue
+			}
+
+			var slowDown *ssooidctypes.SlowDownException
+			if errors.As(err, &slowDown) {
+				interval *= 2
+				time.Sleep(interval)
+				continue
+			}
+
+			ch <- SSOLoginResult{Err: fmt.Errorf("create token: %w", err)}
+			return
+		}
+
+		if token == nil {
+			ch <- SSOLoginResult{Err: fmt.Errorf("device authorization timed out")}
+			return
+		}
+
+		// Step 4: Write token to SSO cache
+		expiresAt := time.Now().UTC().Add(time.Duration(token.ExpiresIn) * time.Second)
+		cacheEntry := ssoTokenCache{
+			StartUrl:               startURL,
+			Region:                 ssoRegion,
+			AccessToken:            deref(token.AccessToken),
+			ExpiresAt:              expiresAt.Format(time.RFC3339),
+			ClientID:               deref(reg.ClientId),
+			ClientSecret:           deref(reg.ClientSecret),
+			RegistrationExpiresAt:  time.Unix(reg.ClientSecretExpiresAt, 0).UTC().Format(time.RFC3339),
+			RefreshToken:           deref(token.RefreshToken),
+		}
+
+		if err := writeSSOCache(sessionName, cacheEntry); err != nil {
+			ch <- SSOLoginResult{Err: fmt.Errorf("write sso cache: %w", err)}
+			return
+		}
+
+		ch <- SSOLoginResult{Line: "Successfully logged in!"}
+		ch <- SSOLoginResult{} // success (nil error)
 	}()
 	return ch
+}
+
+// ssoTokenCache is the JSON structure for ~/.aws/sso/cache/*.json files.
+type ssoTokenCache struct {
+	StartUrl               string `json:"startUrl"`
+	Region                 string `json:"region"`
+	AccessToken            string `json:"accessToken"`
+	ExpiresAt              string `json:"expiresAt"`
+	ClientID               string `json:"clientId,omitempty"`
+	ClientSecret           string `json:"clientSecret,omitempty"`
+	RegistrationExpiresAt  string `json:"registrationExpiresAt,omitempty"`
+	RefreshToken           string `json:"refreshToken,omitempty"`
+}
+
+// openBrowser opens a URL in the user's default browser.
+func openBrowser(url string) {
+	switch runtime.GOOS {
+	case "darwin":
+		exec.Command("open", url).Start()
+	case "linux":
+		exec.Command("xdg-open", url).Start()
+	case "windows":
+		exec.Command("cmd", "/c", "start", url).Start()
+	}
+}
+
+// writeSSOCache writes the token cache file to ~/.aws/sso/cache/<sha1(key)>.json.
+func writeSSOCache(cacheKey string, entry ssoTokenCache) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	cacheDir := filepath.Join(home, ".aws", "sso", "cache")
+	os.MkdirAll(cacheDir, 0700)
+
+	h := sha1.New()
+	h.Write([]byte(cacheKey))
+	filename := strings.ToLower(hex.EncodeToString(h.Sum(nil))) + ".json"
+
+	data, err := json.MarshalIndent(entry, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(filepath.Join(cacheDir, filename), data, 0600)
 }
 
 // SSOAccount represents an AWS account available via SSO.

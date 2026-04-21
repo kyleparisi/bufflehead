@@ -2,7 +2,6 @@ package ui
 
 import (
 	"fmt"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -37,8 +36,10 @@ var (
 type GatewayScreen struct {
 	VBoxContainer.Extension[GatewayScreen] `gd:"GatewayScreen"`
 
-	gateways []models.GatewayEntry
-	cards    []*gatewayCard
+	config    *models.GatewayConfig
+	bookmarks *models.BookmarkStore
+	gateways  []models.GatewayEntry
+	cards     []*gatewayCard
 
 	OnConnect    func(entry models.GatewayEntry, auth *bfaws.AuthManager, tunnel *bfaws.TunnelManager)
 	OnOpenLocal  func()
@@ -48,27 +49,32 @@ type GatewayScreen struct {
 	ssoStartURL  LineEdit.Instance
 	ssoRegion    LineEdit.Instance
 	ssoLoginBtn  Button.Instance
+	ssoLogoutBtn Button.Instance
 	ssoStatus    Label.Instance
 	ssoLog       Label.Instance
 	ssoPickerBox VBoxContainer.Instance // container for account/role buttons
+	ssoLoginRow  HBoxContainer.Instance // row with region + login button
 	ssoUpdate    bool
 	ssoLoginLog  string
 	ssoLoginErr  string
 	ssoDone      bool
 
 	// Account/role picker state (set by background goroutines, read by Process)
-	ssoAccounts     []bfaws.SSOAccount
-	ssoAccountsErr  string
+	ssoAccounts      []bfaws.SSOAccount
+	ssoAccountsErr   string
 	ssoAccountsReady bool
-	ssoRoles        []bfaws.SSORole
-	ssoRolesErr     string
-	ssoRolesReady   bool
-	ssoPickedAcct   bfaws.SSOAccount
-	ssoProfileDone  bool
-	ssoProfileErr   string
-	ssoProfileName  string
+	ssoRoles         []bfaws.SSORole
+	ssoRolesErr      string
+	ssoRolesReady    bool
+	ssoPickedAcct    bfaws.SSOAccount
+	ssoProfileDone   bool
+	ssoProfileErr    string
+	ssoProfileName   string
+	ssoSessionActive bool // true when we have a valid cached token
 
 	// Connection form fields
+	formLabel        LineEdit.Instance
+	formEnv          LineEdit.Instance
 	formProfile      LineEdit.Instance
 	formRegion       LineEdit.Instance
 	formInstance     OptionButton.Instance
@@ -87,7 +93,6 @@ type GatewayScreen struct {
 	rdsResult        []bfaws.RDSInstance
 	formRDSHost      LineEdit.Instance
 	formRDSPort   LineEdit.Instance
-	formLocalPort LineEdit.Instance
 	formDBName    LineEdit.Instance
 	formDBUser    LineEdit.Instance
 	formDBPass    LineEdit.Instance
@@ -114,8 +119,16 @@ type gatewayCard struct {
 	fromForm    bool // true if created from inline form (no statusDot/logLbl/actionBtn)
 }
 
-func (g *GatewayScreen) SetGateways(entries []models.GatewayEntry) {
-	g.gateways = entries
+func (g *GatewayScreen) SetConfig(cfg *models.GatewayConfig) {
+	if cfg == nil {
+		cfg = &models.GatewayConfig{}
+	}
+	g.config = cfg
+	g.gateways = cfg.Gateways
+}
+
+func (g *GatewayScreen) SetBookmarks(store *models.BookmarkStore) {
+	g.bookmarks = store
 }
 
 func (g *GatewayScreen) Ready() {
@@ -144,7 +157,7 @@ func (g *GatewayScreen) Ready() {
 	ssoPanel := g.buildSSOPanel()
 	center.AsNode().AddChild(ssoPanel.AsNode())
 
-	// ── Saved gateway cards ──
+	// ── Saved gateway cards (from YAML) ──
 	for i, entry := range g.gateways {
 		cardPanel := g.buildCardPanel(entry, i)
 		center.AsNode().AddChild(cardPanel.AsNode())
@@ -153,6 +166,14 @@ func (g *GatewayScreen) Ready() {
 	// ── New connection form ──
 	formPanel := g.buildForm()
 	center.AsNode().AddChild(formPanel.AsNode())
+
+	// ── Bookmark cards ──
+	if g.bookmarks != nil {
+		for _, bm := range g.bookmarks.All() {
+			bmCard := g.buildBookmarkCard(bm)
+			center.AsNode().AddChild(bmCard.AsNode())
+		}
+	}
 
 	// Spacer
 	spacer := Control.New()
@@ -226,9 +247,9 @@ func (g *GatewayScreen) buildSSOPanel() PanelContainer.Instance {
 	urlVBox.AsNode().AddChild(g.ssoStartURL.AsNode())
 	vbox.AsNode().AddChild(urlVBox.AsNode())
 
-	// Region + button row
-	row := HBoxContainer.New()
-	row.AsControl().AddThemeConstantOverride("separation", 8)
+	// Region + login button row
+	g.ssoLoginRow = HBoxContainer.New()
+	g.ssoLoginRow.AsControl().AddThemeConstantOverride("separation", 8)
 
 	regionVBox := VBoxContainer.New()
 	regionVBox.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
@@ -244,7 +265,7 @@ func (g *GatewayScreen) buildSSOPanel() PanelContainer.Instance {
 	g.ssoRegion.AsControl().AddThemeFontSizeOverride("font_size", fontSize(12))
 	regionVBox.AsNode().AddChild(regionLbl.AsNode())
 	regionVBox.AsNode().AddChild(g.ssoRegion.AsNode())
-	row.AsNode().AddChild(regionVBox.AsNode())
+	g.ssoLoginRow.AsNode().AddChild(regionVBox.AsNode())
 
 	g.ssoLoginBtn = Button.New()
 	g.ssoLoginBtn.SetText("Login")
@@ -255,9 +276,22 @@ func (g *GatewayScreen) buildSSOPanel() PanelContainer.Instance {
 	g.ssoLoginBtn.AsBaseButton().OnPressed(func() {
 		g.onSSOLogin()
 	})
-	row.AsNode().AddChild(g.ssoLoginBtn.AsNode())
+	g.ssoLoginRow.AsNode().AddChild(g.ssoLoginBtn.AsNode())
 
-	vbox.AsNode().AddChild(row.AsNode())
+	// Logout button (hidden initially, shown when session is active)
+	g.ssoLogoutBtn = Button.New()
+	g.ssoLogoutBtn.SetText("Logout")
+	g.ssoLogoutBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(12))
+	applySecondaryButtonTheme(g.ssoLogoutBtn.AsControl())
+	g.ssoLogoutBtn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(80), 0))
+	g.ssoLogoutBtn.AsControl().SetSizeFlagsVertical(Control.SizeShrinkEnd)
+	g.ssoLogoutBtn.AsCanvasItem().SetVisible(false)
+	g.ssoLogoutBtn.AsBaseButton().OnPressed(func() {
+		g.onSSOLogout()
+	})
+	g.ssoLoginRow.AsNode().AddChild(g.ssoLogoutBtn.AsNode())
+
+	vbox.AsNode().AddChild(g.ssoLoginRow.AsNode())
 
 	// Status label
 	g.ssoStatus = Label.New()
@@ -282,7 +316,102 @@ func (g *GatewayScreen) buildSSOPanel() PanelContainer.Instance {
 	vbox.AsNode().AddChild(g.ssoPickerBox.AsNode())
 
 	panel.AsNode().AddChild(vbox.AsNode())
+
+	// Check for existing valid session after UI is built
+	g.tryRestoreSession()
+
 	return panel
+}
+
+// tryRestoreSession checks for a saved SSO start URL and a valid cached token.
+// If found, it restores the session and jumps straight to the account picker.
+func (g *GatewayScreen) tryRestoreSession() {
+	if g.config == nil || g.config.SSOStartURL == "" {
+		return
+	}
+
+	startURL := g.config.SSOStartURL
+	region := g.config.SSORegion
+	if region == "" {
+		region = "us-east-1"
+	}
+
+	// Pre-fill the form fields
+	g.ssoStartURL.SetText(startURL)
+	g.ssoRegion.SetText(region)
+
+	// Check for a valid cached token
+	token, tokenRegion, err := bfaws.ReadCachedAccessToken(startURL)
+	if err != nil {
+		// Token expired or not found — show re-auth prompt
+		g.ssoStatus.SetText("Session expired — login to re-authenticate")
+		g.ssoStatus.AsControl().AddThemeColorOverride("font_color", colorStatusYellow)
+		return
+	}
+
+	// Valid token — fetch accounts in background
+	g.ssoSessionActive = true
+	g.showSessionActive()
+	g.ssoStatus.SetText("Loading accounts...")
+	g.ssoStatus.AsControl().AddThemeColorOverride("font_color", colorStatusYellow)
+
+	go func() {
+		accounts, err := bfaws.ListSSOAccounts(token, tokenRegion)
+		if err != nil {
+			g.ssoAccountsErr = err.Error()
+			g.ssoAccountsReady = true
+			g.ssoUpdate = true
+			return
+		}
+		g.ssoAccounts = accounts
+		g.ssoAccountsReady = true
+		g.ssoUpdate = true
+	}()
+}
+
+// showSessionActive switches the SSO panel to active-session mode:
+// disables URL/region editing, hides Login, shows Logout.
+func (g *GatewayScreen) showSessionActive() {
+	g.ssoStartURL.SetEditable(false)
+	g.ssoRegion.SetEditable(false)
+	g.ssoLoginBtn.AsCanvasItem().SetVisible(false)
+	g.ssoLogoutBtn.AsCanvasItem().SetVisible(true)
+}
+
+// showSessionInactive switches the SSO panel back to login mode.
+func (g *GatewayScreen) showSessionInactive() {
+	g.ssoStartURL.SetEditable(true)
+	g.ssoRegion.SetEditable(true)
+	g.ssoLoginBtn.AsCanvasItem().SetVisible(true)
+	g.ssoLoginBtn.AsBaseButton().SetDisabled(false)
+	g.ssoLoginBtn.SetText("Login")
+	g.ssoLogoutBtn.AsCanvasItem().SetVisible(false)
+}
+
+func (g *GatewayScreen) onSSOLogout() {
+	g.ssoSessionActive = false
+	g.ssoAccounts = nil
+	g.ssoRoles = nil
+	g.clearPickerBox()
+	g.ssoPickerBox.AsCanvasItem().SetVisible(false)
+	g.ssoLog.AsCanvasItem().SetVisible(false)
+	g.ssoLog.SetText("")
+	g.showSessionInactive()
+	g.ssoStatus.SetText("Logged out")
+	g.ssoStatus.AsControl().AddThemeColorOverride("font_color", colorTextMuted)
+}
+
+// saveSSO persists the SSO start URL and region to gateway config.
+func (g *GatewayScreen) saveSSO(startURL, region string) {
+	if g.config == nil {
+		return
+	}
+	if g.config.SSOStartURL == startURL && g.config.SSORegion == region {
+		return // already saved
+	}
+	g.config.SSOStartURL = startURL
+	g.config.SSORegion = region
+	models.SaveGatewayConfig(g.config)
 }
 
 func (g *GatewayScreen) onSSOLogin() {
@@ -296,6 +425,9 @@ func (g *GatewayScreen) onSSOLogin() {
 	if region == "" {
 		region = "us-east-1"
 	}
+
+	// Save SSO settings for next time
+	g.saveSSO(startURL, region)
 
 	g.ssoLoginBtn.AsBaseButton().SetDisabled(true)
 	g.ssoStatus.SetText("Configuring SSO session...")
@@ -336,6 +468,7 @@ func (g *GatewayScreen) onSSOLogin() {
 
 		// Login succeeded — now fetch accounts
 		g.ssoDone = true
+		g.ssoSessionActive = true
 		g.ssoUpdate = true
 
 		token, tokenRegion, err := bfaws.ReadCachedAccessToken(startURL)
@@ -519,6 +652,42 @@ func (g *GatewayScreen) buildForm() PanelContainer.Instance {
 	header.AsControl().AddThemeColorOverride("font_color", colorText)
 	vbox.AsNode().AddChild(header.AsNode())
 
+	// Bookmark label + env row
+	labelRow := HBoxContainer.New()
+	labelRow.AsControl().AddThemeConstantOverride("separation", 8)
+
+	labelVBox := VBoxContainer.New()
+	labelVBox.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	labelVBox.AsControl().AddThemeConstantOverride("separation", 2)
+	labelLbl := Label.New()
+	labelLbl.SetText("Label")
+	labelLbl.AsControl().AddThemeFontSizeOverride("font_size", fontSize(10))
+	labelLbl.AsControl().AddThemeColorOverride("font_color", colorTextMuted)
+	g.formLabel = LineEdit.New()
+	g.formLabel.SetPlaceholderText("e.g. prod-analytics")
+	applyInputTheme(g.formLabel.AsControl())
+	g.formLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(12))
+	labelVBox.AsNode().AddChild(labelLbl.AsNode())
+	labelVBox.AsNode().AddChild(g.formLabel.AsNode())
+	labelRow.AsNode().AddChild(labelVBox.AsNode())
+
+	envVBox := VBoxContainer.New()
+	envVBox.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	envVBox.AsControl().AddThemeConstantOverride("separation", 2)
+	envLbl := Label.New()
+	envLbl.SetText("Environment")
+	envLbl.AsControl().AddThemeFontSizeOverride("font_size", fontSize(10))
+	envLbl.AsControl().AddThemeColorOverride("font_color", colorTextMuted)
+	g.formEnv = LineEdit.New()
+	g.formEnv.SetPlaceholderText("e.g. production")
+	applyInputTheme(g.formEnv.AsControl())
+	g.formEnv.AsControl().AddThemeFontSizeOverride("font_size", fontSize(12))
+	envVBox.AsNode().AddChild(envLbl.AsNode())
+	envVBox.AsNode().AddChild(g.formEnv.AsNode())
+	labelRow.AsNode().AddChild(envVBox.AsNode())
+
+	vbox.AsNode().AddChild(labelRow.AsNode())
+
 	// AWS section
 	awsLabel := Label.New()
 	awsLabel.SetText("AWS")
@@ -605,43 +774,8 @@ func (g *GatewayScreen) buildForm() PanelContainer.Instance {
 
 	g.formRDSHost = g.makeField(vbox, "RDS Host", "e.g. my-db.cluster-xyz.rds.amazonaws.com")
 
-	// Port row (two fields side by side)
-	portRow := HBoxContainer.New()
-	portRow.AsControl().AddThemeConstantOverride("separation", 8)
-
-	rdsPortVBox := VBoxContainer.New()
-	rdsPortVBox.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
-	rdsPortVBox.AsControl().AddThemeConstantOverride("separation", 2)
-	rdsPortLabel := Label.New()
-	rdsPortLabel.SetText("RDS Port")
-	rdsPortLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(10))
-	rdsPortLabel.AsControl().AddThemeColorOverride("font_color", colorTextMuted)
-	g.formRDSPort = LineEdit.New()
-	g.formRDSPort.SetPlaceholderText("5432")
+	g.formRDSPort = g.makeField(vbox, "RDS Port", "5432")
 	g.formRDSPort.SetText("5432")
-	applyInputTheme(g.formRDSPort.AsControl())
-	g.formRDSPort.AsControl().AddThemeFontSizeOverride("font_size", fontSize(12))
-	rdsPortVBox.AsNode().AddChild(rdsPortLabel.AsNode())
-	rdsPortVBox.AsNode().AddChild(g.formRDSPort.AsNode())
-
-	localPortVBox := VBoxContainer.New()
-	localPortVBox.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
-	localPortVBox.AsControl().AddThemeConstantOverride("separation", 2)
-	localPortLabel := Label.New()
-	localPortLabel.SetText("Local Port")
-	localPortLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(10))
-	localPortLabel.AsControl().AddThemeColorOverride("font_color", colorTextMuted)
-	g.formLocalPort = LineEdit.New()
-	g.formLocalPort.SetPlaceholderText("5433")
-	g.formLocalPort.SetText("5433")
-	applyInputTheme(g.formLocalPort.AsControl())
-	g.formLocalPort.AsControl().AddThemeFontSizeOverride("font_size", fontSize(12))
-	localPortVBox.AsNode().AddChild(localPortLabel.AsNode())
-	localPortVBox.AsNode().AddChild(g.formLocalPort.AsNode())
-
-	portRow.AsNode().AddChild(rdsPortVBox.AsNode())
-	portRow.AsNode().AddChild(localPortVBox.AsNode())
-	vbox.AsNode().AddChild(portRow.AsNode())
 
 	g.formDBName = g.makeField(vbox, "Database Name", "e.g. mydb")
 	g.formDBUser = g.makeField(vbox, "Username", "e.g. readonly_user")
@@ -819,6 +953,8 @@ func (g *GatewayScreen) onRDSSelected(index int) {
 }
 
 func (g *GatewayScreen) onFormConnect() {
+	label := g.formLabel.Text()
+	env := g.formEnv.Text()
 	profile := g.formProfile.Text()
 	region := g.formRegion.Text()
 	// Get selected instance ID from the dropdown
@@ -829,12 +965,21 @@ func (g *GatewayScreen) onFormConnect() {
 	}
 	rdsHost := g.formRDSHost.Text()
 	rdsPortStr := g.formRDSPort.Text()
-	localPortStr := g.formLocalPort.Text()
 	dbName := g.formDBName.Text()
 	dbUser := g.formDBUser.Text()
 	dbPass := g.formDBPass.Text()
 
 	// Validate required fields
+	if label == "" {
+		g.formStatus.SetText("Label is required")
+		g.formStatus.AsControl().AddThemeColorOverride("font_color", colorStatusRed)
+		return
+	}
+	if err := models.ValidateLabel(label); err != nil {
+		g.formStatus.SetText(err.Error())
+		g.formStatus.AsControl().AddThemeColorOverride("font_color", colorStatusRed)
+		return
+	}
 	if profile == "" {
 		g.formStatus.SetText("AWS Profile is required")
 		g.formStatus.AsControl().AddThemeColorOverride("font_color", colorStatusRed)
@@ -870,10 +1015,6 @@ func (g *GatewayScreen) onFormConnect() {
 	if rdsPort == 0 {
 		rdsPort = 5432
 	}
-	localPort, _ := strconv.Atoi(localPortStr)
-	if localPort == 0 {
-		localPort = 5433
-	}
 
 	authMode := "password"
 	if g.formIAMAuth {
@@ -881,17 +1022,33 @@ func (g *GatewayScreen) onFormConnect() {
 	}
 
 	entry := models.GatewayEntry{
-		Name:       fmt.Sprintf("%s/%s", dbName, dbUser),
+		Name:       label,
 		AWSProfile: profile,
 		AWSRegion:  region,
 		InstanceID: instanceID,
 		RDSHost:    rdsHost,
 		RDSPort:    rdsPort,
-		LocalPort:  localPort,
 		DBName:     dbName,
 		DBUser:     dbUser,
 		DBPassword: dbPass,
 		AuthMode:   authMode,
+	}
+
+	// Save as bookmark (password is not persisted, only env var name)
+	if g.bookmarks != nil {
+		bm := models.Bookmark{
+			Label:        label,
+			Env:          env,
+			AWSProfile:   profile,
+			AWSRegion:    region,
+			InstanceID:   instanceID,
+			RDSHost:      rdsHost,
+			RDSPort:      rdsPort,
+			DBName:       dbName,
+			DBUser:       dbUser,
+			AuthMode:     authMode,
+		}
+		g.bookmarks.Add(bm)
 	}
 
 	card := &gatewayCard{
@@ -1045,6 +1202,147 @@ func (g *GatewayScreen) buildCardPanel(entry models.GatewayEntry, idx int) Panel
 	return panel
 }
 
+// envBadgeColor returns a color for an environment badge.
+func envBadgeColor(env string) Color.RGBA {
+	switch strings.ToLower(env) {
+	case "production", "prod":
+		return Color.RGBA{R: 0.85, G: 0.30, B: 0.30, A: 1}
+	case "staging", "stage":
+		return Color.RGBA{R: 0.90, G: 0.75, B: 0.20, A: 1}
+	case "development", "dev":
+		return Color.RGBA{R: 0.30, G: 0.80, B: 0.40, A: 1}
+	default:
+		return Color.RGBA{R: 0.50, G: 0.65, B: 0.90, A: 1}
+	}
+}
+
+func (g *GatewayScreen) buildBookmarkCard(bm models.Bookmark) PanelContainer.Instance {
+	panel := PanelContainer.New()
+	border := makeStyleBox(colorBgPanel, 6, 1, colorBorderDim)
+	border.AsStyleBox().SetContentMarginAll(scaled(16))
+	panel.AsControl().AddThemeStyleboxOverride("panel", border.AsStyleBox())
+
+	vbox := VBoxContainer.New()
+	vbox.AsControl().AddThemeConstantOverride("separation", 6)
+
+	// Row 1: Status dot + Label + Env badge
+	row1 := HBoxContainer.New()
+	row1.AsControl().AddThemeConstantOverride("separation", 8)
+
+	statusDot := Label.New()
+	statusDot.SetText("○")
+	statusDot.AsControl().AddThemeFontSizeOverride("font_size", fontSize(12))
+	statusDot.AsControl().AddThemeColorOverride("font_color", colorStatusGray)
+
+	nameLabel := Label.New()
+	nameLabel.SetText(bm.Label)
+	nameLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(15))
+	nameLabel.AsControl().AddThemeColorOverride("font_color", colorText)
+	nameLabel.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+
+	row1.AsNode().AddChild(statusDot.AsNode())
+	row1.AsNode().AddChild(nameLabel.AsNode())
+
+	if bm.Env != "" {
+		envLabel := Label.New()
+		envLabel.SetText(bm.Env)
+		envLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(10))
+		envLabel.AsControl().AddThemeColorOverride("font_color", envBadgeColor(bm.Env))
+		envLabel.AsControl().SetSizeFlagsVertical(Control.SizeShrinkCenter)
+		row1.AsNode().AddChild(envLabel.AsNode())
+	}
+
+	// Detail rows
+	hostLabel := Label.New()
+	host := bm.RDSHost
+	if len(host) > 48 {
+		host = host[:48] + "..."
+	}
+	hostLabel.SetText(fmt.Sprintf("%s/%s @ %s", bm.DBName, bm.DBUser, host))
+	hostLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
+	hostLabel.AsControl().AddThemeColorOverride("font_color", colorTextDim)
+
+	profileLabel := Label.New()
+	profileLabel.SetText("AWS Profile: " + bm.AWSProfile)
+	profileLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
+	profileLabel.AsControl().AddThemeColorOverride("font_color", colorTextDim)
+
+	// Status + action button row
+	row4 := HBoxContainer.New()
+	row4.AsControl().AddThemeConstantOverride("separation", 8)
+
+	statusLabel := Label.New()
+	statusLabel.SetText("Checking credentials...")
+	statusLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
+	statusLabel.AsControl().AddThemeColorOverride("font_color", colorTextMuted)
+	statusLabel.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+
+	actionBtn := Button.New()
+	actionBtn.SetText("Connect")
+	actionBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(12))
+	applyButtonTheme(actionBtn.AsControl())
+
+	deleteBtn := Button.New()
+	deleteBtn.SetText("Remove")
+	deleteBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
+	applySecondaryButtonTheme(deleteBtn.AsControl())
+
+	row4.AsNode().AddChild(statusLabel.AsNode())
+	row4.AsNode().AddChild(actionBtn.AsNode())
+	row4.AsNode().AddChild(deleteBtn.AsNode())
+
+	// Log area for SSO login output (hidden initially)
+	logLabel := Label.New()
+	logLabel.SetText("")
+	logLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(10))
+	logLabel.AsControl().AddThemeColorOverride("font_color", colorTextMuted)
+	logLabel.SetAutowrapMode(3)
+	logLabel.AsCanvasItem().SetVisible(false)
+
+	vbox.AsNode().AddChild(row1.AsNode())
+	vbox.AsNode().AddChild(hostLabel.AsNode())
+	vbox.AsNode().AddChild(profileLabel.AsNode())
+	vbox.AsNode().AddChild(row4.AsNode())
+	vbox.AsNode().AddChild(logLabel.AsNode())
+	panel.AsNode().AddChild(vbox.AsNode())
+
+	// Convert bookmark to gateway entry (port assigned at connect time)
+	entry := bm.ToGatewayEntry(0)
+	card := &gatewayCard{
+		entry:     entry,
+		auth:      bfaws.NewAuthManager(bm.AWSProfile, bm.AWSRegion),
+		statusLbl: statusLabel,
+		logLbl:    logLabel,
+		actionBtn: actionBtn,
+		statusDot: statusDot,
+	}
+	g.cards = append(g.cards, card)
+	cardIdx := len(g.cards) - 1
+
+	// Check credentials async
+	go func() {
+		status := card.auth.Status()
+		card.credStatus = status
+		card.needsUpdate = true
+	}()
+
+	// Wire action button
+	actionBtn.AsBaseButton().OnPressed(func() {
+		g.onCardAction(cardIdx)
+	})
+
+	// Wire delete button
+	bmLabel := bm.Label
+	deleteBtn.AsBaseButton().OnPressed(func() {
+		if g.bookmarks != nil {
+			g.bookmarks.Remove(bmLabel)
+		}
+		panel.AsCanvasItem().SetVisible(false)
+	})
+
+	return panel
+}
+
 func (g *GatewayScreen) onCardAction(idx int) {
 	if idx >= len(g.cards) {
 		return
@@ -1090,24 +1388,25 @@ func (g *GatewayScreen) onCardAction(idx int) {
 }
 
 func (g *GatewayScreen) startGatewayConnection(card *gatewayCard) {
-	// Check for required CLI tools before attempting connection.
-	if missing := bfaws.CheckPrerequisites(); len(missing) > 0 {
-		msg := "Missing required tools: " + strings.Join(missing, ", ")
-		if slices.Contains(missing, "session-manager-plugin") {
-			msg += "\nInstall with: brew install --cask session-manager-plugin"
-		}
-		if slices.Contains(missing, "aws") {
-			msg += "\nInstall with: brew install awscli"
-		}
-		card.loginErr = msg
-		card.needsUpdate = true
-		return
-	}
-
 	entry := card.entry
 	auth := card.auth
 
 	go func() {
+		card.loginLog = "Allocating port..."
+		card.needsUpdate = true
+
+		// Auto-assign a free local port
+		localPort, err := bfaws.FindFreePort()
+		if err != nil {
+			card.loginErr = "Port allocation: " + err.Error()
+			card.needsUpdate = true
+			return
+		}
+		card.entry.LocalPort = localPort
+
+		card.loginLog = "Resolving bastion instance..."
+		card.needsUpdate = true
+
 		// Resolve instance ID
 		instanceID, err := auth.ResolveInstanceID(entry.InstanceID, entry.InstanceTags)
 		if err != nil {
@@ -1116,8 +1415,15 @@ func (g *GatewayScreen) startGatewayConnection(card *gatewayCard) {
 			return
 		}
 
-		// Start SSM tunnel
-		tunnel := bfaws.NewTunnelManager(func(status bfaws.TunnelStatus) {
+		card.loginLog = "Starting SSM tunnel..."
+		card.needsUpdate = true
+
+		// Start SSM tunnel — declare before closure so the callback can reference it
+		var tunnel *bfaws.TunnelManager
+		tunnel = bfaws.NewTunnelManager(func(status bfaws.TunnelStatus, msg string) {
+			if status == bfaws.TunnelConnecting {
+				card.loginLog = msg
+			}
 			card.needsUpdate = true
 		})
 
@@ -1125,7 +1431,7 @@ func (g *GatewayScreen) startGatewayConnection(card *gatewayCard) {
 			InstanceID: instanceID,
 			RDSHost:    entry.RDSHost,
 			RDSPort:    entry.RDSPort,
-			LocalPort:  entry.LocalPort,
+			LocalPort:  localPort,
 			AWSProfile: entry.AWSProfile,
 			AWSRegion:  entry.AWSRegion,
 		})
@@ -1135,14 +1441,15 @@ func (g *GatewayScreen) startGatewayConnection(card *gatewayCard) {
 			return
 		}
 
-		// Wait for tunnel readiness
-		if err := tunnel.WaitReady(30 * time.Second); err != nil {
+		// Wait for tunnel readiness with timeout
+		if err := tunnel.WaitReady(60 * time.Second); err != nil {
 			card.loginErr = "Tunnel not ready: " + err.Error()
 			card.needsUpdate = true
 			tunnel.Stop()
 			return
 		}
 
+		card.loginLog = "Tunnel connected"
 		card.tunnel = tunnel
 		card.connected = true
 		card.needsUpdate = true
@@ -1158,13 +1465,12 @@ func (g *GatewayScreen) Process(delta Float.X) {
 		if g.ssoLoginErr != "" {
 			g.ssoStatus.SetText("Error: " + g.ssoLoginErr)
 			g.ssoStatus.AsControl().AddThemeColorOverride("font_color", colorStatusRed)
-			g.ssoLoginBtn.AsBaseButton().SetDisabled(false)
+			g.showSessionInactive()
 			g.ssoLoginErr = ""
 		} else if g.ssoProfileDone {
 			g.ssoStatus.SetText("Profile saved: " + g.ssoProfileName)
 			g.ssoStatus.AsControl().AddThemeColorOverride("font_color", colorStatusGreen)
-			g.ssoLoginBtn.AsBaseButton().SetDisabled(false)
-			g.ssoLoginBtn.SetText("Login")
+			g.showSessionActive()
 			// Pre-fill the connection form with this profile
 			g.formProfile.SetText(g.ssoProfileName)
 			g.formRegion.SetText(g.ssoRegion.Text())
@@ -1172,7 +1478,6 @@ func (g *GatewayScreen) Process(delta Float.X) {
 		} else if g.ssoProfileErr != "" {
 			g.ssoStatus.SetText("Error saving profile: " + g.ssoProfileErr)
 			g.ssoStatus.AsControl().AddThemeColorOverride("font_color", colorStatusRed)
-			g.ssoLoginBtn.AsBaseButton().SetDisabled(false)
 			g.ssoProfileErr = ""
 		} else if g.ssoRolesReady {
 			g.ssoRolesReady = false
@@ -1190,22 +1495,24 @@ func (g *GatewayScreen) Process(delta Float.X) {
 			if g.ssoAccountsErr != "" {
 				g.ssoStatus.SetText("Error loading accounts: " + g.ssoAccountsErr)
 				g.ssoStatus.AsControl().AddThemeColorOverride("font_color", colorStatusRed)
-				g.ssoLoginBtn.AsBaseButton().SetDisabled(false)
+				g.showSessionInactive()
 				g.ssoAccountsErr = ""
 			} else if len(g.ssoAccounts) == 0 {
 				g.ssoStatus.SetText("No accounts found for this SSO session")
 				g.ssoStatus.AsControl().AddThemeColorOverride("font_color", colorStatusRed)
-				g.ssoLoginBtn.AsBaseButton().SetDisabled(false)
+				g.showSessionInactive()
 			} else {
 				g.ssoStatus.SetText("Logged in — select an account")
 				g.ssoStatus.AsControl().AddThemeColorOverride("font_color", colorStatusGreen)
 				g.ssoLog.AsCanvasItem().SetVisible(false)
+				g.showSessionActive()
 				g.showAccountPicker()
 			}
 		} else if g.ssoDone {
 			g.ssoStatus.SetText("Loading accounts...")
 			g.ssoStatus.AsControl().AddThemeColorOverride("font_color", colorStatusYellow)
 			g.ssoLog.AsCanvasItem().SetVisible(false)
+			g.showSessionActive()
 			g.ssoDone = false
 		} else if g.ssoLoginLog != "" {
 			g.ssoLog.SetText(g.ssoLoginLog)
@@ -1339,6 +1646,20 @@ func (g *GatewayScreen) Process(delta Float.X) {
 				g.OnConnect(card.entry, card.auth, card.tunnel)
 			}
 			card.connected = false
+			continue
+		}
+
+		// Show tunnel progress for non-form cards
+		if !card.fromForm && card.tunnel != nil && card.tunnel.Status() == bfaws.TunnelConnecting {
+			card.statusLbl.SetText(card.loginLog)
+			card.statusDot.AsControl().AddThemeColorOverride("font_color", colorStatusYellow)
+			continue
+		}
+
+		// Show tunnel progress for form cards
+		if card.fromForm && card.loginLog != "" && card.tunnel == nil {
+			g.formStatus.SetText(card.loginLog)
+			g.formStatus.AsControl().AddThemeColorOverride("font_color", colorStatusYellow)
 			continue
 		}
 

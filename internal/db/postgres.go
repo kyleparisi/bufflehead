@@ -47,6 +47,10 @@ func newPostgres(host string, port int, dbName, dbUser, password, sslMode string
 		return nil, fmt.Errorf("open postgres: %w", err)
 	}
 
+	// Limit to one connection — multiple TLS connections through an SSM
+	// tunnel's smux session cause MAC errors from interleaved streams.
+	conn.SetMaxOpenConns(1)
+
 	// Verify connectivity
 	if err := conn.Ping(); err != nil {
 		conn.Close()

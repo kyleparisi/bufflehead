@@ -1779,6 +1779,7 @@ type App struct {
 	Duck          *db.DB          `gd:"-"`
 	ControlServer *control.Server `gd:"-"`
 	GatewayConfig *models.GatewayConfig `gd:"-"`
+	BookmarkStore *models.BookmarkStore  `gd:"-"`
 
 	// Legacy accessor — points to active window's active tab state
 	State *models.AppState `gd:"-"`
@@ -1814,11 +1815,7 @@ func (a *App) initMainWindow() {
 		a.mainWin = createMainWindowFromRoot(rootWin, a.Duck, a.history, func() { a.newWindow() })
 		a.mainWin.titleBar.WindowID = rootWin.GetWindowId()
 
-		if a.GatewayConfig != nil && len(a.GatewayConfig.Gateways) > 0 {
-			a.showGatewayScreen()
-		} else {
-			a.mainWin.addNewTab()
-		}
+		a.mainWin.addNewTab()
 		rootWin.MoveToCenter()
 
 		// Handle close — quit the app when main window is closed
@@ -1933,7 +1930,8 @@ func (a *App) initMainWindow() {
 func (a *App) showGatewayScreen() {
 	w := a.mainWin
 	screen := new(GatewayScreen)
-	screen.SetGateways(a.GatewayConfig.Gateways)
+	screen.SetConfig(a.GatewayConfig)
+	screen.SetBookmarks(a.BookmarkStore)
 	screen.OnConnect = func(entry models.GatewayEntry, auth *bfaws.AuthManager, tunnel *bfaws.TunnelManager) {
 		// Replace gateway screen with loading indicator
 		screen.AsCanvasItem().SetVisible(false)
@@ -1992,6 +1990,7 @@ func (a *App) showGatewayLoading(name string) {
 	loadingBox.AsNode().AddChild(titleLabel.AsNode())
 	loadingBox.AsNode().AddChild(statusLabel.AsNode())
 	w.emptyView.AsNode().AddChild(loadingBox.AsNode())
+	w.gatewayLoadingLabel = statusLabel
 
 	w.statusBar.SetStatus("Connecting to " + name + "...")
 }
@@ -2012,7 +2011,9 @@ func (a *App) onGatewayConnected(entry models.GatewayEntry, auth *bfaws.AuthMana
 
 	// Connect to Postgres via the tunnel (127.0.0.1:localPort)
 	RunOpenGateway("127.0.0.1", entry.LocalPort, rdsEndpoint, entry.DBName, entry.DBUser, password,
-		awsCfg, nextTabID, 0, w.results)
+		awsCfg, nextTabID, 0, w.results, func(msg string) {
+			w.gatewayLoadingMsg = msg
+		})
 	nextTabID++
 
 	// Store gateway info for creating the connection after async result
@@ -2302,6 +2303,11 @@ func (a *App) pollResults() {
 			}
 		}
 	nextWindow:
+		// Update gateway loading label if background status changed
+		if w.gatewayLoadingMsg != "" && w.pendingGateway != nil {
+			w.gatewayLoadingLabel.SetText(w.gatewayLoadingMsg)
+			w.gatewayLoadingMsg = ""
+		}
 	}
 }
 

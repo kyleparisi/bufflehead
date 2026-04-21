@@ -86,7 +86,9 @@ type AppWindow struct {
 	navWired bool
 
 	// Gateway
-	pendingGateway *GatewayConnection
+	pendingGateway      *GatewayConnection
+	gatewayLoadingLabel Label.Instance
+	gatewayLoadingMsg   string // set by background goroutine, read by Process
 
 	// Callbacks
 	onNewWindow func()
