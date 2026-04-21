@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"sort"
 	"strings"
 	"time"
@@ -1938,16 +1937,6 @@ func (a *App) showGatewayScreen() {
 		a.showGatewayLoading(entry.Name)
 		a.onGatewayConnected(entry, auth, tunnel)
 	}
-	screen.OnOpenLocal = func() {
-		screen.AsCanvasItem().SetVisible(false)
-		w.addNewTab()
-	}
-	screen.OnEditConfig = func() {
-		path := models.GatewayConfigPath()
-		cmd := exec.Command("open", path)
-		cmd.Start()
-	}
-
 	// Add gateway screen to emptyView (which is already visible)
 	// Clear default empty view children and add gateway screen
 	for w.emptyView.AsNode().GetChildCount() > 0 {

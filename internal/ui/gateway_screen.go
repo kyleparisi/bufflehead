@@ -41,9 +41,7 @@ type GatewayScreen struct {
 	gateways  []models.GatewayEntry
 	cards     []*gatewayCard
 
-	OnConnect    func(entry models.GatewayEntry, auth *bfaws.AuthManager, tunnel *bfaws.TunnelManager)
-	OnOpenLocal  func()
-	OnEditConfig func()
+	OnConnect func(entry models.GatewayEntry, auth *bfaws.AuthManager, tunnel *bfaws.TunnelManager)
 
 	// SSO login section
 	ssoStartURL  LineEdit.Instance
@@ -136,83 +134,82 @@ func (g *GatewayScreen) Ready() {
 	g.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
 	g.AsBoxContainer().SetAlignment(BoxContainer.AlignmentCenter)
 
-	scroll := ScrollContainer.New()
-	scroll.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
-	scroll.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
+	// ── Two-column layout ──
+	columns := HBoxContainer.New()
+	columns.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	columns.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
+	columns.AsControl().AddThemeConstantOverride("separation", 16)
 
-	center := VBoxContainer.New()
-	center.AsControl().SetSizeFlagsHorizontal(Control.SizeShrinkCenter)
-	center.AsControl().AddThemeConstantOverride("separation", 16)
-	center.AsControl().SetCustomMinimumSize(Vector2.New(scaled(480), 0))
+	// ── Left column: New connection setup ──
+	leftScroll := ScrollContainer.New()
+	leftScroll.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	leftScroll.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
 
-	// Title
-	title := Label.New()
-	title.SetText("Connect to Gateway")
-	title.AsControl().AddThemeFontSizeOverride("font_size", fontSize(20))
-	title.AsControl().AddThemeColorOverride("font_color", colorText)
-	title.SetHorizontalAlignment(1)
-	center.AsNode().AddChild(title.AsNode())
+	leftCol := VBoxContainer.New()
+	leftCol.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	leftCol.AsControl().AddThemeConstantOverride("separation", 16)
 
-	// ── SSO Login section ──
+	leftTitle := Label.New()
+	leftTitle.SetText("New Connection")
+	leftTitle.AsControl().AddThemeFontSizeOverride("font_size", fontSize(20))
+	leftTitle.AsControl().AddThemeColorOverride("font_color", colorText)
+	leftCol.AsNode().AddChild(leftTitle.AsNode())
+
+	// SSO Login section
 	ssoPanel := g.buildSSOPanel()
-	center.AsNode().AddChild(ssoPanel.AsNode())
+	leftCol.AsNode().AddChild(ssoPanel.AsNode())
 
-	// ── Saved gateway cards (from YAML) ──
+	// New connection form
+	formPanel := g.buildForm()
+	leftCol.AsNode().AddChild(formPanel.AsNode())
+
+	leftScroll.AsNode().AddChild(leftCol.AsNode())
+	columns.AsNode().AddChild(leftScroll.AsNode())
+
+	// ── Right column: Saved bookmarks ──
+	rightScroll := ScrollContainer.New()
+	rightScroll.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	rightScroll.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
+
+	rightCol := VBoxContainer.New()
+	rightCol.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	rightCol.AsControl().AddThemeConstantOverride("separation", 16)
+
+	rightTitle := Label.New()
+	rightTitle.SetText("Saved Connections")
+	rightTitle.AsControl().AddThemeFontSizeOverride("font_size", fontSize(20))
+	rightTitle.AsControl().AddThemeColorOverride("font_color", colorText)
+	rightCol.AsNode().AddChild(rightTitle.AsNode())
+
+	// Saved gateway cards (from YAML config)
 	for i, entry := range g.gateways {
 		cardPanel := g.buildCardPanel(entry, i)
-		center.AsNode().AddChild(cardPanel.AsNode())
+		rightCol.AsNode().AddChild(cardPanel.AsNode())
 	}
 
-	// ── New connection form ──
-	formPanel := g.buildForm()
-	center.AsNode().AddChild(formPanel.AsNode())
-
-	// ── Bookmark cards ──
+	// Bookmark cards
 	if g.bookmarks != nil {
 		for _, bm := range g.bookmarks.All() {
 			bmCard := g.buildBookmarkCard(bm)
-			center.AsNode().AddChild(bmCard.AsNode())
+			rightCol.AsNode().AddChild(bmCard.AsNode())
 		}
 	}
 
-	// Spacer
-	spacer := Control.New()
-	spacer.SetCustomMinimumSize(Vector2.New(0, scaled(4)))
-	center.AsNode().AddChild(spacer.AsNode())
+	// Empty state when no saved connections
+	if len(g.gateways) == 0 && (g.bookmarks == nil || len(g.bookmarks.All()) == 0) {
+		emptyLabel := Label.New()
+		emptyLabel.SetText("No saved connections yet.\nUse the form to connect, and it will be saved here automatically.")
+		emptyLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(13))
+		emptyLabel.AsControl().AddThemeColorOverride("font_color", colorTextDim)
+		emptyLabel.SetAutowrapMode(3)
+		emptyLabel.SetHorizontalAlignment(1)
+		rightCol.AsNode().AddChild(emptyLabel.AsNode())
+	}
 
-	// Open Local File button
-	localBtn := Button.New()
-	localBtn.SetText("Open Local File...")
-	localBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(13))
-	applySecondaryButtonTheme(localBtn.AsControl())
-	localBtn.AsControl().SetCustomMinimumSize(Vector2.New(0, scaled(36)))
-	localBtn.AsBaseButton().OnPressed(func() {
-		if g.OnOpenLocal != nil {
-			g.OnOpenLocal()
-		}
-	})
-	center.AsNode().AddChild(localBtn.AsNode())
+	rightScroll.AsNode().AddChild(rightCol.AsNode())
+	columns.AsNode().AddChild(rightScroll.AsNode())
 
-	// Edit config link
-	editBtn := Button.New()
-	editBtn.SetText("Edit Gateway Config")
-	editBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
-	editBtn.AsControl().AddThemeColorOverride("font_color", colorTextDim)
-	editBtn.AsControl().AddThemeColorOverride("font_hover_color", colorAccent)
-	transparent := Color.RGBA{R: 0, G: 0, B: 0, A: 0}
-	flatBg := makeStyleBox(transparent, 0, 0, transparent)
-	editBtn.AsControl().AddThemeStyleboxOverride("normal", flatBg.AsStyleBox())
-	editBtn.AsControl().AddThemeStyleboxOverride("hover", flatBg.AsStyleBox())
-	editBtn.AsControl().AddThemeStyleboxOverride("pressed", flatBg.AsStyleBox())
-	editBtn.AsBaseButton().OnPressed(func() {
-		if g.OnEditConfig != nil {
-			g.OnEditConfig()
-		}
-	})
-	center.AsNode().AddChild(editBtn.AsNode())
-
-	scroll.AsNode().AddChild(center.AsNode())
-	g.AsNode().AddChild(scroll.AsNode())
+	g.AsNode().AddChild(columns.AsNode())
 }
 
 // buildSSOPanel creates the SSO login section — start URL + region + button.
