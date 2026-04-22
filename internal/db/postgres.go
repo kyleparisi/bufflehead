@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os/user"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	rdsauth "github.com/aws/aws-sdk-go-v2/feature/rds/auth"
@@ -50,6 +51,10 @@ func newPostgres(host string, port int, dbName, dbUser, password, sslMode string
 	// Limit to one connection — multiple TLS connections through an SSM
 	// tunnel's smux session cause MAC errors from interleaved streams.
 	conn.SetMaxOpenConns(1)
+
+	// Close idle connections before RDS drops them (default RDS idle
+	// timeout is ~5 min). This lets database/sql transparently reconnect.
+	conn.SetConnMaxIdleTime(3 * time.Minute)
 
 	// Verify connectivity
 	if err := conn.Ping(); err != nil {
