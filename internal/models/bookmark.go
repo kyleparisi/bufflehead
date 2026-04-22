@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"sync"
 	"time"
 )
@@ -147,25 +146,21 @@ func (bs *BookmarkStore) load() {
 }
 
 func (bs *BookmarkStore) save() {
-	os.MkdirAll(filepath.Dir(bs.path), 0755)
-	data, err := json.MarshalIndent(bs.Bookmarks, "", "  ")
-	if err != nil {
+	dir := filepath.Dir(bs.path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "bookmarks: failed to create dir %s: %v\n", dir, err)
 		return
 	}
-	os.WriteFile(bs.path, data, 0644)
+	data, err := json.MarshalIndent(bs.Bookmarks, "", "  ")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "bookmarks: failed to marshal: %v\n", err)
+		return
+	}
+	if err := os.WriteFile(bs.path, data, 0644); err != nil {
+		fmt.Fprintf(os.Stderr, "bookmarks: failed to write %s: %v\n", bs.path, err)
+	}
 }
 
 func bookmarkPath() string {
-	var base string
-	switch runtime.GOOS {
-	case "darwin":
-		home, _ := os.UserHomeDir()
-		base = filepath.Join(home, "Library", "Application Support", "Bufflehead")
-	case "windows":
-		base = filepath.Join(os.Getenv("APPDATA"), "Bufflehead")
-	default:
-		home, _ := os.UserHomeDir()
-		base = filepath.Join(home, ".config", "bufflehead")
-	}
-	return filepath.Join(base, "bookmarks.json")
+	return filepath.Join(ConfigDir(), "bookmarks.json")
 }

@@ -2,9 +2,9 @@ package models
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sync"
 	"time"
 )
@@ -68,25 +68,21 @@ func (h *QueryHistory) load() {
 }
 
 func (h *QueryHistory) save() {
-	os.MkdirAll(filepath.Dir(h.path), 0755)
-	data, err := json.MarshalIndent(h.Entries, "", "  ")
-	if err != nil {
+	dir := filepath.Dir(h.path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "history: failed to create dir %s: %v\n", dir, err)
 		return
 	}
-	os.WriteFile(h.path, data, 0644)
+	data, err := json.MarshalIndent(h.Entries, "", "  ")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "history: failed to marshal: %v\n", err)
+		return
+	}
+	if err := os.WriteFile(h.path, data, 0644); err != nil {
+		fmt.Fprintf(os.Stderr, "history: failed to write %s: %v\n", h.path, err)
+	}
 }
 
 func historyPath() string {
-	var base string
-	switch runtime.GOOS {
-	case "darwin":
-		home, _ := os.UserHomeDir()
-		base = filepath.Join(home, "Library", "Application Support", "Bufflehead")
-	case "windows":
-		base = filepath.Join(os.Getenv("APPDATA"), "Bufflehead")
-	default:
-		home, _ := os.UserHomeDir()
-		base = filepath.Join(home, ".config", "bufflehead")
-	}
-	return filepath.Join(base, "history.json")
+	return filepath.Join(ConfigDir(), "history.json")
 }

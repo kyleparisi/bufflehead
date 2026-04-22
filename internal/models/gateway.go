@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 
 	"gopkg.in/yaml.v3"
 )
@@ -101,16 +100,5 @@ func GatewayConfigPath() string {
 }
 
 func gatewayConfigPath() string {
-	var base string
-	switch runtime.GOOS {
-	case "darwin":
-		home, _ := os.UserHomeDir()
-		base = filepath.Join(home, "Library", "Application Support", "Bufflehead")
-	case "windows":
-		base = filepath.Join(os.Getenv("APPDATA"), "Bufflehead")
-	default:
-		home, _ := os.UserHomeDir()
-		base = filepath.Join(home, ".config", "bufflehead")
-	}
-	return filepath.Join(base, "gateway.yaml")
+	return filepath.Join(ConfigDir(), "gateway.yaml")
 }
