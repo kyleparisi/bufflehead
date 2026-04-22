@@ -1016,6 +1016,7 @@ func (g *GatewayScreen) onFormConnect() {
 	authMode := "password"
 	if g.formIAMAuth {
 		authMode = "iam"
+		dbPass = "" // IAM auth uses token-based authentication, not passwords
 	}
 
 	entry := models.GatewayEntry{
