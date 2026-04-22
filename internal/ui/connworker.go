@@ -339,9 +339,15 @@ func RunOpenGateway(host string, port int, rdsEndpoint, dbName, user, password s
 			statusFunc(fmt.Sprintf("Loading schema for %d tables...", len(tables)))
 		}
 
-		for i := range tables {
-			cols, _ := pgConn.TableSchema(tables[i].Name)
-			tables[i].Columns = cols
+		if err := pgConn.AllTableSchemas(tables); err != nil {
+			pgConn.Close()
+			results <- DBResult{
+				Kind:       ReqOpenGateway,
+				TabID:      tabID,
+				Generation: generation,
+				Err:        fmt.Errorf("load schemas: %w", err),
+			}
+			return
 		}
 
 		results <- DBResult{

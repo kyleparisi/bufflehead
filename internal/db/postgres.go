@@ -216,5 +216,45 @@ func splitSchemaTable(name string) (string, string) {
 	return "public", name
 }
 
+// AllTableSchemas fetches column info for all given tables in a single query.
+// This avoids N+1 round trips over high-latency connections (e.g. SSM tunnels).
+func (p *PostgresDB) AllTableSchemas(tables []TableInfo) error {
+	if len(tables) == 0 {
+		return nil
+	}
+
+	rows, err := p.conn.Query(`
+		SELECT table_schema || '.' || table_name, column_name, data_type, is_nullable
+		FROM information_schema.columns
+		WHERE table_schema NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+		ORDER BY table_schema, table_name, ordinal_position`)
+	if err != nil {
+		return fmt.Errorf("all table schemas: %w", err)
+	}
+	defer rows.Close()
+
+	// Build a map for quick lookup
+	colsByTable := make(map[string][]Column)
+	for rows.Next() {
+		var tableName, colName, dataType, nullable string
+		if err := rows.Scan(&tableName, &colName, &dataType, &nullable); err != nil {
+			return err
+		}
+		colsByTable[tableName] = append(colsByTable[tableName], Column{
+			Name:     colName,
+			DataType: dataType,
+			Nullable: nullable == "YES",
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	for i := range tables {
+		tables[i].Columns = colsByTable[tables[i].Name]
+	}
+	return nil
+}
+
 // Verify PostgresDB implements Querier at compile time.
 var _ Querier = (*PostgresDB)(nil)
