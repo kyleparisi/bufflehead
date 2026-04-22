@@ -67,9 +67,11 @@ type TitleBar struct {
 
 	infoLabel     Label.Instance
 	copyBtn       Button.Instance
+	refreshBtn    Button.Instance
 	aiPrompt      string
 	NavBackBtn    Button.Instance
 	NavFwdBtn     Button.Instance
+	OnRefresh     func() // called when refresh button is pressed
 	WindowID      int
 	resetCopyText bool // set by goroutine, read by Process on main thread
 }
@@ -156,7 +158,21 @@ func (t *TitleBar) Ready() {
 		}
 	})
 
+	t.refreshBtn = Button.New()
+	t.refreshBtn.SetText("↻")
+	t.refreshBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(12))
+	applySecondaryButtonTheme(t.refreshBtn.AsControl())
+	t.refreshBtn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(28), 0))
+	t.refreshBtn.AsCanvasItem().SetVisible(false)
+	t.refreshBtn.AsControl().SetTooltipText("Refresh connection")
+	t.refreshBtn.AsBaseButton().OnPressed(func() {
+		if t.OnRefresh != nil {
+			t.OnRefresh()
+		}
+	})
+
 	pillRow.AsNode().AddChild(t.infoLabel.AsNode())
+	pillRow.AsNode().AddChild(t.refreshBtn.AsNode())
 	pillRow.AsNode().AddChild(t.copyBtn.AsNode())
 	pill.AsNode().AddChild(pillRow.AsNode())
 
@@ -199,6 +215,7 @@ func (t *TitleBar) SetAIPrompt(prompt string) {
 	t.aiPrompt = prompt
 	t.copyBtn.AsCanvasItem().SetVisible(prompt != "")
 	t.copyBtn.SetText("AI ⎘")
+	t.refreshBtn.AsCanvasItem().SetVisible(prompt != "")
 }
 
 func (t *TitleBar) SetFileInfo(path string) {

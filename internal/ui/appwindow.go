@@ -333,6 +333,9 @@ func (w *AppWindow) addNewTab() {
 	if !w.navWired {
 		w.titleBar.NavBackBtn.AsBaseButton().OnPressed(func() { w.navBack() })
 		w.titleBar.NavFwdBtn.AsBaseButton().OnPressed(func() { w.navForward() })
+		w.titleBar.OnRefresh = func() {
+			w.refreshConnection(w.activeConnIdx)
+		}
 		w.navWired = true
 	}
 
@@ -909,10 +912,14 @@ func (w *AppWindow) showConnContextMenu(idx int) {
 	conn := w.connections[idx]
 
 	popup := PopupMenu.New()
+	popup.AddItem("Refresh")
 	popup.AddItem("Close " + conn.Name)
 
 	popup.OnIdPressed(func(id int) {
-		if id == 0 {
+		switch id {
+		case 0:
+			w.refreshConnection(idx)
+		case 1:
 			w.closeConnection(idx)
 		}
 		popup.AsNode().QueueFree()
@@ -924,6 +931,23 @@ func (w *AppWindow) showConnContextMenu(idx int) {
 	w.connRail.AsNode().AddChild(popup.AsNode())
 	popup.AsWindow().SetPosition(DisplayServer.MouseGetPosition())
 	popup.AsWindow().Popup()
+}
+
+// refreshConnection re-fetches tables and schemas for a connection.
+func (w *AppWindow) refreshConnection(idx int) {
+	if idx < 0 || idx >= len(w.connections) {
+		return
+	}
+	conn := w.connections[idx]
+	if conn.worker == nil {
+		return
+	}
+
+	w.statusBar.SetStatus("Refreshing " + conn.Name + "...")
+	conn.worker.Send(DBRequest{
+		Kind:    ReqRefresh,
+		ConnIdx: idx,
+	})
 }
 
 // closeConnection closes a connection, removes its tabs, and cleans up resources.
@@ -1008,6 +1032,8 @@ func (w *AppWindow) handleDBResult(res DBResult) {
 		w.handleOpenDBResult(res)
 	case ReqOpenGateway:
 		w.handleOpenGatewayResult(res)
+	case ReqRefresh:
+		w.handleRefreshResult(res)
 	}
 }
 
@@ -1087,6 +1113,37 @@ func (w *AppWindow) handleOpenGatewayResult(res DBResult) {
 
 	w.selectConnection(gwIdx)
 	w.statusBar.SetStatus(fmt.Sprintf("Connected: %s (%d tables/views)", name, len(tables)))
+}
+
+// handleRefreshResult updates a connection's table list and refreshes the sidebar.
+func (w *AppWindow) handleRefreshResult(res DBResult) {
+	idx := res.ConnIdx
+	if idx < 0 || idx >= len(w.connections) {
+		return
+	}
+	conn := w.connections[idx]
+
+	if res.Err != nil {
+		w.statusBar.SetStatus("Refresh error: " + res.Err.Error())
+		return
+	}
+
+	conn.Tables = res.Tables
+
+	// Update sidebar on any tabs bound to this connection
+	for _, ts := range w.tabs {
+		if ts.connIdx == idx {
+			ts.schema.SetTables(conn.Tables)
+			ts.sqlPanel.SetCompletionTables(conn.Tables)
+		}
+	}
+
+	// Update AI prompt if this is the active connection
+	if idx == w.activeConnIdx && conn.Gateway != nil {
+		w.titleBar.SetAIPrompt(buildAIPrompt(conn.Gateway.Config, conn.Tables))
+	}
+
+	w.statusBar.SetStatus(fmt.Sprintf("Refreshed: %s (%d tables/views)", conn.Name, len(conn.Tables)))
 }
 
 func buildAIPrompt(entry models.GatewayEntry, tables []db.TableInfo) string {

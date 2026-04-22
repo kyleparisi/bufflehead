@@ -55,6 +55,7 @@ func newPostgres(host string, port int, dbName, dbUser, password, sslMode string
 	// Close idle connections before RDS drops them (default RDS idle
 	// timeout is ~5 min). This lets database/sql transparently reconnect.
 	conn.SetConnMaxIdleTime(3 * time.Minute)
+	conn.SetConnMaxLifetime(5 * time.Minute)
 
 	// Verify connectivity
 	if err := conn.Ping(); err != nil {

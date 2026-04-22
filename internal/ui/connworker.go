@@ -20,6 +20,7 @@ const (
 	ReqOpenDB                           // Open a .duckdb file: OpenDB + Tables + TableSchema
 	ReqOpenGateway                      // Open a Postgres gateway connection
 	ReqSQL                              // Raw SQL via /sql endpoint (synchronous response)
+	ReqRefresh                          // Re-fetch tables and schemas
 )
 
 // DBRequest is sent to a ConnWorker for processing.
@@ -33,6 +34,7 @@ type DBRequest struct {
 	Limit      int
 	TabID      uint64
 	Generation uint64
+	ConnIdx    int // connection index (for ReqRefresh)
 	Navigating bool
 	ControlCmd *control.Command
 	SQLReply   chan SQLReply // for ReqSQL: synchronous response channel
@@ -49,6 +51,7 @@ type DBResult struct {
 	Kind       DBRequestKind
 	TabID      uint64
 	Generation uint64
+	ConnIdx    int // connection index (for ReqRefresh)
 	Navigating bool
 	Elapsed    time.Duration
 	Query      *db.QueryResult
@@ -107,8 +110,16 @@ func (cw *ConnWorker) loop() {
 }
 
 func (cw *ConnWorker) handle(req DBRequest) {
+	// Refresh skips the health check — Tables() will surface errors directly,
+	// and the ping itself can hang on dead SSM tunnel connections.
+	if req.Kind == ReqRefresh {
+		cw.handleRefresh(req)
+		return
+	}
+
 	// Health check before every operation to fail fast on dead connections.
-	pingCtx, pingCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// SSM tunnel + TLS handshake can be slow when re-establishing connections.
+	pingCtx, pingCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	err := cw.db.Ping(pingCtx)
 	pingCancel()
 	if err != nil {
@@ -121,6 +132,7 @@ func (cw *ConnWorker) handle(req DBRequest) {
 				Kind:       req.Kind,
 				TabID:      req.TabID,
 				Generation: req.Generation,
+				ConnIdx:    req.ConnIdx,
 				Err:        pingErr,
 				ControlCmd: req.ControlCmd,
 				FilePath:   req.FilePath,
@@ -164,6 +176,36 @@ func (cw *ConnWorker) handleQuery(req DBRequest) {
 func (cw *ConnWorker) handleSQL(req DBRequest) {
 	result, err := cw.db.Query(req.UserSQL, 0, req.Limit)
 	req.SQLReply <- SQLReply{Result: result, Err: err}
+}
+
+func (cw *ConnWorker) handleRefresh(req DBRequest) {
+	tables, err := cw.db.Tables()
+	if err != nil {
+		cw.results <- DBResult{
+			Kind:    ReqRefresh,
+			ConnIdx: req.ConnIdx,
+			Err:     err,
+		}
+		return
+	}
+
+	// Bulk-load column schemas if the backend supports it (Postgres)
+	if pgConn, ok := cw.db.(*db.PostgresDB); ok {
+		if err := pgConn.AllTableSchemas(tables); err != nil {
+			cw.results <- DBResult{
+				Kind:    ReqRefresh,
+				ConnIdx: req.ConnIdx,
+				Err:     fmt.Errorf("load schemas: %w", err),
+			}
+			return
+		}
+	}
+
+	cw.results <- DBResult{
+		Kind:    ReqRefresh,
+		ConnIdx: req.ConnIdx,
+		Tables:  tables,
+	}
 }
 
 func (cw *ConnWorker) handleOpenFile(req DBRequest) {
