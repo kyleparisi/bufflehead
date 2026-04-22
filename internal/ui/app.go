@@ -2,8 +2,10 @@ package ui
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
@@ -13,6 +15,7 @@ import (
 	"bufflehead/internal/completion"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"bufflehead/internal/control"
 	"bufflehead/internal/db"
 	"bufflehead/internal/models"
@@ -1933,6 +1936,95 @@ func (a *App) initMainWindow() {
 				Columns: columns,
 				Rows:    rows,
 				Total:   res.Result.Total,
+			}, nil
+		})
+
+		a.ControlServer.SetS3Executor(func(req control.S3GetObjectRequest) (*control.S3GetObjectResult, error) {
+			w := a.activeWindow()
+			if w == nil {
+				return nil, fmt.Errorf("no active window")
+			}
+
+			// Find connection by name (empty = active connection)
+			var conn *Connection
+			if req.Connection == "" {
+				if w.activeConnIdx >= 0 && w.activeConnIdx < len(w.connections) {
+					conn = w.connections[w.activeConnIdx]
+				}
+			} else {
+				for _, c := range w.connections {
+					if c.Name == req.Connection {
+						conn = c
+						break
+					}
+				}
+			}
+			if conn == nil {
+				return nil, fmt.Errorf("connection %q not found", req.Connection)
+			}
+			if conn.Gateway == nil || conn.Gateway.Auth == nil {
+				return nil, fmt.Errorf("connection %q has no AWS credentials", conn.Name)
+			}
+
+			cfg := conn.Gateway.Auth.Config()
+
+			// Allow region override from request, fall back to gateway config
+			if req.Region != "" {
+				cfg.Region = req.Region
+			}
+
+			const defaultMaxBytes int64 = 10 * 1024 * 1024 // 10MB
+			maxBytes := defaultMaxBytes
+			if req.MaxBytes > 0 {
+				maxBytes = req.MaxBytes
+			}
+
+			client := s3.NewFromConfig(cfg)
+			ctx := context.Background()
+
+			// Set Range header to limit download size
+			rangeHeader := fmt.Sprintf("bytes=0-%d", maxBytes-1)
+			out, err := client.GetObject(ctx, &s3.GetObjectInput{
+				Bucket: aws.String(req.Bucket),
+				Key:    aws.String(req.Key),
+				Range:  aws.String(rangeHeader),
+			})
+			if err != nil {
+				return nil, fmt.Errorf("s3 GetObject: %w", err)
+			}
+			defer out.Body.Close()
+
+			data, err := io.ReadAll(out.Body)
+			if err != nil {
+				return nil, fmt.Errorf("reading s3 object: %w", err)
+			}
+
+			contentType := ""
+			if out.ContentType != nil {
+				contentType = *out.ContentType
+			}
+
+			// Determine full object size and whether we truncated
+			var fullSize int64
+			truncated := false
+			if out.ContentRange != nil {
+				// Range response: "bytes 0-N/total"
+				var start, end, total int64
+				if _, err := fmt.Sscanf(*out.ContentRange, "bytes %d-%d/%d", &start, &end, &total); err == nil {
+					fullSize = total
+					truncated = int64(len(data)) < total
+				}
+			} else if out.ContentLength != nil {
+				fullSize = *out.ContentLength
+			} else {
+				fullSize = int64(len(data))
+			}
+
+			return &control.S3GetObjectResult{
+				Content:     string(data),
+				ContentType: contentType,
+				Size:        fullSize,
+				Truncated:   truncated,
 			}, nil
 		})
 	}

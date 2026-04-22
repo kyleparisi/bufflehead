@@ -68,6 +68,27 @@ type SQLResult struct {
 // SQLExecutor runs a SQL query against a named connection and returns results.
 type SQLExecutor func(connName, sql string, limit int) (*SQLResult, error)
 
+// S3GetObjectRequest is the payload for the /s3/get-object endpoint.
+type S3GetObjectRequest struct {
+	Bucket     string `json:"bucket"`
+	Key        string `json:"key"`
+	Region     string `json:"region,omitempty"`     // override region (default: gateway region)
+	Connection string `json:"connection,omitempty"` // connection name (default: active connection)
+	MaxBytes   int64  `json:"max_bytes,omitempty"`  // max bytes to read (default: 10MB)
+}
+
+// S3GetObjectResult is the response from the /s3/get-object endpoint.
+type S3GetObjectResult struct {
+	Content     string `json:"content"`
+	ContentType string `json:"content_type"`
+	Size        int64  `json:"size"`
+	Truncated   bool   `json:"truncated"`
+	Error       string `json:"error,omitempty"`
+}
+
+// S3Executor fetches an S3 object using credentials from a named connection.
+type S3Executor func(req S3GetObjectRequest) (*S3GetObjectResult, error)
+
 // StateProvider returns the current app state as JSON.
 type StateProvider func() (json.RawMessage, error)
 
@@ -76,6 +97,7 @@ type Server struct {
 	commands      chan *Command
 	stateProvider StateProvider
 	sqlExecutor   SQLExecutor
+	s3Executor    S3Executor
 	port          int
 	mu            sync.Mutex
 }
@@ -100,6 +122,13 @@ func (s *Server) SetSQLExecutor(fn SQLExecutor) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sqlExecutor = fn
+}
+
+// SetS3Executor sets the callback for POST /s3/get-object.
+func (s *Server) SetS3Executor(fn S3Executor) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.s3Executor = fn
 }
 
 // Commands returns the channel the main loop reads from.
@@ -229,6 +258,48 @@ func buildMux(s *Server) *http.ServeMux {
 		}
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.Write(res.RawBytes)
+	})
+
+	mux.HandleFunc("POST /s3/get-object", func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		executor := s.s3Executor
+		s.mu.Unlock()
+
+		if executor == nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(500)
+			json.NewEncoder(w).Encode(S3GetObjectResult{Error: "no s3 executor configured"})
+			return
+		}
+
+		var req S3GetObjectRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(400)
+			json.NewEncoder(w).Encode(S3GetObjectResult{Error: "bad json: " + err.Error()})
+			return
+		}
+		if req.Bucket == "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(400)
+			json.NewEncoder(w).Encode(S3GetObjectResult{Error: "bucket is required"})
+			return
+		}
+		if req.Key == "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(400)
+			json.NewEncoder(w).Encode(S3GetObjectResult{Error: "key is required"})
+			return
+		}
+
+		result, err := executor(req)
+		w.Header().Set("Content-Type", "application/json")
+		if err != nil {
+			w.WriteHeader(400)
+			json.NewEncoder(w).Encode(S3GetObjectResult{Error: err.Error()})
+			return
+		}
+		json.NewEncoder(w).Encode(result)
 	})
 
 	mux.HandleFunc("POST /sql", func(w http.ResponseWriter, r *http.Request) {
