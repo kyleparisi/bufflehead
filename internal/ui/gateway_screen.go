@@ -1538,7 +1538,9 @@ func (g *GatewayScreen) Process(delta Float.X) {
 
 			if len(g.instancesResult) == 0 {
 				g.formInstance.AddItem("No online instances found")
-				g.formStatus.SetText("No SSM-managed instances are online")
+				region := g.formRegion.Text()
+				ssmURL := fmt.Sprintf("https://%s.console.aws.amazon.com/systems-manager/home?region=%s#welcome", region, region)
+				g.formStatus.SetText("No SSM-managed instances are online. Ensure AWS Systems Manager is enabled: " + ssmURL)
 				g.formStatus.AsControl().AddThemeColorOverride("font_color", colorStatusYellow)
 			} else {
 				g.formInstance.AddItem(fmt.Sprintf("Select an instance (%d found)...", len(g.instancesResult)))
