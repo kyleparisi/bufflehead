@@ -168,16 +168,16 @@ func (p *PostgresDB) SchemaNames() ([]string, error) {
 
 // Query runs a paginated query. Same approach as DB.Query():
 // wraps with COUNT(*) for total, then LIMIT/OFFSET for the page.
-func (p *PostgresDB) Query(virtualSQL string, offset, limit int) (*QueryResult, error) {
+func (p *PostgresDB) Query(ctx context.Context, virtualSQL string, offset, limit int) (*QueryResult, error) {
 	// Count total rows
 	countQ := fmt.Sprintf("SELECT COUNT(*) FROM (%s) _c", virtualSQL)
 	var total int64
-	if err := p.conn.QueryRow(countQ).Scan(&total); err != nil {
+	if err := p.conn.QueryRowContext(ctx, countQ).Scan(&total); err != nil {
 		return nil, fmt.Errorf("count: %w", err)
 	}
 
 	pagedQ := fmt.Sprintf("%s LIMIT %d OFFSET %d", virtualSQL, limit, offset)
-	rows, err := p.conn.Query(pagedQ)
+	rows, err := p.conn.QueryContext(ctx, pagedQ)
 	if err != nil {
 		return nil, fmt.Errorf("query: %w", err)
 	}

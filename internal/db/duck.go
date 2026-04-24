@@ -138,16 +138,16 @@ func (d *DB) Schema(path string) ([]Column, error) {
 
 // Query runs a virtual SQL query (already wrapped with ORDER BY if needed).
 // offset/limit drive pagination.
-func (d *DB) Query(virtualSQL string, offset, limit int) (*QueryResult, error) {
+func (d *DB) Query(ctx context.Context, virtualSQL string, offset, limit int) (*QueryResult, error) {
 	// Count total rows.
 	countQ := fmt.Sprintf("SELECT COUNT(*) FROM (%s) _c", virtualSQL)
 	var total int64
-	if err := d.conn.QueryRow(countQ).Scan(&total); err != nil {
+	if err := d.conn.QueryRowContext(ctx, countQ).Scan(&total); err != nil {
 		return nil, fmt.Errorf("count: %w", err)
 	}
 
 	pagedQ := fmt.Sprintf("%s LIMIT %d OFFSET %d", virtualSQL, limit, offset)
-	rows, err := d.conn.Query(pagedQ)
+	rows, err := d.conn.QueryContext(ctx, pagedQ)
 	if err != nil {
 		return nil, fmt.Errorf("query: %w", err)
 	}

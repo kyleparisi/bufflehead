@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -83,7 +84,7 @@ func TestQuery(t *testing.T) {
 	db := setupTestDB(t)
 	path := createTestParquet(t, db)
 
-	result, err := db.Query(DefaultQuery(path), 0, 100)
+	result, err := db.Query(context.Background(),DefaultQuery(path), 0, 100)
 	if err != nil {
 		t.Fatalf("Query() error: %v", err)
 	}
@@ -112,7 +113,7 @@ func TestQueryPagination(t *testing.T) {
 	path := createTestParquet(t, db)
 
 	// Page size 2, offset 0
-	result, err := db.Query(DefaultQuery(path), 0, 2)
+	result, err := db.Query(context.Background(),DefaultQuery(path), 0, 2)
 	if err != nil {
 		t.Fatalf("Query() error: %v", err)
 	}
@@ -124,7 +125,7 @@ func TestQueryPagination(t *testing.T) {
 	}
 
 	// Page size 2, offset 2
-	result, err = db.Query(DefaultQuery(path), 2, 2)
+	result, err = db.Query(context.Background(),DefaultQuery(path), 2, 2)
 	if err != nil {
 		t.Fatalf("Query() error: %v", err)
 	}
@@ -138,7 +139,7 @@ func TestQueryCustomSQL(t *testing.T) {
 	path := createTestParquet(t, db)
 
 	sql := "SELECT name, age FROM '" + path + "' WHERE age > 26"
-	result, err := db.Query(sql, 0, 100)
+	result, err := db.Query(context.Background(),sql, 0, 100)
 	if err != nil {
 		t.Fatalf("Query() error: %v", err)
 	}
@@ -154,7 +155,7 @@ func TestQueryCustomSQL(t *testing.T) {
 func TestQueryBadSQL(t *testing.T) {
 	db := setupTestDB(t)
 
-	_, err := db.Query("SELECT * FROM nonexistent_table", 0, 100)
+	_, err := db.Query(context.Background(),"SELECT * FROM nonexistent_table", 0, 100)
 	if err == nil {
 		t.Error("expected error for bad SQL, got nil")
 	}
@@ -217,7 +218,7 @@ func TestFormatValue(t *testing.T) {
 func TestQueryUUID(t *testing.T) {
 	db := setupTestDB(t)
 
-	result, err := db.Query("SELECT uuid() AS id", 0, 1)
+	result, err := db.Query(context.Background(),"SELECT uuid() AS id", 0, 1)
 	if err != nil {
 		t.Fatalf("Query() error: %v", err)
 	}
@@ -235,7 +236,7 @@ func TestQueryUUID(t *testing.T) {
 func TestQueryDecimal(t *testing.T) {
 	db := setupTestDB(t)
 
-	result, err := db.Query("SELECT 123.45::DECIMAL(10,2) AS price", 0, 1)
+	result, err := db.Query(context.Background(),"SELECT 123.45::DECIMAL(10,2) AS price", 0, 1)
 	if err != nil {
 		t.Fatalf("Query() error: %v", err)
 	}

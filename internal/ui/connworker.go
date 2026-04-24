@@ -70,6 +70,8 @@ type DBResult struct {
 // ConnWorker owns a db.Querier handle and processes requests sequentially.
 type ConnWorker struct {
 	db       db.Querier
+	ctx      context.Context
+	cancel   context.CancelFunc
 	requests chan DBRequest
 	results  chan DBResult
 	done     chan struct{}
@@ -78,8 +80,11 @@ type ConnWorker struct {
 // NewConnWorker creates a worker for the given database connection.
 // Results are sent to the shared results channel.
 func NewConnWorker(database db.Querier, results chan DBResult) *ConnWorker {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &ConnWorker{
 		db:       database,
+		ctx:      ctx,
+		cancel:   cancel,
 		requests: make(chan DBRequest, 16),
 		results:  results,
 		done:     make(chan struct{}),
@@ -91,10 +96,16 @@ func (cw *ConnWorker) Start() {
 	go cw.loop()
 }
 
-// Stop signals the worker to shut down and waits for it to finish.
+// Stop cancels in-flight operations, signals the worker to shut down,
+// and waits briefly for it to finish. This prevents the app from
+// hanging on quit when a long-running query is in progress.
 func (cw *ConnWorker) Stop() {
+	cw.cancel()
 	close(cw.requests)
-	<-cw.done
+	select {
+	case <-cw.done:
+	case <-time.After(3 * time.Second):
+	}
 }
 
 // Send enqueues a request for the worker.
@@ -119,9 +130,17 @@ func (cw *ConnWorker) handle(req DBRequest) {
 
 	// Health check before every operation to fail fast on dead connections.
 	// SSM tunnel + TLS handshake can be slow when re-establishing connections.
-	pingCtx, pingCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	pingCtx, pingCancel := context.WithTimeout(cw.ctx, 30*time.Second)
 	err := cw.db.Ping(pingCtx)
 	pingCancel()
+	if err != nil {
+		// Retry once: the first ping may have discovered a stale connection
+		// (e.g. "driver: bad connection") and discarded it from the pool.
+		// The second ping opens a fresh connection.
+		retryCtx, retryCancel := context.WithTimeout(cw.ctx, 30*time.Second)
+		err = cw.db.Ping(retryCtx)
+		retryCancel()
+	}
 	if err != nil {
 		pingErr := fmt.Errorf("connection health check failed: %w", err)
 		switch req.Kind {
@@ -155,7 +174,7 @@ func (cw *ConnWorker) handle(req DBRequest) {
 
 func (cw *ConnWorker) handleQuery(req DBRequest) {
 	start := time.Now()
-	result, err := cw.db.Query(req.VirtualSQL, req.Offset, req.Limit)
+	result, err := cw.db.Query(cw.ctx, req.VirtualSQL, req.Offset, req.Limit)
 	elapsed := time.Since(start)
 
 	cw.results <- DBResult{
@@ -174,7 +193,7 @@ func (cw *ConnWorker) handleQuery(req DBRequest) {
 }
 
 func (cw *ConnWorker) handleSQL(req DBRequest) {
-	result, err := cw.db.Query(req.UserSQL, 0, req.Limit)
+	result, err := cw.db.Query(cw.ctx, req.UserSQL, 0, req.Limit)
 	req.SQLReply <- SQLReply{Result: result, Err: err}
 }
 
@@ -244,7 +263,7 @@ func (cw *ConnWorker) handleOpenFile(req DBRequest) {
 
 	// Step 3: Query
 	start := time.Now()
-	result, queryErr := duck.Query(req.VirtualSQL, req.Offset, req.Limit)
+	result, queryErr := duck.Query(cw.ctx, req.VirtualSQL, req.Offset, req.Limit)
 	elapsed := time.Since(start)
 
 	cw.results <- DBResult{

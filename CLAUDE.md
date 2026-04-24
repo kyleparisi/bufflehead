@@ -66,6 +66,10 @@ Components expose public callback functions (e.g., `OnColumnsChanged`, `OnColumn
 
 **Query flow**: File opened → schema loaded via `duck.Schema()` → default query set → `execQuery()` builds virtual SQL with sort/pagination via `state.VirtualSQL()` → DuckDB executes → results populate DataGrid → state pushed to nav stack.
 
+## MCP Tools
+
+If the `gopls` and `godoc` MCP servers are available, use them for Go workspace navigation, symbol search, file context, diagnostics, and package documentation. Prefer these over manually reading source files when exploring unfamiliar code.
+
 ## Creating Releases
 
 Build the app, then create a DMG and GitHub release:
