@@ -224,11 +224,26 @@ func splitSchemaTable(name string) (string, string) {
 
 // AllTableSchemas fetches column info for all given tables in a single query.
 // This avoids N+1 round trips over high-latency connections (e.g. SSM tunnels).
+// Retries once on failure to handle transient TLS errors over SSM tunnels.
 func (p *PostgresDB) AllTableSchemas(tables []TableInfo) error {
 	if len(tables) == 0 {
 		return nil
 	}
 
+	err := p.allTableSchemas(tables)
+	if err == nil {
+		return nil
+	}
+
+	// Transient TLS errors (e.g. "bad record MAC") can occur over SSM
+	// tunnels during the initial data burst. Force the pool to close the
+	// broken connection and retry once with a fresh one.
+	p.conn.SetMaxIdleConns(0)
+	p.conn.SetMaxIdleConns(1)
+	return p.allTableSchemas(tables)
+}
+
+func (p *PostgresDB) allTableSchemas(tables []TableInfo) error {
 	rows, err := p.conn.Query(`
 		SELECT table_schema || '.' || table_name, column_name, data_type, is_nullable
 		FROM information_schema.columns

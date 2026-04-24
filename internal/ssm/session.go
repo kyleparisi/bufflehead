@@ -4,6 +4,7 @@ package ssm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -11,11 +12,17 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/xtaci/smux"
 )
+
+// relayBufferSize matches smux DefaultConfig MaxFrameSize (32KB).
+// Using a buffer this size means each smux frame fits in a single SSM
+// message, reducing reassembly errors on the remote side.
+const relayBufferSize = 32768
 
 // Session manages a WebSocket connection to the SSM service for port forwarding.
 type Session struct {
@@ -140,7 +147,7 @@ func (s *Session) sendData(data []byte) error {
 
 // terminateSession signals session termination.
 func (s *Session) terminateSession() error {
-	seq := atomic.AddInt64(&s.seqNum, 1)
+	seq := atomic.AddInt64(&s.seqNum, 1) - 1
 	return s.writeMsg(buildTerminateSessionMessage(seq))
 }
 
@@ -205,10 +212,38 @@ func (s *Session) readMessages(ctx context.Context) <-chan []byte {
 	return ch
 }
 
+// startPings sends periodic WebSocket ping frames to prevent AWS from
+// dropping idle connections. Uses WriteControl which is safe to call
+// concurrently with WriteMessage per gorilla/websocket docs.
+func (s *Session) startPings(ctx context.Context) {
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				deadline := time.Now().Add(10 * time.Second)
+				if err := s.ws.WriteControl(websocket.PingMessage, []byte("keepalive"), deadline); err != nil {
+					log.Printf("ssm: ping error: %v", err)
+					return
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+}
+
 // PortForward runs the port forwarding loop using smux multiplexing.
 // The SSM agent expects data framed through smux streams.
 // Blocks until ctx is cancelled. The onReady callback is called when the listener is up.
 func (s *Session) PortForward(ctx context.Context, localPort int, onReady func()) error {
+	// Derive a cancel context so relay errors tear down the whole session.
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+
+	s.startPings(ctx)
+
 	// Create a pipe to bridge smux ↔ SSM data channel
 	ssmSide, muxSide := net.Pipe()
 
@@ -220,11 +255,13 @@ func (s *Session) PortForward(ctx context.Context, localPort int, onReady func()
 			select {
 			case data, ok := <-inCh:
 				if !ok {
+					cancel(errors.New("websocket read loop ended"))
 					return
 				}
 				if len(data) > 0 {
 					if _, err := ssmSide.Write(data); err != nil {
 						log.Printf("ssm: pipe write error: %v", err)
+						cancel(fmt.Errorf("pipe write: %w", err))
 						return
 					}
 				}
@@ -236,12 +273,13 @@ func (s *Session) PortForward(ctx context.Context, localPort int, onReady func()
 
 	// pipe → SSM: read from the pipe and send as SSM data messages
 	go func() {
-		buf := make([]byte, 4096)
+		buf := make([]byte, relayBufferSize)
 		for {
 			n, err := ssmSide.Read(buf)
 			if n > 0 {
 				if sendErr := s.sendData(buf[:n]); sendErr != nil {
 					log.Printf("ssm: sendData error: %v", sendErr)
+					cancel(fmt.Errorf("sendData: %w", sendErr))
 					return
 				}
 			}
@@ -284,7 +322,7 @@ func (s *Session) PortForward(ctx context.Context, localPort int, onReady func()
 		if err != nil {
 			select {
 			case <-ctx.Done():
-				return nil
+				return context.Cause(ctx)
 			default:
 				continue
 			}

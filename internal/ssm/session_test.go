@@ -402,6 +402,63 @@ func TestStatusCallbacks(t *testing.T) {
 	t.Logf("Status callbacks: %v", statuses)
 }
 
+func TestRelayErrorTeardown(t *testing.T) {
+	// Start a mock server, establish a connection, then kill the server
+	// mid-stream and verify PortForward returns promptly.
+	server, cleanup := startMockServer(t, func(conn net.Conn) {
+		defer conn.Close()
+		io.Copy(conn, conn)
+	})
+	defer cleanup()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	session, err := NewSession(ctx, ws, "test-token", nil)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	defer session.Close()
+
+	localPort, err := findFreePort()
+	if err != nil {
+		t.Fatalf("findFreePort: %v", err)
+	}
+
+	ready := make(chan struct{})
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- session.PortForward(ctx, localPort, func() { close(ready) })
+	}()
+
+	select {
+	case <-ready:
+	case err := <-errCh:
+		t.Fatalf("PortForward failed before ready: %v", err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for port forward ready")
+	}
+
+	// Forcibly close the WebSocket from our side to simulate a broken
+	// connection. This causes readMessages to detect an error and
+	// cancel the session via error propagation.
+	ws.Close()
+
+	select {
+	case <-errCh:
+		// PortForward returned — success regardless of error value
+		t.Log("PortForward returned promptly after WebSocket close")
+	case <-time.After(5 * time.Second):
+		t.Fatal("PortForward did not return within 5s after WebSocket close")
+	}
+}
+
 func findFreePort() (int, error) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

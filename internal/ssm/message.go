@@ -126,7 +126,8 @@ func (m *agentMessage) unmarshalBinary(data []byte) error {
 	m.sequenceNumber = int64(binary.BigEndian.Uint64(data[48:56]))
 	m.flags = flag(binary.BigEndian.Uint64(data[56:64]))
 	m.messageID = uuid.Must(uuid.FromBytes(formatUUID(data[64:80])))
-	m.payloadDigest = data[80 : 80+sha256.Size]
+	m.payloadDigest = make([]byte, sha256.Size)
+	copy(m.payloadDigest, data[80:80+sha256.Size])
 
 	if m.headerLength == agentMsgHeaderLen {
 		m.payloadType = payloadType(binary.BigEndian.Uint32(data[112:m.headerLength]))
@@ -134,7 +135,8 @@ func (m *agentMessage) unmarshalBinary(data []byte) error {
 
 	payloadLenEnd := m.headerLength + 4
 	m.payloadLength = binary.BigEndian.Uint32(data[m.headerLength:payloadLenEnd])
-	m.payload = data[payloadLenEnd : payloadLenEnd+m.payloadLength]
+	m.payload = make([]byte, m.payloadLength)
+	copy(m.payload, data[payloadLenEnd:payloadLenEnd+m.payloadLength])
 
 	return m.validate()
 }
@@ -145,6 +147,13 @@ func (m *agentMessage) validate() error {
 	}
 	if len(m.payload) != int(m.payloadLength) {
 		return fmt.Errorf("payload length mismatch: want %d, got %d", m.payloadLength, len(m.payload))
+	}
+	if m.payloadLength > 0 {
+		h := sha256.New()
+		h.Write(m.payload)
+		if !bytes.Equal(h.Sum(nil), m.payloadDigest) {
+			return errors.New("payload digest mismatch")
+		}
 	}
 	return nil
 }

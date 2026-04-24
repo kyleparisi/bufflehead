@@ -152,6 +152,51 @@ func TestBuildHandshakeMsg(t *testing.T) {
 	}
 }
 
+func TestPayloadDigestValidation(t *testing.T) {
+	msg := newAgentMessage()
+	msg.messageType = msgInputStreamData
+	msg.sequenceNumber = 1
+	msg.flags = flagData
+	msg.payloadType = payloadOutput
+	msg.payload = []byte("important data")
+
+	data, err := msg.marshalBinary()
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	// Corrupt a byte in the payload region (after the header + payload length field)
+	payloadStart := int(msg.headerLength) + 4
+	data[payloadStart] ^= 0xFF
+
+	decoded := new(agentMessage)
+	err = decoded.unmarshalBinary(data)
+	if err == nil {
+		t.Fatal("expected error for corrupted payload, got nil")
+	}
+	if err.Error() != "payload digest mismatch" {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestEmptyPayloadDigestSkipped(t *testing.T) {
+	msg := newAgentMessage()
+	msg.messageType = msgOutputStreamData
+	msg.payloadType = payloadOutput
+	msg.flags = flagData
+	msg.payload = []byte{}
+
+	data, err := msg.marshalBinary()
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	decoded := new(agentMessage)
+	if err := decoded.unmarshalBinary(data); err != nil {
+		t.Fatalf("expected empty payload to pass validation, got: %v", err)
+	}
+}
+
 func TestTimestampRoundTrip(t *testing.T) {
 	msg := newAgentMessage()
 	msg.messageType = msgInputStreamData
