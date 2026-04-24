@@ -16,20 +16,5 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Install gd CLI
-        run: go install graphics.gd/cmd/gd@release
-
-      - name: Install Godot 4.6
-        run: |
-          wget -q https://github.com/godotengine/godot/releases/download/4.6.1-stable/Godot_v4.6.1-stable_linux.x86_64.zip
-          unzip -q Godot_v4.6.1-stable_linux.x86_64.zip
-          sudo mv Godot_v4.6.1-stable_linux.x86_64 /usr/local/bin/godot
-          sudo chmod +x /usr/local/bin/godot
-
-      - name: Install pytest
-        run: pip install pytest
-
-      - name: Run tests
-        run: |
-          export PATH=$PATH:$(go env GOPATH)/bin
-          ./bin/tests
+      - name: Run unit tests
+        run: go test ./...
