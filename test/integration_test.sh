@@ -29,10 +29,19 @@ done
 cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
 PATH="$PATH:$(go env GOPATH)/bin"
-echo "Building dylib..."
-go build -buildmode=c-shared -o "$ROOT/graphics/darwin_amd64.dylib" ./cmd/viewer
-cp "$ROOT/graphics/darwin_amd64.dylib" "$ROOT/graphics/darwin_universal.dylib"
-codesign --force --sign - "$ROOT/graphics/darwin_universal.dylib"
+echo "Building shared library..."
+case "$(uname -s)" in
+    Darwin)
+        go build -buildmode=c-shared -o "$ROOT/graphics/darwin_amd64.dylib" ./cmd/viewer
+        cp "$ROOT/graphics/darwin_amd64.dylib" "$ROOT/graphics/darwin_universal.dylib"
+        if command -v codesign >/dev/null 2>&1; then
+            codesign --force --sign - "$ROOT/graphics/darwin_universal.dylib"
+        fi
+        ;;
+    Linux)
+        go build -buildmode=c-shared -o "$ROOT/graphics/linux_amd64.so" ./cmd/viewer
+        ;;
+esac
 echo "Build OK"
 
 # Start headless
