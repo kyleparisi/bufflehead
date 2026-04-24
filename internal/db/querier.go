@@ -8,7 +8,7 @@ import "context"
 type Querier interface {
 	Tables() ([]TableInfo, error)
 	TableSchema(name string) ([]Column, error)
-	Query(sql string, offset, limit int) (*QueryResult, error)
+	Query(ctx context.Context, sql string, offset, limit int) (*QueryResult, error)
 	Ping(ctx context.Context) error
 	Close() error
 }
