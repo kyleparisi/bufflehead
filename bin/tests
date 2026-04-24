@@ -10,4 +10,5 @@ go test ./...
 
 echo ""
 echo "=== Integration tests ==="
+go install graphics.gd/cmd/gd@release
 ./test/integration_test.sh "$@"

@@ -32,6 +32,7 @@ PATH="$PATH:$(go env GOPATH)/bin"
 echo "Building dylib..."
 go build -buildmode=c-shared -o "$ROOT/graphics/darwin_amd64.dylib" ./cmd/viewer
 cp "$ROOT/graphics/darwin_amd64.dylib" "$ROOT/graphics/darwin_universal.dylib"
+codesign --force --sign - "$ROOT/graphics/darwin_universal.dylib"
 echo "Build OK"
 
 # Start headless

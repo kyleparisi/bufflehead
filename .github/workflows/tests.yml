@@ -16,5 +16,10 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Install gd CLI
+        run: go install graphics.gd/cmd/gd@release
+
       - name: Run tests
-        run: ./bin/tests
+        run: |
+          export PATH=$PATH:$(go env GOPATH)/bin
+          ./bin/tests
