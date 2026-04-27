@@ -118,6 +118,17 @@ func (cw *ConnWorker) Send(req DBRequest) {
 func (cw *ConnWorker) loop() {
 	defer close(cw.done)
 	for req := range cw.requests {
+		// Skip ReqSQL requests whose HTTP client already disconnected.
+		// This prevents stale agent requests from blocking the worker.
+		if req.Kind == ReqSQL && req.Ctx != nil {
+			select {
+			case <-req.Ctx.Done():
+				log.Println("sql: skipping queued request, client already disconnected")
+				req.SQLReply <- SQLReply{Err: req.Ctx.Err()}
+				continue
+			default:
+			}
+		}
 		cw.handle(req)
 	}
 }
@@ -229,6 +240,11 @@ func (cw *ConnWorker) handleSQL(req DBRequest, ctx context.Context) {
 }
 
 func (cw *ConnWorker) handleRefresh(req DBRequest) {
+	// Reset the pool so refresh gets a fresh connection, not a stale one
+	// left over from a dead SSM tunnel.
+	if pgConn, ok := cw.db.(*db.PostgresDB); ok {
+		pgConn.ResetPool()
+	}
 	tables, err := cw.db.Tables()
 	if err != nil {
 		cw.results <- DBResult{
