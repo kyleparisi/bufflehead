@@ -122,6 +122,24 @@ func (cw *ConnWorker) loop() {
 	}
 }
 
+// baseCtx returns a context that cancels when either the worker shuts down
+// or, for ReqSQL, the HTTP client disconnects.
+func (cw *ConnWorker) baseCtx(req DBRequest) (context.Context, context.CancelFunc) {
+	if req.Kind == ReqSQL && req.Ctx != nil {
+		ctx, cancel := context.WithCancel(cw.ctx)
+		go func() {
+			select {
+			case <-req.Ctx.Done():
+				log.Println("sql: client disconnected, cancelling request")
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
+		return ctx, cancel
+	}
+	return cw.ctx, func() {}
+}
+
 func (cw *ConnWorker) handle(req DBRequest) {
 	// Refresh skips the health check — Tables() will surface errors directly,
 	// and the ping itself can hang on dead SSM tunnel connections.
@@ -130,9 +148,15 @@ func (cw *ConnWorker) handle(req DBRequest) {
 		return
 	}
 
+	// For ReqSQL, derive a context that also cancels when the HTTP client
+	// disconnects. This prevents queued requests from blocking the worker
+	// after the agent has given up.
+	ctx, ctxCancel := cw.baseCtx(req)
+	defer ctxCancel()
+
 	// Health check before every operation to fail fast on dead connections.
 	// SSM tunnel + TLS handshake can be slow when re-establishing connections.
-	pingCtx, pingCancel := context.WithTimeout(cw.ctx, 30*time.Second)
+	pingCtx, pingCancel := context.WithTimeout(ctx, 30*time.Second)
 	err := cw.db.Ping(pingCtx)
 	pingCancel()
 	if err != nil {
@@ -144,7 +168,7 @@ func (cw *ConnWorker) handle(req DBRequest) {
 			pgConn.ResetPool()
 		}
 		// Retry once with a fresh connection.
-		retryCtx, retryCancel := context.WithTimeout(cw.ctx, 30*time.Second)
+		retryCtx, retryCancel := context.WithTimeout(ctx, 30*time.Second)
 		err = cw.db.Ping(retryCtx)
 		retryCancel()
 	}
@@ -175,7 +199,7 @@ func (cw *ConnWorker) handle(req DBRequest) {
 	case ReqOpenFile:
 		cw.handleOpenFile(req)
 	case ReqSQL:
-		cw.handleSQL(req)
+		cw.handleSQL(req, ctx)
 	}
 }
 
@@ -199,23 +223,7 @@ func (cw *ConnWorker) handleQuery(req DBRequest) {
 	}
 }
 
-func (cw *ConnWorker) handleSQL(req DBRequest) {
-	// Merge the HTTP request context with the worker context so the query
-	// cancels if either the client disconnects or the worker shuts down.
-	ctx := cw.ctx
-	if req.Ctx != nil {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithCancel(ctx)
-		defer cancel()
-		go func() {
-			select {
-			case <-req.Ctx.Done():
-				log.Println("sql: client disconnected, cancelling query")
-				cancel()
-			case <-ctx.Done():
-			}
-		}()
-	}
+func (cw *ConnWorker) handleSQL(req DBRequest, ctx context.Context) {
 	result, err := cw.db.Query(ctx, req.UserSQL, 0, req.Limit)
 	req.SQLReply <- SQLReply{Result: result, Err: err}
 }
