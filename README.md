@@ -71,12 +71,8 @@ bufflehead/
 └── README.md
 ```
 
-## Roadmap
+## Architecture
 
-- [ ] Row group / file metadata panel
-- [ ] Multi-file JOIN support (drag & drop multiple parquets)
-- [ ] S3/remote parquet support (`read_parquet('s3://...')`)
-- [ ] Column statistics (min/max/null count per column)
-- [ ] Export query results to CSV/JSON
-- [ ] Query history
-- [ ] Virtual scrolling pagination controls (next/prev page)
+<p align="center">
+  <img src="graphics/architecture.png" alt="Bufflehead architecture diagram">
+</p>
