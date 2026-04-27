@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
+	"time"
 )
 
 // Command represents an action to execute on the main thread.
@@ -333,7 +334,9 @@ func buildMux(s *Server) *http.ServeMux {
 			req.Limit = 100
 		}
 
-		result, err := executor(r.Context(), req.Connection, req.SQL, req.Limit)
+		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+		defer cancel()
+		result, err := executor(ctx, req.Connection, req.SQL, req.Limit)
 		w.Header().Set("Content-Type", "application/json")
 		if err != nil {
 			w.WriteHeader(400)

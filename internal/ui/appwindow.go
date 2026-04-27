@@ -1155,7 +1155,8 @@ func buildAIPrompt(entry models.GatewayEntry, tables []db.TableInfo) string {
 	b.WriteString(fmt.Sprintf("Database: %s\n", entry.DBName))
 	b.WriteString(fmt.Sprintf("\nRun queries via HTTP (no auth needed, Bufflehead manages the connection):\n"))
 	b.WriteString(fmt.Sprintf("  curl -s -X POST http://localhost:9900/sql -d '{\"sql\":\"SELECT * FROM table LIMIT 10\",\"connection\":\"%s\"}'\n", connName))
-	b.WriteString("\nResults are limited to 100 rows by default. Avoid fetching more rows than needed.\n")
+	b.WriteString("\nResults are limited to 100 rows by default. Queries time out after 30 seconds.\n")
+	b.WriteString("Use indexed columns in WHERE clauses, avoid full table scans, and keep queries targeted.\n")
 	b.WriteString("\nResponse format: {\"columns\":[...],\"rows\":[[...],...],\"total\":N}\n")
 
 	b.WriteString("\nYou can also fetch S3 objects via HTTP:\n")
