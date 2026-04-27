@@ -77,6 +77,14 @@ func (p *PostgresDB) Ping(ctx context.Context) error {
 	return p.conn.PingContext(ctx)
 }
 
+// ResetPool forces the pool to close all idle connections. The next
+// operation will open a fresh TCP+TLS connection. This is needed after
+// an SSM tunnel reconnect to avoid TLS session cache issues.
+func (p *PostgresDB) ResetPool() {
+	p.conn.SetMaxIdleConns(0)
+	p.conn.SetMaxIdleConns(1)
+}
+
 // Close releases the connection pool.
 func (p *PostgresDB) Close() error {
 	return p.conn.Close()

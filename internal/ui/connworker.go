@@ -134,9 +134,14 @@ func (cw *ConnWorker) handle(req DBRequest) {
 	err := cw.db.Ping(pingCtx)
 	pingCancel()
 	if err != nil {
-		// Retry once: the first ping may have discovered a stale connection
-		// (e.g. "driver: bad connection") and discarded it from the pool.
-		// The second ping opens a fresh connection.
+		// Force the pool to discard all idle connections. This ensures the
+		// retry creates a completely fresh TCP+TLS connection through the
+		// (possibly rebuilt) SSM tunnel, avoiding TLS session cache issues
+		// like "server sent two HelloRetryRequest messages".
+		if pgConn, ok := cw.db.(*db.PostgresDB); ok {
+			pgConn.ResetPool()
+		}
+		// Retry once with a fresh connection.
 		retryCtx, retryCancel := context.WithTimeout(cw.ctx, 30*time.Second)
 		err = cw.db.Ping(retryCtx)
 		retryCancel()
