@@ -3,6 +3,7 @@ package aws
 import (
 	"context"
 	"fmt"
+	"log"
 	"net"
 	"sync"
 	"time"
@@ -43,7 +44,15 @@ type TunnelConfig struct {
 	LocalPort  int
 	AWSProfile string
 	AWSRegion  string
+
+	// InstanceResolver, if set, is called before each connection attempt to
+	// resolve a fresh instance ID. This supports spot instances that rotate.
+	// If nil, InstanceID is used as-is.
+	InstanceResolver func() (string, error)
 }
+
+// Maximum number of consecutive reconnect attempts before giving up.
+const maxReconnectAttempts = 10
 
 // TunnelManager manages an SSM port-forwarding session.
 type TunnelManager struct {
@@ -107,7 +116,9 @@ func (t *TunnelManager) setStatusNotify(s TunnelStatus, msg string) {
 	}
 }
 
-// Start launches the SSM port-forwarding session.
+// Start launches the SSM port-forwarding session with automatic reconnection.
+// If the session drops unexpectedly, it will re-establish the SSM session
+// with exponential backoff (up to maxReconnectAttempts times).
 func (t *TunnelManager) Start(cfg TunnelConfig) error {
 	t.mu.Lock()
 	if t.status == TunnelConnecting || t.status == TunnelConnected {
@@ -118,60 +129,133 @@ func (t *TunnelManager) Start(cfg TunnelConfig) error {
 	t.lastError = ""
 	t.mu.Unlock()
 
-	t.setStatusNotify(TunnelConnecting, "Loading AWS config...")
-
-	opts := []func(*config.LoadOptions) error{
-		config.WithRegion(cfg.AWSRegion),
-	}
-	if cfg.AWSProfile != "" {
-		opts = append(opts, config.WithSharedConfigProfile(cfg.AWSProfile))
-	}
-	awsCfg, err := config.LoadDefaultConfig(context.Background(), opts...)
-	if err != nil {
-		t.mu.Lock()
-		t.lastError = err.Error()
-		t.mu.Unlock()
-		t.setStatusNotify(TunnelError, err.Error())
-		return fmt.Errorf("load aws config: %w", err)
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
 	t.mu.Lock()
 	t.cancel = cancel
 	t.mu.Unlock()
 
-	go func() {
-		err := PortForwardSession(ctx, awsCfg, cfg.InstanceID, cfg.RDSHost, cfg.RDSPort, cfg.LocalPort,
+	go t.runWithReconnect(ctx, cfg)
+
+	return nil
+}
+
+// runWithReconnect runs PortForwardSession in a loop, reconnecting on
+// unexpected disconnections with exponential backoff.
+func (t *TunnelManager) runWithReconnect(ctx context.Context, cfg TunnelConfig) {
+	attempt := 0
+
+	for {
+		if ctx.Err() != nil {
+			t.setStatusNotify(TunnelDisconnected, "")
+			return
+		}
+
+		if attempt > 0 {
+			backoff := time.Duration(1<<min(attempt-1, 5)) * time.Second // 1s, 2s, 4s, 8s, 16s, 32s
+			log.Printf("ssm: reconnecting in %v (attempt %d/%d)", backoff, attempt, maxReconnectAttempts)
+			t.setStatusNotify(TunnelConnecting, fmt.Sprintf("Reconnecting in %v...", backoff))
+
+			select {
+			case <-time.After(backoff):
+			case <-ctx.Done():
+				t.setStatusNotify(TunnelDisconnected, "")
+				return
+			}
+		}
+
+		// Re-resolve instance ID on reconnect if a resolver is configured
+		instanceID := cfg.InstanceID
+		if attempt > 0 && cfg.InstanceResolver != nil {
+			t.setStatusNotify(TunnelConnecting, "Resolving bastion instance...")
+			resolved, err := cfg.InstanceResolver()
+			if err != nil {
+				if ctx.Err() != nil {
+					t.setStatusNotify(TunnelDisconnected, "")
+					return
+				}
+				log.Printf("ssm: instance resolution error: %v", err)
+				attempt++
+				if attempt >= maxReconnectAttempts {
+					t.mu.Lock()
+					t.lastError = fmt.Sprintf("giving up after %d attempts: %v", maxReconnectAttempts, err)
+					t.cancel = nil
+					t.mu.Unlock()
+					t.setStatusNotify(TunnelError, t.LastError())
+					return
+				}
+				continue
+			}
+			instanceID = resolved
+			log.Printf("ssm: resolved instance ID: %s", instanceID)
+		}
+
+		t.setStatusNotify(TunnelConnecting, "Loading AWS config...")
+
+		opts := []func(*config.LoadOptions) error{
+			config.WithRegion(cfg.AWSRegion),
+		}
+		if cfg.AWSProfile != "" {
+			opts = append(opts, config.WithSharedConfigProfile(cfg.AWSProfile))
+		}
+		awsCfg, err := config.LoadDefaultConfig(ctx, opts...)
+		if err != nil {
+			if ctx.Err() != nil {
+				t.setStatusNotify(TunnelDisconnected, "")
+				return
+			}
+			log.Printf("ssm: aws config error: %v", err)
+			attempt++
+			if attempt >= maxReconnectAttempts {
+				t.mu.Lock()
+				t.lastError = fmt.Sprintf("giving up after %d attempts: %v", maxReconnectAttempts, err)
+				t.cancel = nil
+				t.mu.Unlock()
+				t.setStatusNotify(TunnelError, t.LastError())
+				return
+			}
+			continue
+		}
+
+		err = PortForwardSession(ctx, awsCfg, instanceID, cfg.RDSHost, cfg.RDSPort, cfg.LocalPort,
 			func() {
-				// Called when the listener is ready (handshake complete, port open)
+				attempt = 0 // reset on successful connection
 				t.setStatusNotify(TunnelConnected, fmt.Sprintf("Tunnel open on port %d", cfg.LocalPort))
 			},
 			func(msg string) {
-				// Progress updates from the SSM session — no lock contention
 				t.setStatusNotify(TunnelConnecting, msg)
 			},
 		)
 
-		t.mu.Lock()
-		cancelled := ctx.Err() != nil
-		if !cancelled {
-			if err != nil {
-				t.lastError = err.Error()
-			} else {
-				t.lastError = "session ended unexpectedly"
-			}
-		}
-		t.cancel = nil
-		t.mu.Unlock()
-
-		if cancelled {
+		if ctx.Err() != nil {
 			t.setStatusNotify(TunnelDisconnected, "")
-		} else {
-			t.setStatusNotify(TunnelError, t.LastError())
+			return
 		}
-	}()
 
-	return nil
+		// Session dropped unexpectedly — try to reconnect
+		errMsg := "session ended unexpectedly"
+		if err != nil {
+			errMsg = err.Error()
+		}
+		log.Printf("ssm: session dropped: %s", errMsg)
+
+		attempt++
+		if attempt >= maxReconnectAttempts {
+			t.mu.Lock()
+			t.lastError = fmt.Sprintf("giving up after %d attempts: %s", maxReconnectAttempts, errMsg)
+			t.cancel = nil
+			t.mu.Unlock()
+			t.setStatusNotify(TunnelError, t.LastError())
+			return
+		}
+
+		// Brief pause to let the old listener fully release the port
+		select {
+		case <-time.After(500 * time.Millisecond):
+		case <-ctx.Done():
+			t.setStatusNotify(TunnelDisconnected, "")
+			return
+		}
+	}
 }
 
 // Stop cancels the port forwarding session.

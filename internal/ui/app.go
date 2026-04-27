@@ -2418,6 +2418,34 @@ func (a *App) pollResults() {
 			w.gatewayLoadingLabel.SetText(w.gatewayLoadingMsg)
 			w.gatewayLoadingMsg = ""
 		}
+
+		// Monitor active gateway tunnels for reconnection status
+		for _, conn := range w.connections {
+			if conn.Gateway == nil || conn.Gateway.Tunnel == nil {
+				continue
+			}
+			tunnel := conn.Gateway.Tunnel
+			var msg string
+			switch tunnel.Status() {
+			case bfaws.TunnelConnecting:
+				msg = conn.Name + ": " + tunnel.StatusMsg()
+			case bfaws.TunnelError:
+				msg = conn.Name + ": Tunnel error — " + tunnel.LastError()
+			case bfaws.TunnelConnected:
+				// Clear any previous reconnect message
+				if conn.Gateway.LastTunnelMsg != "" {
+					conn.Gateway.LastTunnelMsg = ""
+					w.statusBar.SetStatus("Reconnected")
+				}
+				continue
+			default:
+				continue
+			}
+			if msg != conn.Gateway.LastTunnelMsg {
+				conn.Gateway.LastTunnelMsg = msg
+				w.statusBar.SetStatus(msg)
+			}
+		}
 	}
 }
 

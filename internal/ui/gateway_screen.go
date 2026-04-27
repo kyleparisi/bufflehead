@@ -1425,14 +1425,42 @@ func (g *GatewayScreen) startGatewayConnection(card *gatewayCard) {
 			card.needsUpdate = true
 		})
 
-		err = tunnel.Start(bfaws.TunnelConfig{
+		tunnelCfg := bfaws.TunnelConfig{
 			InstanceID: instanceID,
 			RDSHost:    entry.RDSHost,
 			RDSPort:    entry.RDSPort,
 			LocalPort:  localPort,
 			AWSProfile: entry.AWSProfile,
 			AWSRegion:  entry.AWSRegion,
-		})
+		}
+
+		// Set up instance resolver so reconnects can find a new bastion
+		// when spot instances rotate.
+		if len(entry.InstanceTags) > 0 {
+			// Tag-based: query EC2 for a running instance matching the tags
+			tunnelCfg.InstanceResolver = func() (string, error) {
+				return auth.ResolveInstanceID("", entry.InstanceTags)
+			}
+		} else {
+			// No tags: query SSM for any online instance. If there's
+			// exactly one, use it (typical for spot bastion setups).
+			tunnelCfg.InstanceResolver = func() (string, error) {
+				instances, err := auth.ListSSMInstances()
+				if err != nil {
+					return "", err
+				}
+				switch len(instances) {
+				case 0:
+					return "", fmt.Errorf("no online SSM instances found")
+				case 1:
+					return instances[0].InstanceID, nil
+				default:
+					return "", fmt.Errorf("%d SSM instances online — cannot auto-select bastion", len(instances))
+				}
+			}
+		}
+
+		err = tunnel.Start(tunnelCfg)
 		if err != nil {
 			card.loginErr = "Tunnel: " + err.Error()
 			card.needsUpdate = true

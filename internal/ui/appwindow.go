@@ -48,9 +48,10 @@ type Connection struct {
 
 // GatewayConnection holds the gateway-specific state for a remote connection.
 type GatewayConnection struct {
-	Config models.GatewayEntry
-	Auth   *bfaws.AuthManager
-	Tunnel *bfaws.TunnelManager
+	Config        models.GatewayEntry
+	Auth          *bfaws.AuthManager
+	Tunnel        *bfaws.TunnelManager
+	LastTunnelMsg string // tracks last displayed tunnel status to avoid redundant updates
 }
 
 var nextTabID uint64
