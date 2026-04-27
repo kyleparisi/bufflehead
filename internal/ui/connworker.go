@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
 
 	"bufflehead/internal/control"
@@ -37,7 +38,8 @@ type DBRequest struct {
 	ConnIdx    int // connection index (for ReqRefresh)
 	Navigating bool
 	ControlCmd *control.Command
-	SQLReply   chan SQLReply // for ReqSQL: synchronous response channel
+	SQLReply   chan SQLReply    // for ReqSQL: synchronous response channel
+	Ctx        context.Context // for ReqSQL: cancels when HTTP client disconnects
 }
 
 // SQLReply is the synchronous response for ReqSQL requests.
@@ -198,7 +200,23 @@ func (cw *ConnWorker) handleQuery(req DBRequest) {
 }
 
 func (cw *ConnWorker) handleSQL(req DBRequest) {
-	result, err := cw.db.Query(cw.ctx, req.UserSQL, 0, req.Limit)
+	// Merge the HTTP request context with the worker context so the query
+	// cancels if either the client disconnects or the worker shuts down.
+	ctx := cw.ctx
+	if req.Ctx != nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(ctx)
+		defer cancel()
+		go func() {
+			select {
+			case <-req.Ctx.Done():
+				log.Println("sql: client disconnected, cancelling query")
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
+	}
+	result, err := cw.db.Query(ctx, req.UserSQL, 0, req.Limit)
 	req.SQLReply <- SQLReply{Result: result, Err: err}
 }
 

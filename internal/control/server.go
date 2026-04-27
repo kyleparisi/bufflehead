@@ -1,6 +1,7 @@
 package control
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -66,7 +67,8 @@ type SQLResult struct {
 }
 
 // SQLExecutor runs a SQL query against a named connection and returns results.
-type SQLExecutor func(connName, sql string, limit int) (*SQLResult, error)
+// The context is derived from the HTTP request so the query cancels if the client disconnects.
+type SQLExecutor func(ctx context.Context, connName, sql string, limit int) (*SQLResult, error)
 
 // S3GetObjectRequest is the payload for the /s3/get-object endpoint.
 type S3GetObjectRequest struct {
@@ -331,7 +333,7 @@ func buildMux(s *Server) *http.ServeMux {
 			req.Limit = 100
 		}
 
-		result, err := executor(req.Connection, req.SQL, req.Limit)
+		result, err := executor(r.Context(), req.Connection, req.SQL, req.Limit)
 		w.Header().Set("Content-Type", "application/json")
 		if err != nil {
 			w.WriteHeader(400)

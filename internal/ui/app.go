@@ -1901,7 +1901,7 @@ func (a *App) initMainWindow() {
 			return json.Marshal(map[string]any{"tabCount": 0})
 		})
 
-		a.ControlServer.SetSQLExecutor(func(connName, sql string, limit int) (*control.SQLResult, error) {
+		a.ControlServer.SetSQLExecutor(func(ctx context.Context, connName, sql string, limit int) (*control.SQLResult, error) {
 			w := a.activeWindow()
 			if w == nil {
 				return nil, fmt.Errorf("no active window")
@@ -1936,8 +1936,15 @@ func (a *App) initMainWindow() {
 				UserSQL:  sql,
 				Limit:    limit,
 				SQLReply: reply,
+				Ctx:      ctx,
 			})
-			res := <-reply
+			// Wait for the query result or the client disconnecting.
+			var res SQLReply
+			select {
+			case res = <-reply:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
 			if res.Err != nil {
 				return nil, res.Err
 			}

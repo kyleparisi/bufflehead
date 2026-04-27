@@ -1,6 +1,7 @@
 package control
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http/httptest"
@@ -29,7 +30,7 @@ func TestSQLEndpoint_NoExecutor(t *testing.T) {
 
 func TestSQLEndpoint_ConnectionNotFound(t *testing.T) {
 	s := New(0)
-	s.SetSQLExecutor(func(connName, sql string, limit int) (*SQLResult, error) {
+	s.SetSQLExecutor(func(ctx context.Context, connName, sql string, limit int) (*SQLResult, error) {
 		return nil, fmt.Errorf("connection %q not found", connName)
 	})
 	handler := buildMux(s)
@@ -54,7 +55,7 @@ func TestSQLEndpoint_ConnectionNotFound(t *testing.T) {
 
 func TestSQLEndpoint_EmptySQL(t *testing.T) {
 	s := New(0)
-	s.SetSQLExecutor(func(connName, sql string, limit int) (*SQLResult, error) {
+	s.SetSQLExecutor(func(ctx context.Context, connName, sql string, limit int) (*SQLResult, error) {
 		return nil, nil
 	})
 	handler := buildMux(s)
@@ -76,7 +77,7 @@ func TestSQLEndpoint_EmptySQL(t *testing.T) {
 
 func TestSQLEndpoint_BadJSON(t *testing.T) {
 	s := New(0)
-	s.SetSQLExecutor(func(connName, sql string, limit int) (*SQLResult, error) {
+	s.SetSQLExecutor(func(ctx context.Context, connName, sql string, limit int) (*SQLResult, error) {
 		return nil, nil
 	})
 	handler := buildMux(s)
@@ -92,7 +93,7 @@ func TestSQLEndpoint_BadJSON(t *testing.T) {
 
 func TestSQLEndpoint_Success(t *testing.T) {
 	s := New(0)
-	s.SetSQLExecutor(func(connName, sql string, limit int) (*SQLResult, error) {
+	s.SetSQLExecutor(func(ctx context.Context, connName, sql string, limit int) (*SQLResult, error) {
 		return &SQLResult{
 			Columns: []string{"id"},
 			Rows:    [][]string{{"1"}},
@@ -125,7 +126,7 @@ func TestSQLEndpoint_Success(t *testing.T) {
 func TestSQLEndpoint_DefaultLimit(t *testing.T) {
 	var capturedLimit int
 	s := New(0)
-	s.SetSQLExecutor(func(connName, sql string, limit int) (*SQLResult, error) {
+	s.SetSQLExecutor(func(ctx context.Context, connName, sql string, limit int) (*SQLResult, error) {
 		capturedLimit = limit
 		return &SQLResult{Columns: []string{}, Rows: [][]string{}, Total: 0}, nil
 	})

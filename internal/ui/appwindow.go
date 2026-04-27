@@ -1158,12 +1158,18 @@ func buildAIPrompt(entry models.GatewayEntry, tables []db.TableInfo) string {
 	b.WriteString("\nResults are limited to 100 rows by default. Avoid fetching more rows than needed.\n")
 	b.WriteString("\nResponse format: {\"columns\":[...],\"rows\":[[...],...],\"total\":N}\n")
 
+	b.WriteString("\nYou can also fetch S3 objects via HTTP:\n")
+	b.WriteString(fmt.Sprintf("  curl -s -X POST http://localhost:9900/s3/get-object -d '{\"bucket\":\"BUCKET\",\"key\":\"KEY\",\"connection\":\"%s\"}'\n", connName))
+	b.WriteString("\nResponse format: {\"content\":\"...\",\"content_type\":\"...\",\"size\":N,\"truncated\":BOOL}\n")
+	b.WriteString("\nSome columns may contain JSON with S3 pointers (e.g. {\"s3_key\": \"...\", \"s3_bucket\": \"...\"}).\n")
+	b.WriteString("When you encounter these, extract s3_bucket and s3_key from the JSON and use the S3 endpoint to fetch the object contents.\n")
+
 	if len(tables) > 0 {
 		b.WriteString("\nSchema:\n")
 		for _, t := range tables {
 			var cols []string
 			for _, c := range t.Columns {
-				cols = append(cols, c.Name)
+				cols = append(cols, fmt.Sprintf("%s %s", c.Name, c.DataType))
 			}
 			prefix := "- " + t.Name
 			if t.Type == "view" {
