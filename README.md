@@ -13,6 +13,7 @@ A native cross-platform Parquet viewer built with Go + DuckDB + graphics.gd (God
 - Virtual-scrolled data grid (handles large files via DuckDB paging)
 - SQL query editor — run any DuckDB SQL against your file
 - File-level Parquet metadata viewer
+- Secure gateway to AWS data (S3, RDS) via SSO/IAM — no SSH keys or database passwords
 
 ## Prerequisites
 
