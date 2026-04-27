@@ -4,12 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
 	"os/user"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	rdsauth "github.com/aws/aws-sdk-go-v2/feature/rds/auth"
-	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
 )
 
 // PostgresDB wraps a Postgres connection pool.
@@ -28,12 +30,52 @@ func NewPostgres(host string, port int, dbName, user, password string) (*Postgre
 // The token is generated for rdsEndpoint (the real RDS host:port), but the
 // connection is made to connectHost:connectPort (typically localhost via SSM tunnel).
 // RDS requires SSL for IAM auth connections.
-func NewPostgresIAM(connectHost string, connectPort int, rdsEndpoint, dbName, user string, cfg aws.Config) (*PostgresDB, error) {
-	token, err := rdsauth.BuildAuthToken(context.Background(), rdsEndpoint, cfg.Region, user, cfg.Credentials)
-	if err != nil {
-		return nil, fmt.Errorf("build rds auth token: %w", err)
+//
+// A fresh IAM token is generated before each new connection so that
+// reconnections after tunnel restarts or idle timeouts use a valid token
+// (RDS IAM tokens expire after 15 minutes).
+func NewPostgresIAM(connectHost string, connectPort int, rdsEndpoint, dbName, dbUser string, cfg aws.Config) (*PostgresDB, error) {
+	dsn := fmt.Sprintf("host=%s port=%d dbname=%s user=%s sslmode=require",
+		connectHost, connectPort, dbName, dbUser)
+	if u, err := user.Current(); err == nil {
+		dsn += " application_name=" + u.Username
 	}
-	return newPostgres(connectHost, connectPort, dbName, user, token, "require")
+
+	connConfig, err := pgx.ParseConfig(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("parse pgx config: %w", err)
+	}
+
+	region := cfg.Region
+	creds := cfg.Credentials
+
+	conn := stdlib.OpenDB(*connConfig, stdlib.OptionBeforeConnect(
+		func(ctx context.Context, cc *pgx.ConnConfig) error {
+			token, err := rdsauth.BuildAuthToken(ctx, rdsEndpoint, region, dbUser, creds)
+			if err != nil {
+				return fmt.Errorf("build rds auth token: %w", err)
+			}
+			log.Printf("postgres: refreshed IAM token for %s", rdsEndpoint)
+			cc.Password = token
+			return nil
+		},
+	))
+
+	conn.SetMaxOpenConns(1)
+	conn.SetConnMaxIdleTime(3 * time.Minute)
+	conn.SetConnMaxLifetime(5 * time.Minute)
+
+	if err := conn.Ping(); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("ping postgres: %w", err)
+	}
+
+	if _, err := conn.Exec("SET default_transaction_read_only = on"); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("set read-only: %w", err)
+	}
+
+	return &PostgresDB{conn: conn, dbName: dbName}, nil
 }
 
 func newPostgres(host string, port int, dbName, dbUser, password, sslMode string) (*PostgresDB, error) {
