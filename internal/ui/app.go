@@ -2437,12 +2437,23 @@ func (a *App) pollResults() {
 			case bfaws.TunnelConnecting:
 				msg = conn.Name + ": " + tunnel.StatusMsg()
 			case bfaws.TunnelError:
-				msg = conn.Name + ": Tunnel error — " + tunnel.LastError()
+				if tunnel.IsAuthError() {
+					msg = conn.Name + ": SSO session expired — run `aws sso login` to re-authenticate"
+				} else {
+					msg = conn.Name + ": Tunnel error — " + tunnel.LastError()
+				}
+				applyErrorButtonTheme(conn.button.AsControl())
 			case bfaws.TunnelConnected:
 				// Clear any previous reconnect message
 				if conn.Gateway.LastTunnelMsg != "" {
 					conn.Gateway.LastTunnelMsg = ""
 					w.statusBar.SetStatus("Reconnected")
+					// Restore normal button theme
+					if w.activeConnIdx < len(w.connections) && w.connections[w.activeConnIdx] == conn {
+						applyActiveButtonTheme(conn.button.AsControl())
+					} else {
+						applySecondaryButtonTheme(conn.button.AsControl())
+					}
 				}
 				continue
 			default:

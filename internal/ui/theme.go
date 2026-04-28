@@ -238,6 +238,19 @@ func applyActiveButtonTheme(c Control.Instance) {
 	c.AddThemeColorOverride("font_hover_color", colorTextBright)
 }
 
+func applyErrorButtonTheme(c Control.Instance) {
+	// Red background to signal tunnel/auth error
+	errorBg := Color.RGBA{R: 0.6, G: 0.1, B: 0.1, A: 1}   // dark red
+	errorHover := Color.RGBA{R: 0.7, G: 0.15, B: 0.15, A: 1}
+	normal := makeStyleBoxPadded(errorBg, 3, 1, errorBg, 2)
+	hover := makeStyleBoxPadded(errorHover, 3, 1, errorHover, 2)
+	c.AddThemeStyleboxOverride("normal", normal.AsStyleBox())
+	c.AddThemeStyleboxOverride("hover", hover.AsStyleBox())
+	c.AddThemeStyleboxOverride("pressed", hover.AsStyleBox())
+	c.AddThemeColorOverride("font_color", colorTextBright)
+	c.AddThemeColorOverride("font_hover_color", colorTextBright)
+}
+
 func applyInputTheme(c Control.Instance) {
 	normal := makeStyleBoxPadded(colorBgInput, 4, 1, colorBorder, 2)
 	focus := makeStyleBoxPadded(colorBgInput, 4, 1, colorAccent, 2)

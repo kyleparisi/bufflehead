@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -268,6 +269,20 @@ func (t *TunnelManager) Stop() error {
 		cancel()
 	}
 	return nil
+}
+
+// IsAuthError reports whether the tunnel failed due to expired SSO credentials.
+func (t *TunnelManager) IsAuthError() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.status != TunnelError {
+		return false
+	}
+	e := strings.ToLower(t.lastError)
+	return strings.Contains(e, "invalidgrantexception") ||
+		strings.Contains(e, "refresh cached sso token failed") ||
+		strings.Contains(e, "expired sso") ||
+		strings.Contains(e, "sso token")
 }
 
 // IsPortReady checks if the tunnel is connected.
