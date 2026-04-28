@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"net"
 	"os/user"
 	"time"
 
@@ -46,6 +47,10 @@ func NewPostgresIAM(connectHost string, connectPort int, rdsEndpoint, dbName, db
 		return nil, fmt.Errorf("parse pgx config: %w", err)
 	}
 
+	// TCP keepalives every 15s prevent firewalls and SSM tunnels from
+	// treating idle connections as dead.
+	connConfig.DialFunc = keepAliveDialer
+
 	region := cfg.Region
 	creds := cfg.Credentials
 
@@ -85,10 +90,16 @@ func newPostgres(host string, port int, dbName, dbUser, password, sslMode string
 		dsn += " application_name=" + u.Username
 	}
 
-	conn, err := sql.Open("pgx", dsn)
+	connConfig, err := pgx.ParseConfig(dsn)
 	if err != nil {
-		return nil, fmt.Errorf("open postgres: %w", err)
+		return nil, fmt.Errorf("parse pgx config: %w", err)
 	}
+
+	// TCP keepalives every 15s prevent firewalls and SSM tunnels from
+	// treating idle connections as dead.
+	connConfig.DialFunc = keepAliveDialer
+
+	conn := stdlib.OpenDB(*connConfig)
 
 	// Limit to one connection — multiple TLS connections through an SSM
 	// tunnel's smux session cause MAC errors from interleaved streams.
@@ -259,6 +270,13 @@ func (p *PostgresDB) Query(ctx context.Context, virtualSQL string, offset, limit
 		result.Rows = append(result.Rows, row)
 	}
 	return result, rows.Err()
+}
+
+// keepAliveDialer dials TCP with 15-second keepalives so that firewalls
+// and SSM tunnels don't kill idle connections.
+func keepAliveDialer(ctx context.Context, network, addr string) (net.Conn, error) {
+	d := &net.Dialer{KeepAlive: 15 * time.Second}
+	return d.DialContext(ctx, network, addr)
 }
 
 // splitSchemaTable splits "schema.table" into its parts.
