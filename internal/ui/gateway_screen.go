@@ -1380,7 +1380,11 @@ func (g *GatewayScreen) onCardAction(idx int) {
 	case bfaws.CredsValid:
 		card.statusLbl.SetText("Connecting...")
 		card.statusDot.AsControl().AddThemeColorOverride("font_color", colorStatusYellow)
+		card.actionBtn.SetText("Connecting...")
 		card.actionBtn.AsBaseButton().SetDisabled(true)
+		card.loginLog = ""
+		card.logLbl.SetText("")
+		card.logLbl.AsCanvasItem().SetVisible(true)
 		g.startGatewayConnection(card)
 	}
 }
@@ -1390,8 +1394,15 @@ func (g *GatewayScreen) startGatewayConnection(card *gatewayCard) {
 	auth := card.auth
 
 	go func() {
-		card.loginLog = "Allocating port..."
-		card.needsUpdate = true
+		appendLog := func(msg string) {
+			if card.loginLog != "" {
+				card.loginLog += "\n"
+			}
+			card.loginLog += msg
+			card.needsUpdate = true
+		}
+
+		appendLog("Allocating port...")
 
 		// Auto-assign a free local port
 		localPort, err := bfaws.FindFreePort()
@@ -1402,8 +1413,7 @@ func (g *GatewayScreen) startGatewayConnection(card *gatewayCard) {
 		}
 		card.entry.LocalPort = localPort
 
-		card.loginLog = "Resolving bastion instance..."
-		card.needsUpdate = true
+		appendLog("Resolving bastion instance...")
 
 		// Resolve instance ID
 		instanceID, err := auth.ResolveInstanceID(entry.InstanceID, entry.InstanceTags)
@@ -1413,16 +1423,14 @@ func (g *GatewayScreen) startGatewayConnection(card *gatewayCard) {
 			return
 		}
 
-		card.loginLog = "Starting SSM tunnel..."
-		card.needsUpdate = true
+		appendLog("Starting SSM tunnel...")
 
 		// Start SSM tunnel — declare before closure so the callback can reference it
 		var tunnel *bfaws.TunnelManager
 		tunnel = bfaws.NewTunnelManager(func(status bfaws.TunnelStatus, msg string) {
 			if status == bfaws.TunnelConnecting {
-				card.loginLog = msg
+				appendLog(msg)
 			}
-			card.needsUpdate = true
 		})
 
 		tunnelCfg := bfaws.TunnelConfig{
@@ -1475,7 +1483,7 @@ func (g *GatewayScreen) startGatewayConnection(card *gatewayCard) {
 			return
 		}
 
-		card.loginLog = "Tunnel connected"
+		appendLog("Tunnel connected")
 		card.tunnel = tunnel
 		card.connected = true
 		card.needsUpdate = true
