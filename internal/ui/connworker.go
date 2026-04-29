@@ -70,13 +70,15 @@ type DBResult struct {
 }
 
 // ConnWorker owns a db.Querier handle and processes requests sequentially.
+// UI operations (query, open, refresh) have priority over /sql requests.
 type ConnWorker struct {
-	db       db.Querier
-	ctx      context.Context
-	cancel   context.CancelFunc
-	requests chan DBRequest
-	results  chan DBResult
-	done     chan struct{}
+	db      db.Querier
+	ctx     context.Context
+	cancel  context.CancelFunc
+	uiReqs  chan DBRequest // high-priority: ReqQuery, ReqOpenFile, ReqRefresh
+	sqlReqs chan DBRequest // low-priority: ReqSQL
+	results chan DBResult
+	done    chan struct{}
 }
 
 // NewConnWorker creates a worker for the given database connection.
@@ -84,12 +86,13 @@ type ConnWorker struct {
 func NewConnWorker(database db.Querier, results chan DBResult) *ConnWorker {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &ConnWorker{
-		db:       database,
-		ctx:      ctx,
-		cancel:   cancel,
-		requests: make(chan DBRequest, 16),
-		results:  results,
-		done:     make(chan struct{}),
+		db:      database,
+		ctx:     ctx,
+		cancel:  cancel,
+		uiReqs:  make(chan DBRequest, 16),
+		sqlReqs: make(chan DBRequest, 4),
+		results: results,
+		done:    make(chan struct{}),
 	}
 }
 
@@ -103,33 +106,53 @@ func (cw *ConnWorker) Start() {
 // hanging on quit when a long-running query is in progress.
 func (cw *ConnWorker) Stop() {
 	cw.cancel()
-	close(cw.requests)
 	select {
 	case <-cw.done:
 	case <-time.After(3 * time.Second):
 	}
 }
 
-// Send enqueues a request for the worker.
+// Send enqueues a request for the worker. UI operations (query, open,
+// refresh) go to the high-priority channel; /sql requests go to the
+// low-priority channel.
 func (cw *ConnWorker) Send(req DBRequest) {
-	cw.requests <- req
+	if req.Kind == ReqSQL {
+		cw.sqlReqs <- req
+	} else {
+		cw.uiReqs <- req
+	}
 }
 
 func (cw *ConnWorker) loop() {
 	defer close(cw.done)
-	for req := range cw.requests {
-		// Skip ReqSQL requests whose HTTP client already disconnected.
-		// This prevents stale agent requests from blocking the worker.
-		if req.Kind == ReqSQL && req.Ctx != nil {
-			select {
-			case <-req.Ctx.Done():
-				log.Println("sql: skipping queued request, client already disconnected")
-				req.SQLReply <- SQLReply{Err: req.Ctx.Err()}
-				continue
-			default:
-			}
+	for {
+		// Priority 1: always check UI requests first.
+		select {
+		case req := <-cw.uiReqs:
+			cw.handle(req)
+			continue
+		default:
 		}
-		cw.handle(req)
+
+		// Priority 2: take from either channel, preferring UI.
+		select {
+		case req := <-cw.uiReqs:
+			cw.handle(req)
+		case req := <-cw.sqlReqs:
+			// Skip if the HTTP client already disconnected.
+			if req.Ctx != nil {
+				select {
+				case <-req.Ctx.Done():
+					log.Println("sql: skipping queued request, client already disconnected")
+					req.SQLReply <- SQLReply{Err: req.Ctx.Err()}
+					continue
+				default:
+				}
+			}
+			cw.handle(req)
+		case <-cw.ctx.Done():
+			return
+		}
 	}
 }
 
@@ -166,22 +189,34 @@ func (cw *ConnWorker) handle(req DBRequest) {
 	defer ctxCancel()
 
 	// Health check before every operation to fail fast on dead connections.
-	// SSM tunnel + TLS handshake can be slow when re-establishing connections.
-	pingCtx, pingCancel := context.WithTimeout(ctx, 30*time.Second)
-	err := cw.db.Ping(pingCtx)
-	pingCancel()
-	if err != nil {
-		// Force the pool to discard all idle connections. This ensures the
-		// retry creates a completely fresh TCP+TLS connection through the
-		// (possibly rebuilt) SSM tunnel, avoiding TLS session cache issues
-		// like "server sent two HelloRetryRequest messages".
-		if pgConn, ok := cw.db.(*db.PostgresDB); ok {
-			pgConn.ResetPool()
+	// SSM tunnels can drop and reconnect, so retry with backoff to give
+	// the tunnel time to re-establish (tunnel backoff is 1s, 2s, 4s, 8s...).
+	var err error
+	const maxHealthRetries = 4
+	for retries := 0; retries < maxHealthRetries; retries++ {
+		if retries > 0 {
+			if pgConn, ok := cw.db.(*db.PostgresDB); ok {
+				pgConn.ResetPool()
+			}
+			// Back off to let the tunnel reconnect. 3s, 6s, 9s covers
+			// the tunnel's first several reconnect attempts.
+			wait := time.Duration(retries) * 3 * time.Second
+			select {
+			case <-time.After(wait):
+			case <-ctx.Done():
+			}
+			if ctx.Err() != nil {
+				err = ctx.Err()
+				break
+			}
 		}
-		// Retry once with a fresh connection.
-		retryCtx, retryCancel := context.WithTimeout(ctx, 30*time.Second)
-		err = cw.db.Ping(retryCtx)
-		retryCancel()
+		pingCtx, pingCancel := context.WithTimeout(ctx, 10*time.Second)
+		err = cw.db.Ping(pingCtx)
+		pingCancel()
+		if err == nil {
+			break
+		}
+		log.Printf("sql: health check failed (attempt %d/%d): %v", retries+1, maxHealthRetries, err)
 	}
 	if err != nil {
 		pingErr := fmt.Errorf("connection health check failed: %w", err)
@@ -237,6 +272,16 @@ func (cw *ConnWorker) handleQuery(req DBRequest) {
 func (cw *ConnWorker) handleSQL(req DBRequest, ctx context.Context) {
 	result, err := cw.db.Query(ctx, req.UserSQL, 0, req.Limit)
 	req.SQLReply <- SQLReply{Result: result, Err: err}
+
+	// If the query was cancelled (HTTP timeout or client disconnect),
+	// the connection may be in a dirty state. Reset the pool so the
+	// next operation gets a clean connection.
+	if err != nil && ctx.Err() != nil {
+		if pgConn, ok := cw.db.(*db.PostgresDB); ok {
+			log.Println("sql: resetting pool after cancelled query")
+			pgConn.ResetPool()
+		}
+	}
 }
 
 func (cw *ConnWorker) handleRefresh(req DBRequest) {

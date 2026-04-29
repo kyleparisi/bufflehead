@@ -177,6 +177,10 @@ func (s *Session) readMessages(ctx context.Context) <-chan []byte {
 				}
 				return
 			}
+			// Any successful read proves the connection is alive —
+			// extend the deadline so active data transfer doesn't
+			// race with the idle timeout.
+			s.ws.SetReadDeadline(time.Now().Add(45 * time.Second))
 
 			if len(raw) < agentMsgHeaderLen+4 {
 				continue
@@ -212,12 +216,20 @@ func (s *Session) readMessages(ctx context.Context) <-chan []byte {
 	return ch
 }
 
-// startPings sends periodic WebSocket ping frames to prevent AWS from
-// dropping idle connections. Uses WriteControl which is safe to call
-// concurrently with WriteMessage per gorilla/websocket docs.
-func (s *Session) startPings(ctx context.Context) {
+// startPings sends periodic WebSocket ping frames to keep the connection
+// alive and detect dead connections quickly. A pong handler resets the
+// read deadline; if no pong arrives within 45s the read loop will fail
+// and trigger a tunnel reconnect.
+func (s *Session) startPings(ctx context.Context, cancel context.CancelCauseFunc) {
+	// Set initial read deadline; the pong handler extends it.
+	s.ws.SetReadDeadline(time.Now().Add(45 * time.Second))
+	s.ws.SetPongHandler(func(string) error {
+		s.ws.SetReadDeadline(time.Now().Add(45 * time.Second))
+		return nil
+	})
+
 	go func() {
-		ticker := time.NewTicker(5 * time.Minute)
+		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 		for {
 			select {
@@ -225,6 +237,7 @@ func (s *Session) startPings(ctx context.Context) {
 				deadline := time.Now().Add(10 * time.Second)
 				if err := s.ws.WriteControl(websocket.PingMessage, []byte("keepalive"), deadline); err != nil {
 					log.Printf("ssm: ping error: %v", err)
+					cancel(fmt.Errorf("websocket ping failed: %w", err))
 					return
 				}
 			case <-ctx.Done():
@@ -242,7 +255,7 @@ func (s *Session) PortForward(ctx context.Context, localPort int, onReady func()
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 
-	s.startPings(ctx)
+	s.startPings(ctx, cancel)
 
 	// Create a pipe to bridge smux ↔ SSM data channel
 	ssmSide, muxSide := net.Pipe()

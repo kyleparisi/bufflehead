@@ -2448,6 +2448,11 @@ func (a *App) pollResults() {
 				if conn.Gateway.LastTunnelMsg != "" {
 					conn.Gateway.LastTunnelMsg = ""
 					w.statusBar.SetStatus("Reconnected")
+					// Reset the Postgres pool so the next query uses a fresh
+					// connection through the rebuilt tunnel instead of a stale one.
+					if pgConn, ok := conn.DB.(*db.PostgresDB); ok {
+						pgConn.ResetPool()
+					}
 					// Restore normal button theme
 					if w.activeConnIdx < len(w.connections) && w.connections[w.activeConnIdx] == conn {
 						applyActiveButtonTheme(conn.button.AsControl())

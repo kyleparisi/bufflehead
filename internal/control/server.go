@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
-	"time"
 )
 
 // Command represents an action to execute on the main thread.
@@ -305,7 +304,23 @@ func buildMux(s *Server) *http.ServeMux {
 		json.NewEncoder(w).Encode(result)
 	})
 
+	// Limit to 2 concurrent /sql requests (1 processing + 1 queued).
+	// Additional requests get 429 so agents back off instead of
+	// flooding the worker queue and starving UI operations.
+	sqlSem := make(chan struct{}, 2)
+
 	mux.HandleFunc("POST /sql", func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case sqlSem <- struct{}{}:
+			defer func() { <-sqlSem }()
+		default:
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Retry-After", "5")
+			w.WriteHeader(429)
+			json.NewEncoder(w).Encode(SQLResult{Error: "too many concurrent SQL requests, retry later"})
+			return
+		}
+
 		s.mu.Lock()
 		executor := s.sqlExecutor
 		s.mu.Unlock()
@@ -334,9 +349,9 @@ func buildMux(s *Server) *http.ServeMux {
 			req.Limit = 100
 		}
 
-		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-		defer cancel()
-		result, err := executor(ctx, req.Connection, req.SQL, req.Limit)
+		// No server-side timeout — the agent manages its own timeouts
+		// by disconnecting, which baseCtx detects and cancels the query.
+		result, err := executor(r.Context(), req.Connection, req.SQL, req.Limit)
 		w.Header().Set("Content-Type", "application/json")
 		if err != nil {
 			w.WriteHeader(400)
