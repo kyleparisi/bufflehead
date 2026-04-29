@@ -19,10 +19,11 @@ import (
 	"github.com/xtaci/smux"
 )
 
-// relayBufferSize matches smux DefaultConfig MaxFrameSize (32KB).
-// Using a buffer this size means each smux frame fits in a single SSM
-// message, reducing reassembly errors on the remote side.
-const relayBufferSize = 32768
+// relayBufferSize must match the SSM agent's StreamDataPayloadSize (1024).
+// The agent expects each input_stream_data message to carry at most 1024
+// bytes of payload. Larger messages may be silently dropped or truncated,
+// causing TLS handshake timeouts and data corruption over the tunnel.
+const relayBufferSize = 1024
 
 // Session manages a WebSocket connection to the SSM service for port forwarding.
 type Session struct {
@@ -284,7 +285,10 @@ func (s *Session) PortForward(ctx context.Context, localPort int, onReady func()
 		}
 	}()
 
-	// pipe → SSM: read from the pipe and send as SSM data messages
+	// pipe → SSM: read from the pipe and send as SSM data messages.
+	// Each chunk is at most 1024 bytes to match the SSM agent's expected
+	// StreamDataPayloadSize. A 1ms pause between sends matches the
+	// official session-manager-plugin's throttling behavior.
 	go func() {
 		buf := make([]byte, relayBufferSize)
 		for {
@@ -295,6 +299,7 @@ func (s *Session) PortForward(ctx context.Context, localPort int, onReady func()
 					cancel(fmt.Errorf("sendData: %w", sendErr))
 					return
 				}
+				time.Sleep(time.Millisecond)
 			}
 			if err != nil {
 				return
