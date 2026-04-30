@@ -1,25 +1,29 @@
 package aws
 
 import (
-	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"os"
-	"os/exec"
 	"strconv"
-	"strings"
+	"time"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	"github.com/kyleparisi/session-manager-plugin/src/datachannel"
+	ssmlog "github.com/kyleparisi/session-manager-plugin/src/log"
+	"github.com/kyleparisi/session-manager-plugin/src/sessionmanagerplugin/session"
+	_ "github.com/kyleparisi/session-manager-plugin/src/sessionmanagerplugin/session/portsession"
+	"github.com/twinj/uuid"
 )
 
 // PortForwardSession opens an SSM session and runs port forwarding using
-// the official session-manager-plugin binary. Blocks until ctx is cancelled
-// or the plugin exits. The onReady callback is called when the local port
-// is listening. The statusFunc callback receives progress updates (may be nil).
+// the official session-manager-plugin library (imported as a Go dependency).
+// Blocks until ctx is cancelled or the session exits.
+// The onReady callback is called when the local port is listening.
+// The statusFunc callback receives progress updates (may be nil).
 func PortForwardSession(ctx context.Context, cfg awssdk.Config, target, host string, remotePort, localPort int, onReady func(), statusFunc func(string)) error {
 	docName := "AWS-StartPortForwardingSession"
 	params := map[string][]string{
@@ -49,108 +53,107 @@ func PortForwardSession(ctx context.Context, cfg awssdk.Config, target, host str
 		return errors.New("StartSession response missing StreamUrl or TokenValue")
 	}
 
-	// Build the session response JSON for the plugin.
-	sessionResp, err := json.Marshal(map[string]string{
-		"SessionId":  awssdk.ToString(out.SessionId),
-		"TokenValue": *out.TokenValue,
-		"StreamUrl":  *out.StreamUrl,
-	})
-	if err != nil {
-		return fmt.Errorf("marshal session response: %w", err)
+	if statusFunc != nil {
+		statusFunc("Launching port forwarding session...")
 	}
 
-	// Build the StartSession input JSON (parameters arg for the plugin).
-	inputJSON, err := json.Marshal(input)
-	if err != nil {
-		return fmt.Errorf("marshal start session input: %w", err)
-	}
+	// Skip the plugin's own credential lookup — we already have credentials
+	// from the caller's AWS config.
+	os.Setenv("SSM_PLUGIN_SKIP_CLIENT_CONFIGURE", "true")
+	defer os.Unsetenv("SSM_PLUGIN_SKIP_CLIENT_CONFIGURE")
 
-	// SSM service endpoint for this region.
+	uuid.SwitchFormat(uuid.FormatHex)
+
 	endpoint := fmt.Sprintf("https://ssm.%s.amazonaws.com", cfg.Region)
 
-	if statusFunc != nil {
-		statusFunc("Launching session-manager-plugin...")
+	sess := &session.Session{
+		SessionId:             awssdk.ToString(out.SessionId),
+		StreamUrl:             awssdk.ToString(out.StreamUrl),
+		TokenValue:            awssdk.ToString(out.TokenValue),
+		Region:                cfg.Region,
+		TargetId:              target,
+		ClientId:              uuid.NewV4().String(),
+		Endpoint:              endpoint,
+		IsAwsCliUpgradeNeeded: false,
+		DataChannel:           &datachannel.DataChannel{},
+		SessionProperties: map[string]interface{}{
+			"portNumber":          strconv.Itoa(remotePort),
+			"localPortNumber":     strconv.Itoa(localPort),
+			"type":                "LocalPortForwarding",
+			"localConnectionType": "tcp",
+		},
 	}
 
-	// Use the env var approach to avoid leaking tokens on the command line.
-	cmd := exec.CommandContext(ctx, "session-manager-plugin",
-		"AWS_SSM_START_SESSION_RESPONSE",
-		cfg.Region,
-		"StartSession",
-		"", // profile — empty, we already have credentials
-		string(inputJSON),
-		endpoint,
-	)
-	cmd.Env = append(os.Environ(), "AWS_SSM_START_SESSION_RESPONSE="+string(sessionResp))
+	logger := ssmlog.Logger(false, "ssm-plugin")
 
-	// Capture stdout to detect when the port is ready.
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return fmt.Errorf("stdout pipe: %w", err)
-	}
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("start session-manager-plugin: %w", err)
-	}
-
-	// Watch stdout for the "Waiting for connections" line that signals readiness.
-	readyCh := make(chan struct{})
-	exitCh := make(chan error, 1)
+	// Run the session in a goroutine so we can monitor for readiness
+	// and handle context cancellation.
+	errCh := make(chan error, 1)
+	doneCh := make(chan struct{})
 	go func() {
-		scanner := bufio.NewScanner(stdout)
-		readyFired := false
-		for scanner.Scan() {
-			line := scanner.Text()
-			log.Printf("ssm-plugin: %s", line)
-			if !readyFired && strings.Contains(line, "Waiting for connections") {
-				readyFired = true
+		errCh <- sess.Execute(logger)
+		close(doneCh)
+	}()
+
+	// Wait for the local port to start listening (indicates the session is ready).
+	readyCh := make(chan struct{})
+	go func() {
+		addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(localPort))
+		for {
+			conn, err := net.DialTimeout("tcp", addr, 500*time.Millisecond)
+			if err == nil {
+				conn.Close()
 				close(readyCh)
-				if onReady != nil {
-					onReady()
-				}
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-doneCh:
+				// Session exited before port was ready — don't keep polling
+				return
+			case <-time.After(200 * time.Millisecond):
 			}
 		}
 	}()
 
-	// Wait for process exit in the background so we can detect early crashes.
-	go func() {
-		exitCh <- cmd.Wait()
-	}()
-
-	// Wait for either readiness, early exit, or cancellation.
+	// Wait for readiness, early exit, or cancellation.
 	select {
 	case <-readyCh:
-		// Port is ready, plugin is running.
 		if statusFunc != nil {
 			statusFunc(fmt.Sprintf("Tunnel open on port %d", localPort))
 		}
-		log.Printf("ssm: port forwarding ready on port %d via session-manager-plugin", localPort)
-	case err := <-exitCh:
-		// Plugin exited before becoming ready.
-		if err != nil {
-			return fmt.Errorf("session-manager-plugin exited before ready: %w", err)
+		log.Printf("ssm: port forwarding ready on port %d", localPort)
+		if onReady != nil {
+			onReady()
 		}
-		return errors.New("session-manager-plugin exited before ready")
+	case err := <-errCh:
+		if err != nil {
+			return fmt.Errorf("session exited before ready: %w", err)
+		}
+		return errors.New("session exited before ready")
 	case <-ctx.Done():
-		_ = cmd.Process.Kill()
-		<-exitCh
+		sess.Stop()
 		return ctx.Err()
 	}
 
-	// Block until the plugin exits or context is cancelled.
+	// Block until the session exits or context is cancelled.
 	select {
-	case err := <-exitCh:
+	case err := <-errCh:
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 		if err != nil {
-			return fmt.Errorf("session-manager-plugin exited: %w", err)
+			return fmt.Errorf("session exited: %w", err)
 		}
 		return nil
 	case <-ctx.Done():
-		_ = cmd.Process.Kill()
-		<-exitCh
+		sess.Stop()
+		// Drain the error channel to let the goroutine finish.
+		select {
+		case <-errCh:
+		case <-time.After(5 * time.Second):
+		}
 		return ctx.Err()
 	}
 }
