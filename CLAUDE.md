@@ -68,9 +68,12 @@ Components expose public callback functions (e.g., `OnColumnsChanged`, `OnColumn
 
 ## Creating Releases
 
-Build the app, then create a DMG and GitHub release:
+Build the app, then create a styled DMG and GitHub release:
 ```bash
-GOOS=macos gd build ./cmd/viewer
-hdiutil create -volname "Bufflehead" -srcfolder releases/darwin/universal/Bufflehead.app -ov -format UDZO /tmp/Bufflehead.dmg
-gh release create vX.Y.Z /tmp/Bufflehead.dmg --title "vX.Y.Z" --notes "..."
+./bin/release-dmg
+gh release create vX.Y.Z releases/Bufflehead.dmg --title "vX.Y.Z" --notes "..."
 ```
+
+Notes:
+- The DMG uses `packaging/dmg/settings.py` and `packaging/dmg/background.jpg` for the background image, icon positions, and `/Applications` symlink.
+- If needed, install the packager with `python3 -m pip install --user dmgbuild`.

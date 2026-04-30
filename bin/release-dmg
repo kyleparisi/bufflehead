@@ -1,11 +1,14 @@
 #!/bin/bash
-# Build the macOS app and package it as a DMG.
+# Build the macOS app and package it as a styled DMG.
 # Usage: ./bin/release-dmg
-set -e
+set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP="$ROOT/releases/darwin/universal/Bufflehead.app"
 DMG="$ROOT/releases/Bufflehead.dmg"
+SETTINGS="$ROOT/packaging/dmg/settings.py"
+
+cd "$ROOT"
 
 echo "Building macOS app..."
 GOOS=macos gd build ./cmd/viewer
@@ -15,8 +18,15 @@ if [ ! -d "$APP" ]; then
     exit 1
 fi
 
-echo "Creating DMG..."
-hdiutil create -volname "Bufflehead" -srcfolder "$APP" -ov -format UDZO "$DMG"
+if ! python3 -c 'import dmgbuild' >/dev/null 2>&1; then
+    echo "Error: python package 'dmgbuild' is required to create the styled DMG." >&2
+    echo "Install it with: python3 -m pip install --user dmgbuild" >&2
+    exit 1
+fi
+
+echo "Creating styled DMG..."
+rm -f "$DMG"
+python3 -m dmgbuild -s "$SETTINGS" "Bufflehead" "$DMG"
 
 echo "Done: $DMG"
 ls -lh "$DMG"
