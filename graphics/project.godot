@@ -14,7 +14,7 @@ config/icon="res://icon.png"
 run/main_scene="res://main.tscn"
 run/main_loop_type="GoMainLoop"
 run/low_processor_mode=true
-run/low_processor_mode_sleep_usec=16000
+run/low_processor_mode_sleep_usec=33333
 
 [display]
 window/size/viewport_width=1440

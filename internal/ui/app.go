@@ -1823,7 +1823,6 @@ func (a *App) activeWindow() *AppWindow {
 }
 
 func (a *App) Ready() {
-	initScale()
 	a.history = models.NewQueryHistory()
 	a.pendingInit = true
 }
