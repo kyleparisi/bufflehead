@@ -30,6 +30,9 @@ textures/vram_compression/import_etc2_astc=true
 viewport/transparent_background=true
 environment/defaults/default_clear_color=Color(0, 0, 0, 0)
 
+[audio]
+driver/driver="Dummy"
+
 [physics]
 common/physics_ticks_per_second=1
 common/enable_pause_aware_picking=false
