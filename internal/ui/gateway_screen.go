@@ -114,6 +114,7 @@ type gatewayCard struct {
 	loginErr    string
 	loginLog    string
 	connected   bool
+	connecting  bool
 	fromForm    bool // true if created from inline form (no statusDot/logLbl/actionBtn)
 }
 
@@ -1382,6 +1383,7 @@ func (g *GatewayScreen) onCardAction(idx int) {
 		card.statusDot.AsControl().AddThemeColorOverride("font_color", colorStatusYellow)
 		card.actionBtn.SetText("Connecting...")
 		card.actionBtn.AsBaseButton().SetDisabled(true)
+		card.connecting = true
 		card.loginLog = ""
 		card.logLbl.SetText("")
 		card.logLbl.AsCanvasItem().SetVisible(true)
@@ -1653,6 +1655,7 @@ func (g *GatewayScreen) Process(delta Float.X) {
 
 		if card.loginErr != "" {
 			errMsg := "Error: " + card.loginErr
+			card.connecting = false
 			if card.fromForm {
 				g.formStatus.SetText(errMsg)
 				g.formStatus.AsControl().AddThemeColorOverride("font_color", colorStatusRed)
@@ -1667,6 +1670,7 @@ func (g *GatewayScreen) Process(delta Float.X) {
 		}
 
 		if card.connected {
+			card.connecting = false
 			if card.fromForm {
 				g.formStatus.SetText("Connected!")
 				g.formStatus.AsControl().AddThemeColorOverride("font_color", colorStatusGreen)
@@ -1700,7 +1704,7 @@ func (g *GatewayScreen) Process(delta Float.X) {
 		}
 
 		// Only update saved-gateway cards (form cards don't have these nodes)
-		if card.fromForm {
+		if card.fromForm || card.connecting {
 			continue
 		}
 
