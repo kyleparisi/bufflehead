@@ -28,6 +28,10 @@ func main() {
 	if tree, ok := Object.As[SceneTree.Instance](Engine.GetMainLoop()); ok {
 		if root := tree.Root(); root != Window.Nil {
 			root.SetTitle("Bufflehead")
+			scale := DisplayServer.ScreenGetScale()
+			if scale > 1 {
+				root.SetContentScaleFactor(scale)
+			}
 		}
 	}
 
