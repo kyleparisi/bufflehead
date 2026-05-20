@@ -117,6 +117,12 @@ func PortForwardSession(ctx context.Context, cfg awssdk.Config, target, host str
 		}
 	}()
 
+	// stopSession closes the data channel without calling sess.Stop(),
+	// which would call os.Exit(0) and kill the entire process.
+	stopSession := func() {
+		sess.DataChannel.Close(logger)
+	}
+
 	// Wait for readiness, early exit, or cancellation.
 	select {
 	case <-readyCh:
@@ -133,7 +139,7 @@ func PortForwardSession(ctx context.Context, cfg awssdk.Config, target, host str
 		}
 		return errors.New("session exited before ready")
 	case <-ctx.Done():
-		sess.Stop()
+		stopSession()
 		return ctx.Err()
 	}
 
@@ -148,7 +154,7 @@ func PortForwardSession(ctx context.Context, cfg awssdk.Config, target, host str
 		}
 		return nil
 	case <-ctx.Done():
-		sess.Stop()
+		stopSession()
 		// Drain the error channel to let the goroutine finish.
 		select {
 		case <-errCh:

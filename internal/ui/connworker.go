@@ -192,7 +192,7 @@ func (cw *ConnWorker) handle(req DBRequest) {
 	// SSM tunnels can drop and reconnect, so retry with backoff to give
 	// the tunnel time to re-establish (tunnel backoff is 1s, 2s, 4s, 8s...).
 	var err error
-	const maxHealthRetries = 4
+	const maxHealthRetries = 6
 	for retries := 0; retries < maxHealthRetries; retries++ {
 		if retries > 0 {
 			if pgConn, ok := cw.db.(*db.PostgresDB); ok {

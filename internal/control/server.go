@@ -51,6 +51,11 @@ type ResizeData struct {
 	Scale  float64 `json:"scale,omitempty"`
 }
 
+// CloseConnectionData is the payload for the "close_connection" action.
+type CloseConnectionData struct {
+	Index int `json:"index"`
+}
+
 // SQLRequest is the payload for the direct /sql endpoint.
 type SQLRequest struct {
 	SQL        string `json:"sql"`
@@ -215,6 +220,10 @@ func buildMux(s *Server) *http.ServeMux {
 
 	mux.HandleFunc("POST /nav-forward", func(w http.ResponseWriter, r *http.Request) {
 		s.handleCommand(w, r, "nav_forward")
+	})
+
+	mux.HandleFunc("POST /close-connection", func(w http.ResponseWriter, r *http.Request) {
+		s.handleCommand(w, r, "close_connection")
 	})
 
 	mux.HandleFunc("GET /screenshot", func(w http.ResponseWriter, r *http.Request) {

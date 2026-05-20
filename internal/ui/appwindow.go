@@ -994,6 +994,11 @@ func (w *AppWindow) closeConnection(idx int) {
 		}
 	}
 
+	// Ensure at least one tab exists so the app stays usable
+	if len(w.tabs) == 0 {
+		w.addNewTab()
+	}
+
 	// Fix activeConnIdx
 	if w.activeConnIdx == idx {
 		w.activeConnIdx = 0
@@ -1002,13 +1007,10 @@ func (w *AppWindow) closeConnection(idx int) {
 		w.activeConnIdx--
 	}
 
-	// Hide rail if only memory connection remains
-	if len(w.connections) <= 1 {
-		w.connRailWrap.AsCanvasItem().SetVisible(false)
-	}
-
-	// Clear AI prompt if it was from this connection
+	// Reset title bar to memory connection
+	w.titleBar.SetFileInfo("")
 	w.titleBar.SetAIPrompt("")
+
 }
 
 // findTab returns the tabState with the given tabID, or nil if not found.

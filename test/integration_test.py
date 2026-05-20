@@ -463,3 +463,61 @@ class TestMultiRowSelect:
         """Out-of-range index in multi-select returns an error."""
         result = post("select-row", {"rows": [0, 999]})
         assert result.get("ok") is not True
+
+
+class TestCloseConnection:
+    """Test that closing a non-memory connection keeps the app alive."""
+
+    def setup_method(self):
+        close_all_tabs()
+        post("new-tab")
+        time.sleep(0.3)
+
+    def test_close_connection_keeps_memory_alive(self):
+        """Closing a DuckDB connection should leave the memory connection usable."""
+        s = state()
+        assert s["connectionCount"] == 1
+
+        result = open_file(DUCKDB)
+        assert result["ok"] is True
+        s = state()
+        assert s["connectionCount"] == 2
+
+        result = post("close-connection", {"index": 1})
+        assert result["ok"] is True
+        time.sleep(0.3)
+
+        s = state()
+        assert s["connectionCount"] == 1
+        assert s["tabCount"] >= 1
+
+        # Verify memory connection still works
+        result = open_file(SAMPLE)
+        assert result["ok"] is True
+        s = state()
+        assert s["rowCount"] == 500
+
+    def test_sidebar_renders_after_close(self):
+        """Side nav (schema panel, split container) is visible after closing a connection."""
+        result = open_file(DUCKDB)
+        assert result["ok"] is True
+
+        post("close-connection", {"index": 1})
+        time.sleep(0.3)
+
+        tree = ui_tree()
+        assert find_node(tree, "SchemaPanel") is not None, "SchemaPanel should exist after closing connection"
+
+        split = find_node(tree, "HSplitContainer")
+        assert split is not None, "HSplitContainer should exist after closing connection"
+        assert split["props"].get("visible") != "false", "HSplitContainer should be visible"
+
+    def test_close_memory_connection_rejected(self):
+        """Index 0 (memory connection) cannot be closed."""
+        result = post("close-connection", {"index": 0})
+        assert result.get("ok") is not True
+
+    def test_close_invalid_index_rejected(self):
+        """Out-of-bounds index is rejected."""
+        result = post("close-connection", {"index": 99})
+        assert result.get("ok") is not True

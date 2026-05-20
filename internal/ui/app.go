@@ -2179,9 +2179,10 @@ func (a *App) updateCachedState() {
 		return
 	}
 	state := map[string]any{
-		"tabCount":    len(w.tabs),
-		"activeTab":   w.activeTab,
-		"windowCount": len(a.secondWins),
+		"tabCount":        len(w.tabs),
+		"activeTab":       w.activeTab,
+		"windowCount":     len(a.secondWins),
+		"connectionCount": len(w.connections),
 	}
 	if a.mainWin != nil {
 		state["windowCount"] = 1 + len(a.secondWins)
@@ -2568,6 +2569,19 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 
 	case "close_tab":
 		w.closeTab(w.activeTab)
+		cmd.Respond(control.Result{OK: true})
+
+	case "close_connection":
+		var d control.CloseConnectionData
+		if err := json.Unmarshal(cmd.Data, &d); err != nil {
+			cmd.Respond(control.Result{Error: err.Error()})
+			return
+		}
+		if d.Index <= 0 || d.Index >= len(w.connections) {
+			cmd.Respond(control.Result{Error: "invalid connection index"})
+			return
+		}
+		w.closeConnection(d.Index)
 		cmd.Respond(control.Result{OK: true})
 
 	case "select_row":
