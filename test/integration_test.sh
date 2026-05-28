@@ -3,8 +3,6 @@
 # Usage: ./test/integration_test.sh
 set -e
 
-PORT=9900
-
 # Locate Godot: respect $GODOT, then check $GDPATH/~/gd, then $PATH.
 if [ -z "$GODOT" ]; then
     GDPATH="${GDPATH:-$HOME/gd}"
@@ -18,12 +16,9 @@ if [ -z "$GODOT" ]; then
     fi
 fi
 
-# Kill any stale Godot processes holding port 9900
+# Kill any stale Godot processes
 pkill -9 -if godot 2>/dev/null || true
-for i in $(seq 1 10); do
-    curl -s http://127.0.0.1:$PORT/state >/dev/null 2>&1 || break
-    sleep 1
-done
+sleep 1
 
 # Build the dylib
 cd "$(dirname "$0")/.."
@@ -44,18 +39,35 @@ case "$(uname -s)" in
 esac
 echo "Build OK"
 
-# Start headless
+# Start headless and capture stdout to parse the dynamic port
+LOGFILE=$(mktemp)
 cd "$ROOT/graphics"
-$GODOT --headless &
+$GODOT --headless > "$LOGFILE" 2>&1 &
 PID=$!
-sleep 3
 
 cleanup() {
     kill $PID 2>/dev/null || true
     wait $PID 2>/dev/null || true
+    rm -f "$LOGFILE"
 }
 trap cleanup EXIT
 
-# Run pytest
+# Wait for the control server to print its port
+for i in $(seq 1 30); do
+    if grep -q "Control server:" "$LOGFILE" 2>/dev/null; then
+        break
+    fi
+    sleep 1
+done
+
+PORT=$(grep "Control server:" "$LOGFILE" | sed 's/.*127.0.0.1:\([0-9]*\).*/\1/')
+if [ -z "$PORT" ]; then
+    echo "Error: could not detect control server port" >&2
+    cat "$LOGFILE"
+    exit 1
+fi
+echo "Control server on port $PORT"
+
+# Run pytest with the dynamic port
 cd "$ROOT"
-python3 -m pytest test/integration_test.py -v "$@"
+CONTROL_PORT="$PORT" python3 -m pytest test/integration_test.py -v "$@"

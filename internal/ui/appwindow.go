@@ -90,6 +90,9 @@ type AppWindow struct {
 	gatewayLoadingLabel Label.Instance
 	gatewayLoadingMsg   string // set by background goroutine, read by Process
 
+	// Control server address for AI prompt
+	controlAddr string
+
 	// Callbacks
 	onNewWindow func()
 }
@@ -875,7 +878,7 @@ func (w *AppWindow) selectConnection(idx int) {
 	// Show/hide AI prompt copy button based on connection type
 	conn := w.connections[idx]
 	if conn.Gateway != nil {
-		w.titleBar.SetAIPrompt(buildAIPrompt(conn.Gateway.Config, conn.Tables))
+		w.titleBar.SetAIPrompt(buildAIPrompt(conn.Gateway.Config, conn.Tables, w.controlAddr))
 	} else {
 		w.titleBar.SetAIPrompt("")
 	}
@@ -1110,7 +1113,7 @@ func (w *AppWindow) handleOpenGatewayResult(res DBResult) {
 		w.titleBar.SetConnectionInfo("PostgreSQL", name, gw.Config.DBName)
 
 		// Build AI prompt with schema for the copy button
-		w.titleBar.SetAIPrompt(buildAIPrompt(gw.Config, tables))
+		w.titleBar.SetAIPrompt(buildAIPrompt(gw.Config, tables, w.controlAddr))
 	}
 
 	w.selectConnection(gwIdx)
@@ -1142,26 +1145,26 @@ func (w *AppWindow) handleRefreshResult(res DBResult) {
 
 	// Update AI prompt if this is the active connection
 	if idx == w.activeConnIdx && conn.Gateway != nil {
-		w.titleBar.SetAIPrompt(buildAIPrompt(conn.Gateway.Config, conn.Tables))
+		w.titleBar.SetAIPrompt(buildAIPrompt(conn.Gateway.Config, conn.Tables, w.controlAddr))
 	}
 
 	w.statusBar.SetStatus(fmt.Sprintf("Refreshed: %s (%d tables/views)", conn.Name, len(conn.Tables)))
 }
 
-func buildAIPrompt(entry models.GatewayEntry, tables []db.TableInfo) string {
+func buildAIPrompt(entry models.GatewayEntry, tables []db.TableInfo, controlAddr string) string {
 	connName := entry.Name
 
 	var b strings.Builder
 	b.WriteString("I have a PostgreSQL database you can query.\n")
 	b.WriteString(fmt.Sprintf("Database: %s\n", entry.DBName))
 	b.WriteString(fmt.Sprintf("\nRun queries via HTTP (no auth needed, Bufflehead manages the connection):\n"))
-	b.WriteString(fmt.Sprintf("  curl -s -X POST http://localhost:9900/sql -d '{\"sql\":\"SELECT * FROM table LIMIT 10\",\"connection\":\"%s\"}'\n", connName))
+	b.WriteString(fmt.Sprintf("  curl -s -X POST http://%s/sql -d '{\"sql\":\"SELECT * FROM table LIMIT 10\",\"connection\":\"%s\"}'\n", controlAddr, connName))
 	b.WriteString("\nResults are limited to 100 rows by default. Queries time out after 30 seconds.\n")
 	b.WriteString("Use indexed columns in WHERE clauses, avoid full table scans, and keep queries targeted.\n")
 	b.WriteString("\nResponse format: {\"columns\":[...],\"rows\":[[...],...],\"total\":N}\n")
 
 	b.WriteString("\nYou can also fetch S3 objects via HTTP:\n")
-	b.WriteString(fmt.Sprintf("  curl -s -X POST http://localhost:9900/s3/get-object -d '{\"bucket\":\"BUCKET\",\"key\":\"KEY\",\"connection\":\"%s\"}'\n", connName))
+	b.WriteString(fmt.Sprintf("  curl -s -X POST http://%s/s3/get-object -d '{\"bucket\":\"BUCKET\",\"key\":\"KEY\",\"connection\":\"%s\"}'\n", controlAddr, connName))
 	b.WriteString("\nResponse format: {\"content\":\"...\",\"content_type\":\"...\",\"size\":N,\"truncated\":BOOL}\n")
 	b.WriteString("\nSome columns may contain JSON with S3 pointers (e.g. {\"s3_key\": \"...\", \"s3_bucket\": \"...\"}).\n")
 	b.WriteString("When you encounter these, extract s3_bucket and s3_key from the JSON and use the S3 endpoint to fetch the object contents.\n")

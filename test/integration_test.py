@@ -1,15 +1,18 @@
 """Integration tests — drives the app via the control API.
 
-Requires the app to be running headless on port 9900.
+Requires the app to be running headless. The control server port is dynamic;
+set CONTROL_PORT env var or default to 9900 for manual runs.
 Run via: test/integration_test.sh (which builds, launches Godot, then runs pytest)
 """
+import os
 import re
 import time
 from pathlib import Path
 
 import requests
 
-BASE_URL = "http://127.0.0.1:9900"
+_PORT = os.environ.get("CONTROL_PORT", "9900")
+BASE_URL = f"http://127.0.0.1:{_PORT}"
 TESTDATA = Path(__file__).resolve().parent.parent / "testdata"
 SAMPLE = str(TESTDATA / "sample.parquet")
 CITIES = str(TESTDATA / "cities.parquet")

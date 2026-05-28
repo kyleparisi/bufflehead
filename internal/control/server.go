@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"strconv"
 	"sync"
@@ -106,15 +107,22 @@ type Server struct {
 	sqlExecutor   SQLExecutor
 	s3Executor    S3Executor
 	port          int
+	addr          string
 	mu            sync.Mutex
 }
 
-// New creates a control server on the given port.
+// New creates a control server on the given port. Use 0 for a random available port.
 func New(port int) *Server {
 	return &Server{
 		commands: make(chan *Command, 16),
 		port:     port,
 	}
+}
+
+// Addr returns the address the server is listening on (e.g. "127.0.0.1:54321").
+// Only valid after Start() has been called.
+func (s *Server) Addr() string {
+	return s.addr
 }
 
 // SetStateProvider sets the callback for GET /state.
@@ -376,10 +384,15 @@ func buildMux(s *Server) *http.ServeMux {
 // Start launches the HTTP server in a goroutine.
 func (s *Server) Start() {
 	mux := buildMux(s)
+	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", s.port))
+	if err != nil {
+		fmt.Printf("Control server error: %v\n", err)
+		return
+	}
+	s.addr = ln.Addr().String()
+	fmt.Printf("Control server: http://%s\n", s.addr)
 	go func() {
-		addr := fmt.Sprintf("127.0.0.1:%d", s.port)
-		fmt.Printf("Control server: http://%s\n", addr)
-		if err := http.ListenAndServe(addr, mux); err != nil {
+		if err := http.Serve(ln, mux); err != nil {
 			fmt.Printf("Control server error: %v\n", err)
 		}
 	}()

@@ -1831,6 +1831,9 @@ func (a *App) initMainWindow() {
 	if tree, ok := Object.As[SceneTree.Instance](Engine.GetMainLoop()); ok {
 		rootWin := tree.Root().AsWindow()
 		a.mainWin = createMainWindowFromRoot(rootWin, a.Duck, a.history, func() { a.newWindow() })
+		if a.ControlServer != nil {
+			a.mainWin.controlAddr = a.ControlServer.Addr()
+		}
 		a.mainWin.titleBar.WindowID = rootWin.GetWindowId()
 
 		a.mainWin.addNewTab()
@@ -2233,6 +2236,9 @@ func (a *App) updateCachedState() {
 
 func (a *App) newWindow() {
 	aw := createSecondaryWindow(a.Duck, a.history, func() { a.newWindow() })
+	if a.ControlServer != nil {
+		aw.controlAddr = a.ControlServer.Addr()
+	}
 	a.secondWins = append(a.secondWins, aw)
 
 	if tree, ok := Object.As[SceneTree.Instance](Engine.GetMainLoop()); ok {

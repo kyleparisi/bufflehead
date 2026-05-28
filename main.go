@@ -28,10 +28,6 @@ func main() {
 	if tree, ok := Object.As[SceneTree.Instance](Engine.GetMainLoop()); ok {
 		if root := tree.Root(); root != Window.Nil {
 			root.SetTitle("Bufflehead")
-			scale := DisplayServer.ScreenGetScale()
-			if scale > 1 {
-				root.SetContentScaleFactor(scale)
-			}
 		}
 	}
 
@@ -47,7 +43,7 @@ func main() {
 		log.Printf("gateway config: %v", err)
 	}
 
-	ctrlServer := control.New(9900)
+	ctrlServer := control.New(0)
 	ctrlServer.Start()
 
 	bookmarkStore := models.NewBookmarkStore()

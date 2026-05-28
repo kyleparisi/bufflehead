@@ -28,11 +28,12 @@ go test ./...
 ./test/integration_test.sh
 ```
 
-Integration tests use an HTTP control API on port 9900 to drive the app programmatically. The test suite is in `test/integration_test.py` (pytest). You can also interact with the control API manually:
+Integration tests use an HTTP control API to drive the app programmatically. The control server binds to a random available port (printed to stdout on startup as `Control server: http://127.0.0.1:<port>`). The test suite is in `test/integration_test.py` (pytest). You can also interact with the control API manually — check stdout for the port:
 
 ```bash
-curl -X POST http://localhost:9900/open -d '{"path":"testdata/sample.parquet"}'
-curl http://localhost:9900/state
+# port is printed to stdout, e.g. "Control server: http://127.0.0.1:54321"
+curl -X POST http://localhost:<port>/open -d '{"path":"testdata/sample.parquet"}'
+curl http://localhost:<port>/state
 ```
 
 Test data lives in `testdata/` (parquet, CSV, JSON, TSV, .duckdb files).
@@ -46,7 +47,7 @@ Test data lives in `testdata/` (parquet, CSV, JSON, TSV, .duckdb files).
 - `internal/db/` — DuckDB wrapper. `New()` creates in-memory DB, `OpenDB()` opens .duckdb files read-only. Handles schema inspection, paginated queries, and parquet metadata extraction.
 - `internal/models/` — `AppState` is the single source of truth per tab. Holds query text, schema, results, sort/pagination params, and a navigation stack (back/forward). `QueryHistory` persists query history to JSON in the user config dir.
 - `internal/ui/` — All Godot UI nodes implemented as Go extensions. `app.go` is the root node managing windows, menus, and keyboard shortcuts. `appwindow.go` manages tabs, sidebar, SQL panel, data grid, and row detail panel.
-- `internal/control/` — HTTP server (port 9900) exposing endpoints for programmatic control (`/open`, `/query`, `/sort`, `/page`, `/state`, `/screenshot`, `/ui-tree`, etc.). Primarily used by integration tests.
+- `internal/control/` — HTTP server (dynamic port, printed to stdout) exposing endpoints for programmatic control (`/open`, `/query`, `/sort`, `/page`, `/state`, `/screenshot`, `/ui-tree`, etc.). Primarily used by integration tests.
 
 **UI extension pattern** (graphics.gd):
 ```go
@@ -72,9 +73,8 @@ If the `gopls` and `godoc` MCP servers are available, use them for Go workspace 
 
 ## Creating Releases
 
-Build the app, then create a DMG and GitHub release:
+Build the app and create a styled DMG, then publish a GitHub release:
 ```bash
-GOOS=macos gd build ./cmd/viewer
-hdiutil create -volname "Bufflehead" -srcfolder releases/darwin/universal/Bufflehead.app -ov -format UDZO /tmp/Bufflehead.dmg
-gh release create vX.Y.Z /tmp/Bufflehead.dmg --title "vX.Y.Z" --notes "..."
+./bin/release-dmg
+gh release create vX.Y.Z releases/Bufflehead.dmg --title "vX.Y.Z" --notes "..."
 ```
