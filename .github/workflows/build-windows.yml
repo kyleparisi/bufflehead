@@ -25,6 +25,29 @@ jobs:
         env:
           GOOS: windows
 
+      # Godot's modify_resources step silently skips icon/metadata embedding
+      # when rcedit isn't configured, so embed them explicitly here. ImageMagick
+      # is preinstalled on windows-latest; rcedit is fetched from its release.
+      - name: Embed icon and metadata
+        shell: pwsh
+        run: |
+          $exe = "releases/windows/amd64/Bufflehead.exe"
+
+          # Build a multi-resolution .ico from the 1024px source PNG.
+          magick graphics/icon-1024.png -define icon:auto-resize=256,128,64,48,32,16 graphics/icon.ico
+
+          # Fetch rcedit.
+          Invoke-WebRequest -Uri "https://github.com/electron/rcedit/releases/download/v2.0.0/rcedit-x64.exe" -OutFile rcedit.exe
+
+          ./rcedit.exe "$exe" `
+            --set-icon graphics/icon.ico `
+            --set-version-string "ProductName" "Bufflehead" `
+            --set-version-string "FileDescription" "Bufflehead Parquet Viewer" `
+            --set-version-string "CompanyName" "Bufflehead.app" `
+            --set-version-string "LegalCopyright" "Copyright 2026 Bufflehead.app" `
+            --set-file-version "0.20.0.0" `
+            --set-product-version "0.20.0.0"
+
       - name: Upload exe
         uses: actions/upload-artifact@v4
         with:
