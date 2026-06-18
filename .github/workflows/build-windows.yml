@@ -1,0 +1,33 @@
+name: Build Windows
+
+# Builds the Windows .exe natively on a Windows runner. Cross-compiling from
+# macOS fails in graphics.gd's tooling, so this is the supported path for
+# producing Bufflehead.exe. Triggered manually (or by bin/release-exe).
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install gd CLI
+        run: go install graphics.gd/cmd/gd@release
+
+      - name: Build Windows executable
+        run: gd build ./cmd/viewer
+        env:
+          GOOS: windows
+
+      - name: Upload exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: Bufflehead-windows-amd64
+          path: releases/windows/amd64/Bufflehead.exe
+          if-no-files-found: error
