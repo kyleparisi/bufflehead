@@ -1,0 +1,59 @@
+#!/bin/bash
+# Build the Windows executable via GitHub Actions and download it locally.
+#
+# The exe cannot be cross-compiled from macOS (graphics.gd's tooling fails),
+# so this triggers the "Build Windows" workflow on a windows-latest runner,
+# waits for it to finish, and downloads Bufflehead.exe into releases/.
+#
+# Usage: ./bin/release-exe
+# Requires: gh CLI (authenticated).
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+WORKFLOW="build-windows.yml"
+OUT_DIR="$ROOT/releases/windows/amd64"
+EXE="$OUT_DIR/Bufflehead.exe"
+
+cd "$ROOT"
+
+if ! command -v gh >/dev/null 2>&1; then
+    echo "Error: the GitHub CLI 'gh' is required." >&2
+    echo "Install it from https://cli.github.com/ and run: gh auth login" >&2
+    exit 1
+fi
+
+BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+
+echo "Triggering Windows build on branch '$BRANCH'..."
+gh workflow run "$WORKFLOW" --ref "$BRANCH"
+
+# Give GitHub a moment to register the new run, then grab its ID.
+echo "Waiting for the run to start..."
+RUN_ID=""
+for _ in $(seq 1 30); do
+    RUN_ID="$(gh run list --workflow "$WORKFLOW" --branch "$BRANCH" \
+        --limit 1 --json databaseId --jq '.[0].databaseId' 2>/dev/null || true)"
+    [ -n "$RUN_ID" ] && break
+    sleep 2
+done
+
+if [ -z "$RUN_ID" ]; then
+    echo "Error: could not find the triggered workflow run." >&2
+    exit 1
+fi
+
+echo "Watching run $RUN_ID (this builds on a Windows runner; ~several minutes)..."
+gh run watch "$RUN_ID" --exit-status
+
+echo "Downloading exe..."
+mkdir -p "$OUT_DIR"
+rm -f "$EXE"
+gh run download "$RUN_ID" --name "Bufflehead-windows-amd64" --dir "$OUT_DIR"
+
+if [ ! -f "$EXE" ]; then
+    echo "Error: $EXE not found after download" >&2
+    exit 1
+fi
+
+echo "Done: $EXE"
+ls -lh "$EXE"
