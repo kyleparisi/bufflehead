@@ -25,20 +25,27 @@ fi
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 
 echo "Triggering Windows build on branch '$BRANCH'..."
+# Record existing run IDs first so we can distinguish the run WE trigger from
+# stale completed runs (gh run list --limit 1 may return an old run before the
+# new one registers).
+BEFORE="$(gh run list --workflow "$WORKFLOW" --branch "$BRANCH" \
+    --limit 50 --json databaseId --jq '.[].databaseId' 2>/dev/null || true)"
+
 gh workflow run "$WORKFLOW" --ref "$BRANCH"
 
-# Give GitHub a moment to register the new run, then grab its ID.
-echo "Waiting for the run to start..."
+# Poll until a run ID appears that wasn't present before the trigger.
+echo "Waiting for the new run to start..."
 RUN_ID=""
-for _ in $(seq 1 30); do
-    RUN_ID="$(gh run list --workflow "$WORKFLOW" --branch "$BRANCH" \
-        --limit 1 --json databaseId --jq '.[0].databaseId' 2>/dev/null || true)"
+for _ in $(seq 1 45); do
+    CURRENT="$(gh run list --workflow "$WORKFLOW" --branch "$BRANCH" \
+        --limit 50 --json databaseId --jq '.[].databaseId' 2>/dev/null || true)"
+    RUN_ID="$(comm -13 <(echo "$BEFORE" | sort) <(echo "$CURRENT" | sort) | head -1)"
     [ -n "$RUN_ID" ] && break
     sleep 2
 done
 
 if [ -z "$RUN_ID" ]; then
-    echo "Error: could not find the triggered workflow run." >&2
+    echo "Error: could not find the newly triggered workflow run." >&2
     exit 1
 fi
 
