@@ -20,10 +20,42 @@ jobs:
       - name: Install gd CLI
         run: go install graphics.gd/cmd/gd@release
 
+      # Use a current MinGW-w64 (binutils >= 2.43) so the c-shared DLL is laid
+      # out correctly. Go 1.25+ defaults to DWARF5 debug info, which older
+      # linkers mishandle -> a malformed PE that Windows rejects with
+      # "Error 193: not a valid Win32 application" (golang/go#75077,
+      # graphics.gd#224). gd only falls back to bundled Zig when CC is unset,
+      # so pointing CC/CXX at the fresh MinGW gcc takes over the compile.
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          install: mingw-w64-ucrt-x86_64-gcc
+          path-type: inherit
+
       - name: Build Windows executable
         run: gd build ./cmd/viewer
         env:
           GOOS: windows
+          CC: C:\msys64\ucrt64\bin\gcc.exe
+          CXX: C:\msys64\ucrt64\bin\g++.exe
+
+      # Fail loudly if the Go GDExtension DLL is malformed. A broken DLL makes
+      # Godot export "succeed" but the app dies at launch with
+      # "MainLoop type doesn't exist: GoMainLoop", so validate the PE here.
+      - name: Verify Go DLL is a valid Windows PE
+        shell: pwsh
+        run: |
+          $dll = "graphics/windows_amd64.dll"
+          if (-not (Test-Path $dll)) { throw "DLL not found at $dll" }
+          $bytes = [System.IO.File]::ReadAllBytes($dll)
+          if ($bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) { throw "DLL has no MZ header" }
+          $peOff = [BitConverter]::ToInt32($bytes, 0x3C)
+          if ($bytes[$peOff] -ne 0x50 -or $bytes[$peOff+1] -ne 0x45) { throw "DLL has no PE signature" }
+          $machine = [BitConverter]::ToUInt16($bytes, $peOff + 4)
+          if ($machine -ne 0x8664) { throw ("DLL machine is 0x{0:X} (expected 0x8664/amd64)" -f $machine) }
+          # Definitive check: ask Windows to actually load it.
+          $h = [Runtime.InteropServices.NativeLibrary]::Load((Resolve-Path $dll))
+          Write-Host "DLL loaded successfully (handle $h) - valid Win32 amd64 PE"
 
       # Godot's modify_resources step silently skips icon/metadata embedding
       # when rcedit isn't configured, so embed them explicitly here. ImageMagick
