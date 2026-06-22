@@ -22,50 +22,45 @@ jobs:
       - name: Install gd CLI
         run: go install graphics.gd/cmd/gd@release
 
-      # Install Zig: its bundled LLVM lld lays out the PE correctly (handles
-      # Go 1.25+ DWARF5) AND links go-duckdb's prebuilt lib, unlike the runner's
-      # default/old gcc (malformed PE -> "Error 193: not a valid Win32
-      # application", golang/go#75077, graphics.gd#224) or UCRT64 gcc 16
-      # (undefined __emutls refs against the prebuilt libduckdb.a).
-      - uses: mlugg/setup-zig@v2
+      - uses: msys2/setup-msys2@v2
         with:
-          version: 0.15.2
+          msystem: UCRT64
+          path-type: inherit
+          install: base-devel mingw-w64-ucrt-x86_64-binutils mingw-w64-ucrt-x86_64-winpthreads
 
-      # PROBE: gd+zig was producing an 'ar' archive (!<arch>) instead of a PE
-      # DLL (MZ). Build the c-shared lib ourselves a few ways and report the
-      # first bytes of each, so we can see which CC actually yields a real DLL.
-      - name: Probe c-shared output formats
-        shell: pwsh
-        continue-on-error: true
+      # Pin GCC 14.2.0. go-duckdb v1.8.5's prebuilt libduckdb.a was compiled
+      # with an emulated-TLS GCC (~14.2). On 2026-05-11 MSYS2's GCC 16 switched
+      # to native TLS and dropped __emutls_v._ZSt11__once_call /
+      # __ZSt15__once_callable from libstdc++, so GCC 16 can't link the prebuilt
+      # lib (undefined references). GCC 14.2 still has those emutls symbols.
+      # (Ref: msys2.org/news 2026-05-11, MINGW-packages#29272.)
+      - name: Install pinned GCC 14.2.0 (emutls)
+        shell: msys2 {0}
         run: |
-          $env:GOOS = "windows"; $env:GOARCH = "amd64"; $env:CGO_ENABLED = "1"
-          function FirstBytes($p) {
-            if (-not (Test-Path $p)) { return "MISSING" }
-            $b = [System.IO.File]::ReadAllBytes($p)[0..1]
-            return (-join ($b | ForEach-Object { [char]$_ })) + " (size=$((Get-Item $p).Length))"
-          }
+          base="https://repo.msys2.org/mingw/ucrt64"
+          curl -LO "$base/mingw-w64-ucrt-x86_64-gcc-libs-14.2.0-3-any.pkg.tar.zst"
+          curl -LO "$base/mingw-w64-ucrt-x86_64-gcc-14.2.0-3-any.pkg.tar.zst"
+          pacman -U --noconfirm \
+            mingw-w64-ucrt-x86_64-gcc-libs-14.2.0-3-any.pkg.tar.zst \
+            mingw-w64-ucrt-x86_64-gcc-14.2.0-3-any.pkg.tar.zst
+          gcc --version | head -1
+          echo "thread model: $(gcc -v 2>&1 | grep -i 'thread model')"
 
-          # A) zig wrapper with explicit -target (the documented workaround)
-          Set-Content -Path zcc.cmd -Value "@zig cc -target x86_64-windows-gnu %*"
-          $env:CC = "$PWD\zcc.cmd"
-          go build -buildmode=c-shared -o probe_zig_target.dll ./cmd/viewer 2>&1 | Select-Object -Last 5
-          Write-Host "A) zig -target  -> $(FirstBytes probe_zig_target.dll)"
+      # Resolve the pinned gcc/g++ paths and expose as CC/CXX so gd uses them
+      # instead of bundled Zig (which emitted an 'ar' archive, not a PE DLL).
+      - name: Set CC/CXX to pinned gcc
+        shell: msys2 {0}
+        run: |
+          echo "CC=$(cygpath -w "$(which gcc)")" >> "$GITHUB_ENV"
+          echo "CXX=$(cygpath -w "$(which g++)")" >> "$GITHUB_ENV"
 
-          # B) plain 'zig cc' (what gd's auto-path uses)
-          Set-Content -Path zcc2.cmd -Value "@zig cc %*"
-          $env:CC = "$PWD\zcc2.cmd"
-          go build -buildmode=c-shared -o probe_zig_plain.dll ./cmd/viewer 2>&1 | Select-Object -Last 5
-          Write-Host "B) zig plain    -> $(FirstBytes probe_zig_plain.dll)"
-
-      # Per graphics.gd#224: on Windows, gd prefers its Zig toolchain (whose
-      # LLVM linker handles Go 1.25+ DWARF5 correctly) ONLY when zig is on PATH
-      # and CC is unset. The runner's default gcc is too old and yields a
-      # malformed PE ("Error 193"). So: install zig, leave CC unset, let gd
-      # drive the compile. This is the maintainer-confirmed working recipe.
       - name: Build Windows executable
         run: gd build ./cmd/viewer
         env:
           GOOS: windows
+          # Statically link the C/C++ runtimes so the exe needs no MinGW DLLs
+          # on the user's machine.
+          CGO_LDFLAGS: "-static-libgcc -static-libstdc++ -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic"
 
       # Diagnostic: show what the build actually produced in graphics/, with
       # sizes and the first bytes of every windows DLL (Godot's export renames
