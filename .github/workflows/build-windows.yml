@@ -31,18 +31,15 @@ jobs:
         with:
           version: 0.15.2
 
+      # Per graphics.gd#224: on Windows, gd prefers its Zig toolchain (whose
+      # LLVM linker handles Go 1.25+ DWARF5 correctly) ONLY when zig is on PATH
+      # and CC is unset. The runner's default gcc is too old and yields a
+      # malformed PE ("Error 193"). So: install zig, leave CC unset, let gd
+      # drive the compile. This is the maintainer-confirmed working recipe.
       - name: Build Windows executable
         run: gd build ./cmd/viewer
         env:
           GOOS: windows
-          # gd skips its Zig fallback on a native Windows runner, so force Zig
-          # as the C compiler explicitly. -target ...-gnu matches the MinGW ABI
-          # go-duckdb's prebuilt static lib expects.
-          CC: zig cc -target x86_64-windows-gnu
-          CXX: zig c++ -target x86_64-windows-gnu
-          # Belt-and-suspenders: kill DWARF at the source (compiler) in addition
-          # to gd's linker-side -w, so no DWARF5 can reach the linker at all.
-          GOFLAGS: -gcflags=all=-dwarf=false
 
       # Fail loudly if the Go GDExtension DLL is malformed. A broken DLL makes
       # Godot export "succeed" but the app dies at launch with
