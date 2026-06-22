@@ -41,6 +41,20 @@ jobs:
         env:
           GOOS: windows
 
+      # Diagnostic: show what the build actually produced in graphics/, with
+      # sizes and the first bytes of every windows DLL (Godot's export renames
+      # windows_amd64.dll during hot-reload, which may leave a non-PE file).
+      - name: Diagnose DLL artifacts
+        shell: pwsh
+        run: |
+          Get-ChildItem graphics -Filter "*windows*" -Force | Format-Table Name,Length,LastWriteTime -Auto
+          Get-ChildItem graphics -Filter "*.dll" -Force | Format-Table Name,Length -Auto
+          foreach ($f in Get-ChildItem graphics -Include "*.dll","~*" -Recurse -Force -ErrorAction SilentlyContinue) {
+            $b = [System.IO.File]::ReadAllBytes($f.FullName)[0..1]
+            $sig = -join ($b | ForEach-Object { [char]$_ })
+            Write-Host ("{0,-30} {1,12} bytes  first2='{2}'" -f $f.Name, $f.Length, $sig)
+          }
+
       # Fail loudly if the Go GDExtension DLL is malformed. A broken DLL makes
       # Godot export "succeed" but the app dies at launch with
       # "MainLoop type doesn't exist: GoMainLoop", so validate the PE here.
