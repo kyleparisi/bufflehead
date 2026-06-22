@@ -31,6 +31,32 @@ jobs:
         with:
           version: 0.15.2
 
+      # PROBE: gd+zig was producing an 'ar' archive (!<arch>) instead of a PE
+      # DLL (MZ). Build the c-shared lib ourselves a few ways and report the
+      # first bytes of each, so we can see which CC actually yields a real DLL.
+      - name: Probe c-shared output formats
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $env:GOOS = "windows"; $env:GOARCH = "amd64"; $env:CGO_ENABLED = "1"
+          function FirstBytes($p) {
+            if (-not (Test-Path $p)) { return "MISSING" }
+            $b = [System.IO.File]::ReadAllBytes($p)[0..1]
+            return (-join ($b | ForEach-Object { [char]$_ })) + " (size=$((Get-Item $p).Length))"
+          }
+
+          # A) zig wrapper with explicit -target (the documented workaround)
+          Set-Content -Path zcc.cmd -Value "@zig cc -target x86_64-windows-gnu %*"
+          $env:CC = "$PWD\zcc.cmd"
+          go build -buildmode=c-shared -o probe_zig_target.dll ./cmd/viewer 2>&1 | Select-Object -Last 5
+          Write-Host "A) zig -target  -> $(FirstBytes probe_zig_target.dll)"
+
+          # B) plain 'zig cc' (what gd's auto-path uses)
+          Set-Content -Path zcc2.cmd -Value "@zig cc %*"
+          $env:CC = "$PWD\zcc2.cmd"
+          go build -buildmode=c-shared -o probe_zig_plain.dll ./cmd/viewer 2>&1 | Select-Object -Last 5
+          Write-Host "B) zig plain    -> $(FirstBytes probe_zig_plain.dll)"
+
       # Per graphics.gd#224: on Windows, gd prefers its Zig toolchain (whose
       # LLVM linker handles Go 1.25+ DWARF5 correctly) ONLY when zig is on PATH
       # and CC is unset. The runner's default gcc is too old and yields a
