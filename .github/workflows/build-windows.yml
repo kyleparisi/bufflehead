@@ -34,25 +34,32 @@ jobs:
       # __ZSt15__once_callable from libstdc++, so GCC 16 can't link the prebuilt
       # lib (undefined references). GCC 14.2 still has those emutls symbols.
       # (Ref: msys2.org/news 2026-05-11, MINGW-packages#29272.)
-      - name: Install pinned GCC 14.2.0 (emutls)
+      #
+      # We can't `pacman -U` the downgrade: 14.2.0 gcc-libs predates the
+      # `cc-libs` virtual that the installed mpfr/zstd/gettext now require. So
+      # extract the 14.2 toolchain into a side prefix and use it via CC/CXX,
+      # leaving the system packages (and their runtime libs) untouched.
+      - name: Install pinned GCC 14.2.0 (emutls) to side prefix
         shell: msys2 {0}
         run: |
+          set -e
           base="https://repo.msys2.org/mingw/ucrt64"
-          curl -LO "$base/mingw-w64-ucrt-x86_64-gcc-libs-14.2.0-3-any.pkg.tar.zst"
-          curl -LO "$base/mingw-w64-ucrt-x86_64-gcc-14.2.0-3-any.pkg.tar.zst"
-          pacman -U --noconfirm \
-            mingw-w64-ucrt-x86_64-gcc-libs-14.2.0-3-any.pkg.tar.zst \
-            mingw-w64-ucrt-x86_64-gcc-14.2.0-3-any.pkg.tar.zst
-          gcc --version | head -1
-          echo "thread model: $(gcc -v 2>&1 | grep -i 'thread model')"
-
-      # Resolve the pinned gcc/g++ paths and expose as CC/CXX so gd uses them
-      # instead of bundled Zig (which emitted an 'ar' archive, not a PE DLL).
-      - name: Set CC/CXX to pinned gcc
-        shell: msys2 {0}
-        run: |
-          echo "CC=$(cygpath -w "$(which gcc)")" >> "$GITHUB_ENV"
-          echo "CXX=$(cygpath -w "$(which g++)")" >> "$GITHUB_ENV"
+          prefix="/d/gcc142"
+          mkdir -p "$prefix"
+          for pkg in gcc-14.2.0-3 gcc-libs-14.2.0-3; do
+            curl -LO "$base/mingw-w64-ucrt-x86_64-$pkg-any.pkg.tar.zst"
+            tar -C "$prefix" --use-compress-program=zstd -xf "mingw-w64-ucrt-x86_64-$pkg-any.pkg.tar.zst"
+          done
+          # The package lays files under <prefix>/ucrt64/{bin,lib,...}
+          gccdir="$prefix/ucrt64"
+          "$gccdir/bin/gcc.exe" --version | head -1
+          "$gccdir/bin/gcc.exe" -v 2>&1 | grep -i 'thread model'
+          # Expose for later steps (Windows paths for Go's cgo).
+          echo "CC=$(cygpath -w "$gccdir/bin/gcc.exe")" >> "$GITHUB_ENV"
+          echo "CXX=$(cygpath -w "$gccdir/bin/g++.exe")" >> "$GITHUB_ENV"
+          # gcc 14.2 needs its own runtime libs (and binutils) ahead of the
+          # system gcc 16 on PATH so it links against the emutls libstdc++.
+          echo "$(cygpath -w "$gccdir/bin")" >> "$GITHUB_PATH"
 
       - name: Build Windows executable
         run: gd build ./cmd/viewer
