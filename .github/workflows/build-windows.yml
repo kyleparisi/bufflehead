@@ -44,14 +44,18 @@ jobs:
         run: |
           set -e
           base="https://repo.msys2.org/mingw/ucrt64"
-          prefix="/d/gcc142"
-          mkdir -p "$prefix"
+          gccdir="/d/gcc142"
+          # Start from a full copy of the working system sysroot (headers, CRT,
+          # winpthreads, binutils — all ABI-stable), then overlay the pinned
+          # gcc 14.2 compiler + its emutls runtime libs on top. This gives gcc
+          # 14.2 a complete sysroot (fixes "stddef.h: No such file") while only
+          # the libstdc++/compiler bits are downgraded.
+          cp -a /ucrt64 "$gccdir"
           for pkg in gcc-14.2.0-3 gcc-libs-14.2.0-3; do
-            curl -LO "$base/mingw-w64-ucrt-x86_64-$pkg-any.pkg.tar.zst"
-            tar -C "$prefix" --use-compress-program=zstd -xf "mingw-w64-ucrt-x86_64-$pkg-any.pkg.tar.zst"
+            curl -fLO "$base/mingw-w64-ucrt-x86_64-$pkg-any.pkg.tar.zst"
+            tar -C "$gccdir" --strip-components=1 --use-compress-program=zstd \
+              -xf "mingw-w64-ucrt-x86_64-$pkg-any.pkg.tar.zst" ucrt64
           done
-          # The package lays files under <prefix>/ucrt64/{bin,lib,...}
-          gccdir="$prefix/ucrt64"
           "$gccdir/bin/gcc.exe" --version | head -1
           "$gccdir/bin/gcc.exe" -v 2>&1 | grep -i 'thread model'
           # Expose for later steps (Windows paths for Go's cgo).
