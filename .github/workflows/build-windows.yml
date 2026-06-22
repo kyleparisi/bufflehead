@@ -34,12 +34,20 @@ jobs:
           install: mingw-w64-ucrt-x86_64-gcc
           path-type: inherit
 
+      # Resolve the actual gcc/g++ paths (msys2 install location is not fixed)
+      # and expose them as CC/CXX so gd uses native MinGW instead of Zig.
+      - name: Locate MinGW gcc
+        shell: msys2 {0}
+        run: |
+          echo "CC=$(cygpath -w "$(which gcc)")" >> "$GITHUB_ENV"
+          echo "CXX=$(cygpath -w "$(which g++)")" >> "$GITHUB_ENV"
+          gcc --version | head -1
+          echo "binutils ld: $(ld --version | head -1)"
+
       - name: Build Windows executable
         run: gd build ./cmd/viewer
         env:
           GOOS: windows
-          CC: C:\msys64\ucrt64\bin\gcc.exe
-          CXX: C:\msys64\ucrt64\bin\g++.exe
 
       # Fail loudly if the Go GDExtension DLL is malformed. A broken DLL makes
       # Godot export "succeed" but the app dies at launch with
