@@ -22,32 +22,27 @@ jobs:
       - name: Install gd CLI
         run: go install graphics.gd/cmd/gd@release
 
-      # Use a current MinGW-w64 (binutils >= 2.43) so the c-shared DLL is laid
-      # out correctly. Go 1.25+ defaults to DWARF5 debug info, which older
-      # linkers mishandle -> a malformed PE that Windows rejects with
-      # "Error 193: not a valid Win32 application" (golang/go#75077,
-      # graphics.gd#224). gd only falls back to bundled Zig when CC is unset,
-      # so pointing CC/CXX at the fresh MinGW gcc takes over the compile.
-      - uses: msys2/setup-msys2@v2
+      # Install Zig: its bundled LLVM lld lays out the PE correctly (handles
+      # Go 1.25+ DWARF5) AND links go-duckdb's prebuilt lib, unlike the runner's
+      # default/old gcc (malformed PE -> "Error 193: not a valid Win32
+      # application", golang/go#75077, graphics.gd#224) or UCRT64 gcc 16
+      # (undefined __emutls refs against the prebuilt libduckdb.a).
+      - uses: mlugg/setup-zig@v2
         with:
-          msystem: UCRT64
-          install: mingw-w64-ucrt-x86_64-gcc
-          path-type: inherit
-
-      # Resolve the actual gcc/g++ paths (msys2 install location is not fixed)
-      # and expose them as CC/CXX so gd uses native MinGW instead of Zig.
-      - name: Locate MinGW gcc
-        shell: msys2 {0}
-        run: |
-          echo "CC=$(cygpath -w "$(which gcc)")" >> "$GITHUB_ENV"
-          echo "CXX=$(cygpath -w "$(which g++)")" >> "$GITHUB_ENV"
-          gcc --version | head -1
-          echo "binutils ld: $(ld --version | head -1)"
+          version: 0.15.2
 
       - name: Build Windows executable
         run: gd build ./cmd/viewer
         env:
           GOOS: windows
+          # gd skips its Zig fallback on a native Windows runner, so force Zig
+          # as the C compiler explicitly. -target ...-gnu matches the MinGW ABI
+          # go-duckdb's prebuilt static lib expects.
+          CC: zig cc -target x86_64-windows-gnu
+          CXX: zig c++ -target x86_64-windows-gnu
+          # Belt-and-suspenders: kill DWARF at the source (compiler) in addition
+          # to gd's linker-side -w, so no DWARF5 can reach the linker at all.
+          GOFLAGS: -gcflags=all=-dwarf=false
 
       # Fail loudly if the Go GDExtension DLL is malformed. A broken DLL makes
       # Godot export "succeed" but the app dies at launch with
