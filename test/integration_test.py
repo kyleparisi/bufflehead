@@ -44,6 +44,13 @@ def close_all_tabs():
         time.sleep(0.1)
 
 
+def close_all_connections():
+    """Close every non-memory connection (index 0 is the in-memory DuckDB)."""
+    while state().get("connectionCount", 1) > 1:
+        post("close-connection", {"index": 1})
+        time.sleep(0.1)
+
+
 def open_file(path):
     result = post("open", {"path": path})
     wait()
@@ -472,6 +479,7 @@ class TestCloseConnection:
     """Test that closing a non-memory connection keeps the app alive."""
 
     def setup_method(self):
+        close_all_connections()
         close_all_tabs()
         post("new-tab")
         time.sleep(0.3)
@@ -524,3 +532,50 @@ class TestCloseConnection:
         """Out-of-bounds index is rejected."""
         result = post("close-connection", {"index": 99})
         assert result.get("ok") is not True
+
+
+class TestReconnect:
+    """Test the /reconnect endpoint's graceful error paths.
+
+    A full reconnect requires a live AWS gateway, which isn't available in CI,
+    so these cover the validation/feedback paths that don't need AWS.
+    """
+
+    def setup_method(self):
+        close_all_connections()
+        close_all_tabs()
+        post("new-tab")
+        time.sleep(0.3)
+
+    def test_reconnect_invalid_index_rejected(self):
+        """Out-of-bounds index returns an error, not a crash."""
+        result = post("reconnect", {"index": 99})
+        assert result.get("ok") is not True
+        assert "error" in result
+
+    def test_reconnect_memory_connection_rejected(self):
+        """Index 0 (in-memory DuckDB) is not a gateway; reconnect is rejected."""
+        result = post("reconnect", {"index": 0})
+        assert result.get("ok") is not True
+        assert "gateway" in result.get("error", "").lower()
+
+    def test_reconnect_unknown_connection_name(self):
+        """An unknown connection name returns a clear not-found error."""
+        result = post("reconnect", {"connection": "does-not-exist"})
+        assert result.get("ok") is not True
+        assert "not found" in result.get("error", "").lower()
+
+    def test_reconnect_non_gateway_duckdb_rejected(self):
+        """A local DuckDB connection can't be reconnected as a gateway."""
+        result = open_file(DUCKDB)
+        assert result["ok"] is True
+        s = state()
+        assert s["connectionCount"] == 2
+
+        result = post("reconnect", {"index": 1})
+        assert result.get("ok") is not True
+        assert "gateway" in result.get("error", "").lower()
+
+        # Clean up so the opened connection doesn't leak into later tests.
+        post("close-connection", {"index": 1})
+        time.sleep(0.2)

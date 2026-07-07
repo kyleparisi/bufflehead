@@ -164,7 +164,7 @@ func (t *TitleBar) Ready() {
 	applySecondaryButtonTheme(t.refreshBtn.AsControl())
 	t.refreshBtn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(28), 0))
 	t.refreshBtn.AsCanvasItem().SetVisible(false)
-	t.refreshBtn.AsControl().SetTooltipText("Refresh connection")
+	t.refreshBtn.AsControl().SetTooltipText("Reconnect (rebuild tunnel + connection)")
 	t.refreshBtn.AsBaseButton().OnPressed(func() {
 		if t.OnRefresh != nil {
 			t.OnRefresh()
@@ -2595,6 +2595,39 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 		}
 		w.closeConnection(d.Index)
 		cmd.Respond(control.Result{OK: true})
+
+	case "reconnect":
+		var d control.ReconnectData
+		hasData := len(cmd.Data) > 0
+		if hasData {
+			if err := json.Unmarshal(cmd.Data, &d); err != nil {
+				cmd.Respond(control.Result{Error: err.Error()})
+				return
+			}
+		}
+		var idx int
+		switch {
+		case d.Connection != "":
+			idx = -1
+			for i, c := range w.connections {
+				if c.Name == d.Connection {
+					idx = i
+					break
+				}
+			}
+			if idx < 0 {
+				cmd.Respond(control.Result{Error: fmt.Sprintf("connection %q not found", d.Connection)})
+				return
+			}
+		case !hasData:
+			// No payload at all → default to the active connection.
+			idx = w.activeConnIdx
+		default:
+			// An explicit index was provided (including 0).
+			idx = d.Index
+		}
+		// reconnectConnection validates idx and answers cmd (async on success).
+		w.reconnectConnection(idx, cmd)
 
 	case "select_row":
 		var d struct {

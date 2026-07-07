@@ -6,6 +6,7 @@ import (
 	"log"
 	"time"
 
+	bfaws "bufflehead/internal/aws"
 	"bufflehead/internal/control"
 	"bufflehead/internal/db"
 
@@ -22,6 +23,7 @@ const (
 	ReqOpenGateway                      // Open a Postgres gateway connection
 	ReqSQL                              // Raw SQL via /sql endpoint (synchronous response)
 	ReqRefresh                          // Re-fetch tables and schemas
+	ReqReconnect                        // Tear down and re-establish a gateway connection
 )
 
 // DBRequest is sent to a ConnWorker for processing.
@@ -67,6 +69,19 @@ type DBResult struct {
 	DBPath     string
 	UserSQL    string
 	VirtualSQL string
+	Reconnect  *ReconnectOutcome // for ReqReconnect
+}
+
+// ReconnectOutcome carries the result of a background reconnect attempt back to
+// the main thread, where the connection's live resources are swapped in.
+type ReconnectOutcome struct {
+	ConnIdx int
+	Steps   []control.ReconnectStep
+
+	// Populated on success so the main thread can swap them into the Connection.
+	Querier db.Querier
+	Tables  []db.TableInfo
+	Tunnel  *bfaws.TunnelManager
 }
 
 // ConnWorker owns a db.Querier handle and processes requests sequentially.

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
 
 	bfaws "bufflehead/internal/aws"
 	"bufflehead/internal/models"
@@ -1404,88 +1403,13 @@ func (g *GatewayScreen) startGatewayConnection(card *gatewayCard) {
 			card.needsUpdate = true
 		}
 
-		appendLog("Allocating port...")
-
-		// Auto-assign a free local port
-		localPort, err := bfaws.FindFreePort()
+		tunnel, updated, err := establishTunnel(auth, entry, appendLog)
 		if err != nil {
-			card.loginErr = "Port allocation: " + err.Error()
+			card.loginErr = err.Error()
 			card.needsUpdate = true
 			return
 		}
-		card.entry.LocalPort = localPort
-
-		appendLog("Resolving bastion instance...")
-
-		// Resolve instance ID
-		instanceID, err := auth.ResolveInstanceID(entry.InstanceID, entry.InstanceTags)
-		if err != nil {
-			card.loginErr = "Instance resolution: " + err.Error()
-			card.needsUpdate = true
-			return
-		}
-
-		appendLog("Starting SSM tunnel...")
-
-		// Start SSM tunnel — declare before closure so the callback can reference it
-		var tunnel *bfaws.TunnelManager
-		tunnel = bfaws.NewTunnelManager(func(status bfaws.TunnelStatus, msg string) {
-			if status == bfaws.TunnelConnecting {
-				appendLog(msg)
-			}
-		})
-
-		tunnelCfg := bfaws.TunnelConfig{
-			InstanceID: instanceID,
-			RDSHost:    entry.RDSHost,
-			RDSPort:    entry.RDSPort,
-			LocalPort:  localPort,
-			AWSProfile: entry.AWSProfile,
-			AWSRegion:  entry.AWSRegion,
-		}
-
-		// Set up instance resolver so reconnects can find a new bastion
-		// when spot instances rotate.
-		if len(entry.InstanceTags) > 0 {
-			// Tag-based: query EC2 for a running instance matching the tags
-			tunnelCfg.InstanceResolver = func() (string, error) {
-				return auth.ResolveInstanceID("", entry.InstanceTags)
-			}
-		} else {
-			// No tags: query SSM for any online instance. If there's
-			// exactly one, use it (typical for spot bastion setups).
-			tunnelCfg.InstanceResolver = func() (string, error) {
-				instances, err := auth.ListSSMInstances()
-				if err != nil {
-					return "", err
-				}
-				switch len(instances) {
-				case 0:
-					return "", fmt.Errorf("no online SSM instances found")
-				case 1:
-					return instances[0].InstanceID, nil
-				default:
-					return "", fmt.Errorf("%d SSM instances online — cannot auto-select bastion", len(instances))
-				}
-			}
-		}
-
-		err = tunnel.Start(tunnelCfg)
-		if err != nil {
-			card.loginErr = "Tunnel: " + err.Error()
-			card.needsUpdate = true
-			return
-		}
-
-		// Wait for tunnel readiness with timeout
-		if err := tunnel.WaitReady(60 * time.Second); err != nil {
-			card.loginErr = "Tunnel not ready: " + err.Error()
-			card.needsUpdate = true
-			tunnel.Stop()
-			return
-		}
-
-		appendLog("Tunnel connected")
+		card.entry.LocalPort = updated.LocalPort
 		card.tunnel = tunnel
 		card.connected = true
 		card.needsUpdate = true

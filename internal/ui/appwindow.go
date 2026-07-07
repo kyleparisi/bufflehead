@@ -940,16 +940,27 @@ func (w *AppWindow) showConnContextMenu(idx int) {
 	popup.AsWindow().Popup()
 }
 
-// refreshConnection re-fetches tables and schemas for a connection.
+// refreshConnection refreshes a connection. For remote gateway connections it
+// performs a full teardown/reconnect (cancel queries, rebuild tunnel + DB) so a
+// broken tunnel or expired credentials are recovered, and it reports each step
+// in the data grid. For local connections (in-memory DuckDB, .duckdb files)
+// there is nothing to reconnect, so it just re-fetches tables and schemas.
 func (w *AppWindow) refreshConnection(idx int) {
 	if idx < 0 || idx >= len(w.connections) {
 		return
 	}
 	conn := w.connections[idx]
-	if conn.worker == nil {
+
+	if conn.Gateway != nil {
+		// Full reconnect; results (including step detail) handled in
+		// handleReconnectResult. cmd is nil → UI-initiated.
+		w.reconnectConnection(idx, nil)
 		return
 	}
 
+	if conn.worker == nil {
+		return
+	}
 	w.statusBar.SetStatus("Refreshing " + conn.Name + "...")
 	conn.worker.Send(DBRequest{
 		Kind:    ReqRefresh,
@@ -1043,6 +1054,8 @@ func (w *AppWindow) handleDBResult(res DBResult) {
 		w.handleOpenGatewayResult(res)
 	case ReqRefresh:
 		w.handleRefreshResult(res)
+	case ReqReconnect:
+		w.handleReconnectResult(res)
 	}
 }
 
@@ -1219,6 +1232,13 @@ func buildAIPrompt(entry models.GatewayEntry, tables []db.TableInfo, controlAddr
 	b.WriteString("\nResponse format: {\"content\":\"...\",\"content_type\":\"...\",\"size\":N,\"truncated\":BOOL}\n")
 	b.WriteString("\nSome columns may contain JSON with S3 pointers (e.g. {\"s3_key\": \"...\", \"s3_bucket\": \"...\"}).\n")
 	b.WriteString("When you encounter these, extract s3_bucket and s3_key from the JSON and use the S3 endpoint to fetch the object contents.\n")
+
+	b.WriteString("\nIf queries start failing with connection errors (timeouts, health check failures, expired credentials, or a broken SSM tunnel), you can force a full reconnect. This cancels any running queries, tears down the tunnel and database pool, and re-establishes them from scratch:\n")
+	b.WriteString(fmt.Sprintf("  curl -s -X POST http://%s/reconnect -d '{\"connection\":\"%s\"}'\n", controlAddr, connName))
+	b.WriteString("\nThe response reports each step so you can see where it failed:\n")
+	b.WriteString("  {\"connection\":\"...\",\"ok\":BOOL,\"tables\":N,\"steps\":[{\"step\":\"cancel_queries\",\"ok\":true},{\"step\":\"start_tunnel\",\"ok\":false,\"error\":\"...\"},...]}\n")
+	b.WriteString("Steps in order: cancel_queries, close_db, stop_tunnel, refresh_credentials (IAM only), start_tunnel, connect_db.\n")
+	b.WriteString("If \"refresh_credentials\" or a step mentions expired SSO, the user must log in again (aws sso login) before a reconnect can succeed.\n")
 
 	if len(tables) > 0 {
 		b.WriteString("\nSchema:\n")

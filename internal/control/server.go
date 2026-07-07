@@ -57,6 +57,29 @@ type CloseConnectionData struct {
 	Index int `json:"index"`
 }
 
+// ReconnectData is the payload for the "reconnect" action. Either Connection
+// (name) or Index may be supplied; empty/zero means the active connection.
+type ReconnectData struct {
+	Connection string `json:"connection,omitempty"`
+	Index      int    `json:"index,omitempty"`
+}
+
+// ReconnectStep describes the outcome of one phase of a reconnect attempt.
+type ReconnectStep struct {
+	Step  string `json:"step"`            // e.g. "cancel_queries", "stop_tunnel", ...
+	OK    bool   `json:"ok"`              // whether this step succeeded
+	Error string `json:"error,omitempty"` // populated when OK is false
+}
+
+// ReconnectResult is the JSON body returned to the caller (placed in
+// Result.Data) describing what happened during a reconnect attempt.
+type ReconnectResult struct {
+	Connection string          `json:"connection"`
+	OK         bool            `json:"ok"` // true only if every step succeeded
+	Steps      []ReconnectStep `json:"steps"`
+	Tables     int             `json:"tables,omitempty"` // tables/views loaded on success
+}
+
 // SQLRequest is the payload for the direct /sql endpoint.
 type SQLRequest struct {
 	SQL        string `json:"sql"`
@@ -232,6 +255,10 @@ func buildMux(s *Server) *http.ServeMux {
 
 	mux.HandleFunc("POST /close-connection", func(w http.ResponseWriter, r *http.Request) {
 		s.handleCommand(w, r, "close_connection")
+	})
+
+	mux.HandleFunc("POST /reconnect", func(w http.ResponseWriter, r *http.Request) {
+		s.handleCommand(w, r, "reconnect")
 	})
 
 	mux.HandleFunc("GET /screenshot", func(w http.ResponseWriter, r *http.Request) {
