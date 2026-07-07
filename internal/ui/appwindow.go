@@ -14,6 +14,7 @@ import (
 
 	"graphics.gd/classdb/BoxContainer"
 	"graphics.gd/classdb/Button"
+	"graphics.gd/classdb/ConfirmationDialog"
 	"graphics.gd/classdb/Control"
 	"graphics.gd/classdb/DisplayServer"
 	"graphics.gd/classdb/HBoxContainer"
@@ -95,6 +96,9 @@ type AppWindow struct {
 
 	// Callbacks
 	onNewWindow func()
+	onReLogin   func() // opens the gateway/SSO screen to re-authenticate
+
+	reLoginDialogOpen bool // guards against stacking re-login dialogs
 }
 
 // buildUI creates the full UI tree and returns the root node.
@@ -1045,10 +1049,7 @@ func (w *AppWindow) handleDBResult(res DBResult) {
 // handleOpenGatewayResult processes the result of an async gateway (Postgres) open.
 func (w *AppWindow) handleOpenGatewayResult(res DBResult) {
 	if res.Err != nil {
-		w.statusBar.SetStatus("Gateway error: " + res.Err.Error())
-		if ts := w.currentTab(); ts != nil {
-			ts.dataGrid.ShowError(res.Err.Error())
-		}
+		w.showConnError(w.currentTab(), res.Err, "Gateway error: ")
 		return
 	}
 
@@ -1118,6 +1119,56 @@ func (w *AppWindow) handleOpenGatewayResult(res DBResult) {
 
 	w.selectConnection(gwIdx)
 	w.statusBar.SetStatus(fmt.Sprintf("Connected: %s (%d tables/views)", name, len(tables)))
+}
+
+// showConnError displays a connection/query error in the given tab's data grid
+// and status bar. For expired-login errors it shows friendly guidance and pops
+// a dialog offering to re-authenticate.
+func (w *AppWindow) showConnError(ts *tabState, err error, statusPrefix string) {
+	msg, isAuth := bfaws.FormatConnError(err)
+	if ts != nil {
+		ts.dataGrid.ShowError(msg)
+	}
+	if isAuth {
+		w.statusBar.SetStatus("Login expired — log in again to reconnect")
+		w.promptReLogin()
+		return
+	}
+	w.statusBar.SetStatus(statusPrefix + err.Error())
+}
+
+// promptReLogin shows a dialog guiding the user to re-authenticate. Confirming
+// opens the connection/SSO screen. Guarded so only one dialog shows at a time.
+func (w *AppWindow) promptReLogin() {
+	if w.reLoginDialogOpen {
+		return
+	}
+	w.reLoginDialogOpen = true
+
+	dlg := ConfirmationDialog.New()
+	dlg.AsWindow().SetTitle("Login Expired")
+	dlg.AsAcceptDialog().SetDialogText(
+		"Your AWS SSO login has expired, so Bufflehead lost access to this database.\n\n" +
+			"Would you like to log in again now?")
+	dlg.AsAcceptDialog().SetOkButtonText("Log in again")
+	dlg.SetCancelButtonText("Not now")
+
+	dlg.AsAcceptDialog().OnConfirmed(func() {
+		w.reLoginDialogOpen = false
+		if w.onReLogin != nil {
+			w.onReLogin()
+		}
+		dlg.AsNode().QueueFree()
+	})
+	dlg.AsWindow().OnCloseRequested(func() {
+		w.reLoginDialogOpen = false
+		dlg.AsNode().QueueFree()
+	})
+
+	// Attach the dialog inside the current window's scene tree so it centers
+	// over the app. tabBarWrap is always part of that tree.
+	w.tabBarWrap.AsNode().AddChild(dlg.AsNode())
+	dlg.AsWindow().PopupCentered()
 }
 
 // handleRefreshResult updates a connection's table list and refreshes the sidebar.
@@ -1201,8 +1252,7 @@ func (w *AppWindow) handleQueryResult(res DBResult) {
 	ts.dataGrid.AsCanvasItem().SetModulate(Color.RGBA{R: 1, G: 1, B: 1, A: 1})
 
 	if res.Err != nil {
-		w.statusBar.SetStatus("Error: " + res.Err.Error())
-		ts.dataGrid.ShowError(res.Err.Error())
+		w.showConnError(ts, res.Err, "Error: ")
 		ts.navigating = false
 		if res.ControlCmd != nil {
 			res.ControlCmd.Respond(control.Result{Error: res.Err.Error()})

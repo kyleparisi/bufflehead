@@ -1831,6 +1831,7 @@ func (a *App) initMainWindow() {
 	if tree, ok := Object.As[SceneTree.Instance](Engine.GetMainLoop()); ok {
 		rootWin := tree.Root().AsWindow()
 		a.mainWin = createMainWindowFromRoot(rootWin, a.Duck, a.history, func() { a.newWindow() })
+		a.mainWin.onReLogin = func() { a.openGatewayScreen() }
 		if a.ControlServer != nil {
 			a.mainWin.controlAddr = a.ControlServer.Addr()
 		}
@@ -2444,7 +2445,12 @@ func (a *App) pollResults() {
 				msg = conn.Name + ": " + tunnel.StatusMsg()
 			case bfaws.TunnelError:
 				if tunnel.IsAuthError() {
-					msg = conn.Name + ": SSO session expired — run `aws sso login` to re-authenticate"
+					msg = conn.Name + ": login expired — log in again to reconnect"
+					// Prompt re-login once per error transition (guarded by
+					// LastTunnelMsg dedup below and the dialog's own guard).
+					if conn.Gateway.LastTunnelMsg != msg {
+						w.promptReLogin()
+					}
 				} else {
 					msg = conn.Name + ": Tunnel error — " + tunnel.LastError()
 				}

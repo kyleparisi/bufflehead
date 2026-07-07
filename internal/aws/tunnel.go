@@ -278,11 +278,38 @@ func (t *TunnelManager) IsAuthError() bool {
 	if t.status != TunnelError {
 		return false
 	}
-	e := strings.ToLower(t.lastError)
+	return IsAuthErrorString(t.lastError)
+}
+
+// IsAuthErrorString reports whether an error message indicates expired or
+// invalid AWS SSO credentials (i.e. the user needs to log in again).
+func IsAuthErrorString(msg string) bool {
+	e := strings.ToLower(msg)
 	return strings.Contains(e, "invalidgrantexception") ||
 		strings.Contains(e, "refresh cached sso token failed") ||
+		strings.Contains(e, "unable to refresh sso token") ||
+		strings.Contains(e, "failed to refresh cached credentials") ||
+		strings.Contains(e, "expiredtoken") ||
 		strings.Contains(e, "expired sso") ||
 		strings.Contains(e, "sso token")
+}
+
+// FormatConnError converts a raw connection/query error into a user-friendly
+// message. Expired-SSO/credential errors get clear re-login guidance instead of
+// dumping the raw AWS SDK error text. The bool return reports whether the error
+// is an authentication (expired login) failure.
+func FormatConnError(err error) (string, bool) {
+	if err == nil {
+		return "", false
+	}
+	raw := err.Error()
+	if IsAuthErrorString(raw) {
+		return "Your AWS SSO login has expired.\n\n" +
+			"Bufflehead can no longer refresh the credentials used to reach this " +
+			"database. Log in again to reconnect.\n\n" +
+			"Click \"Log in again\" below, or run `aws sso login` in a terminal.", true
+	}
+	return raw, false
 }
 
 // IsPortReady checks if the tunnel is connected.
