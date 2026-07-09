@@ -106,6 +106,23 @@ jobs:
           $h = [Runtime.InteropServices.NativeLibrary]::Load((Resolve-Path $dll))
           Write-Host "DLL loaded successfully (handle $h) - valid Win32 amd64 PE"
 
+      # Single source of truth for the version: graphics/export_presets.cfg.
+      # Used for both the exe metadata (rcedit) and the installer, so they can't
+      # drift.
+      - name: Determine app version
+        id: ver
+        shell: pwsh
+        run: |
+          $cfg = Get-Content graphics/export_presets.cfg -Raw
+          if ($cfg -notmatch 'application/product_version="([0-9.]+)"') {
+            throw "product_version not found in graphics/export_presets.cfg"
+          }
+          $v4 = $Matches[1]                          # e.g. 0.21.0.0
+          $v3 = ($v4 -split '\.')[0..2] -join '.'    # e.g. 0.21.0
+          "v4=$v4" >> $env:GITHUB_OUTPUT
+          "v3=$v3" >> $env:GITHUB_OUTPUT
+          Write-Host "app version: $v3 ($v4)"
+
       # Godot's modify_resources step silently skips icon/metadata embedding
       # when rcedit isn't configured, so embed them explicitly here. ImageMagick
       # is preinstalled on windows-latest; rcedit is fetched from its release.
@@ -126,8 +143,8 @@ jobs:
             --set-version-string "FileDescription" "Bufflehead Parquet Viewer" `
             --set-version-string "CompanyName" "Bufflehead.app" `
             --set-version-string "LegalCopyright" "Copyright 2026 Bufflehead.app" `
-            --set-file-version "0.20.0.0" `
-            --set-product-version "0.20.0.0"
+            --set-file-version "${{ steps.ver.outputs.v4 }}" `
+            --set-product-version "${{ steps.ver.outputs.v4 }}"
 
       # The Go app logic lives in the GDExtension DLL (graphics/windows_amd64.dll),
       # which must ship next to the exe — Bufflehead.exe alone fails at launch
@@ -174,4 +191,25 @@ jobs:
         with:
           name: Bufflehead-windows-amd64
           path: releases/windows/amd64/
+          if-no-files-found: error
+
+      # Package the multi-file bundle into a single Setup.exe so non-technical
+      # users get a one-click install (Program Files + shortcuts + uninstaller)
+      # and never move the exe away from its sidecar DLLs. NOTE: the installer
+      # is unsigned, so Windows SmartScreen will warn on first download until a
+      # code-signing certificate is added (see the [Setup]/signing docs).
+      - name: Build installer (Inno Setup)
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          & $iscc "/DAppVersion=${{ steps.ver.outputs.v3 }}" "/Oinstaller" packaging\windows\bufflehead.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit $LASTEXITCODE" }
+          Get-ChildItem installer | Format-Table Name, Length -Auto
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: Bufflehead-windows-installer
+          path: installer/Bufflehead-Setup.exe
           if-no-files-found: error
