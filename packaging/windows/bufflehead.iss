@@ -27,7 +27,12 @@ DefaultGroupName=Bufflehead
 DisableProgramGroupPage=yes
 UninstallDisplayIcon={app}\Bufflehead.exe
 OutputBaseFilename=Bufflehead-Setup
-SetupIconFile={#SourcePath}\..\..\graphics\icon.ico
+; Icon for Setup.exe itself — optional (passed by bin/build-windows as
+; /DIconFile only when graphics/icon.ico was generated, i.e. ImageMagick is
+; present). Shortcut icons come from the exe regardless.
+#ifdef IconFile
+SetupIconFile={#IconFile}
+#endif
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern

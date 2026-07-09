@@ -1,0 +1,175 @@
+#!/usr/bin/env bash
+#
+# Build the portable Windows bundle + one-click installer for Bufflehead.
+#
+# This is the whole "Build Windows" CI job as a script, so it can be run
+# locally instead of only through GitHub Actions. Run it under MSYS2 UCRT64
+# (or Git Bash) on a Windows machine that already has Go and MSYS2:
+#
+#   MSYSTEM=UCRT64 /c/msys64/usr/bin/bash -l bin/build-windows
+#
+# It is idempotent: the expensive toolchain bits (the pinned gcc 14.2 side
+# prefix, the gd CLI) are only built/installed when missing. Outputs:
+#
+#   releases/windows/amd64/        exe + GDExtension DLL + MinGW runtime DLLs
+#   installer/Bufflehead-Setup.exe one-click installer
+#
+# Prereqs the environment must provide (setup-go / setup-msys2 in CI, or your
+# dev box): go >= 1.26 on PATH, MSYS2 with pacman. ImageMagick (icon) and Inno
+# Setup (installer) are used if present and installed on demand where possible.
+set -euo pipefail
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO"
+
+# Convenience for local runs from a plain (non-inheriting) MSYS2 shell: make the
+# standard Windows Go install reachable if it isn't already on PATH. In CI,
+# setup-go + setup-msys2 (path-type: inherit) already provide it.
+command -v go >/dev/null 2>&1 || export PATH="/c/Program Files/Go/bin:$PATH"
+
+GCCDIR="${GCCDIR:-/c/gcc142}"   # side prefix holding the pinned emutls gcc 14.2
+OUT="releases/windows/amd64"
+DLL="graphics/windows_amd64.dll"
+# Pin the gd CLI to the graphics.gd version in go.mod so the CLI (and the Godot
+# version it targets) never floats out from under the app.
+GD_VERSION="$(awk '$1=="graphics.gd"{print $2; exit}' go.mod)"
+
+step() { printf '\n\033[1m=== %s ===\033[0m\n' "$*"; }
+
+# --- pinned gcc 14.2 (emutls) side prefix ------------------------------------
+# go-duckdb v1.8.5's prebuilt libduckdb.a needs emutls symbols that gcc >= 16
+# dropped, so build against a pinned gcc 14.2 kept in a side prefix (leaving the
+# system toolchain untouched). Built once, then reused.
+if [ ! -x "$GCCDIR/bin/gcc.exe" ]; then
+  step "installing pinned gcc 14.2 -> $GCCDIR"
+  pacman -S --needed --noconfirm \
+    base-devel \
+    mingw-w64-ucrt-x86_64-binutils mingw-w64-ucrt-x86_64-winpthreads \
+    mingw-w64-ucrt-x86_64-gmp mingw-w64-ucrt-x86_64-mpfr \
+    mingw-w64-ucrt-x86_64-mpc mingw-w64-ucrt-x86_64-isl
+  cp -a /ucrt64 "$GCCDIR"
+  base="https://repo.msys2.org/mingw/ucrt64"
+  tmp="$(mktemp -d)"
+  for pkg in gcc-14.2.0-3 gcc-libs-14.2.0-3; do
+    curl -fsSL -o "$tmp/$pkg.pkg.tar.zst" \
+      "$base/mingw-w64-ucrt-x86_64-$pkg-any.pkg.tar.zst"
+    tar -C "$GCCDIR" --strip-components=1 --use-compress-program=zstd \
+      -xf "$tmp/$pkg.pkg.tar.zst" ucrt64
+  done
+  rm -rf "$tmp"
+fi
+"$GCCDIR/bin/gcc.exe" --version | head -1
+
+# --- gd CLI (pinned to go.mod) -----------------------------------------------
+step "installing gd CLI $GD_VERSION"
+go install "graphics.gd/cmd/gd@$GD_VERSION"
+export PATH="$GCCDIR/bin:$(go env GOPATH)/bin:$PATH"
+
+# --- build the GDExtension DLL + exe via gd -----------------------------------
+# gd defaults CC to "zig cc" only when CC is unset in the process env, and zig
+# can't statically link libduckdb.a into the shared DLL. Setting CC makes gd use
+# our gcc 14.2 instead.
+step "gd build"
+export CC="$(cygpath -w "$GCCDIR/bin/gcc.exe")"
+export CXX="$(cygpath -w "$GCCDIR/bin/g++.exe")"
+export CGO_ENABLED=1
+export CGO_LDFLAGS="-static-libgcc -static-libstdc++ -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic"
+gd_rc=0
+gd build ./cmd/viewer || gd_rc=$?
+# Godot's headless export can segfault on teardown on GPU-less machines
+# (0xC0000005) AFTER writing the exe. Treat the build as OK iff the expected
+# artifacts exist and the DLL is a real amd64 PE; otherwise fail hard.
+if [ ! -f "$OUT/Bufflehead.exe" ] || [ ! -f "$DLL" ]; then
+  echo "gd build failed (exit $gd_rc): expected artifacts not produced" >&2
+  exit 1
+fi
+objdump -f "$DLL" | grep -q 'pei-x86-64' \
+  || { echo "GDExtension DLL is not a valid amd64 PE" >&2; exit 1; }
+[ "$gd_rc" -eq 0 ] || echo "note: gd exited $gd_rc but artifacts are valid (Godot teardown segfault)"
+
+# --- version: single source of truth = export_presets.cfg --------------------
+V4="$(grep -m1 'application/product_version' graphics/export_presets.cfg \
+      | grep -oE '[0-9]+(\.[0-9]+)+')"   # e.g. 0.21.0.0
+V3="${V4%.*}"                            # e.g. 0.21.0
+step "version $V3 ($V4)"
+
+# --- brand the exe (icon needs ImageMagick; metadata always) -----------------
+step "embed icon + metadata"
+if command -v magick >/dev/null 2>&1; then
+  magick graphics/icon-1024.png -define icon:auto-resize=256,128,64,48,32,16 graphics/icon.ico
+fi
+icon_args=()
+[ -f graphics/icon.ico ] && icon_args=(--set-icon graphics/icon.ico)
+[ -f rcedit.exe ] || curl -fsSL -o rcedit.exe \
+  https://github.com/electron/rcedit/releases/download/v2.0.0/rcedit-x64.exe
+./rcedit.exe "$OUT/Bufflehead.exe" \
+  "${icon_args[@]}" \
+  --set-version-string ProductName "Bufflehead" \
+  --set-version-string FileDescription "Bufflehead Parquet Viewer" \
+  --set-version-string CompanyName "Bufflehead.app" \
+  --set-version-string LegalCopyright "Copyright 2026 Bufflehead.app" \
+  --set-file-version "$V4" --set-product-version "$V4"
+
+# --- bundle GDExtension DLL + MinGW runtime next to the exe -------------------
+# Bufflehead.exe loads windows_amd64.dll from its own folder; that DLL in turn
+# dynamically needs the MinGW C++ runtime (static-linking it crashes Godot's
+# export), so ship those runtime DLLs alongside it.
+step "bundle DLL + MinGW runtime"
+cp -f "$DLL" "$OUT/"
+for d in libstdc++-6.dll libgcc_s_seh-1.dll libwinpthread-1.dll; do
+  cp -f "$GCCDIR/bin/$d" "$OUT/"
+done
+
+# --- verify the shipped folder is self-contained -----------------------------
+# Fail if any MinGW (lib*.dll) dependency can't be resolved from within the
+# folder — that would be an "Error 126" at launch on a clean machine.
+step "verify bundle self-contained"
+(
+  cd "$OUT"
+  missing=""
+  for f in windows_amd64.dll lib*.dll; do
+    for dep in $(objdump -p "$f" 2>/dev/null | awk '/DLL Name/{print $3}' | grep -iE '^lib'); do
+      [ -f "$dep" ] || missing="$missing $dep(needs:$f)"
+    done
+  done
+  [ -z "$missing" ] || { echo "bundle missing MinGW deps:$missing" >&2; exit 1; }
+  echo "self-contained (all lib*.dll deps present)"
+)
+
+# --- one-click installer (Inno Setup) ----------------------------------------
+step "build installer"
+find_iscc() {
+  local c la=""
+  [ -n "${LOCALAPPDATA:-}" ] && la="$(cygpath -u "$LOCALAPPDATA" 2>/dev/null || true)"
+  for c in iscc \
+    "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" \
+    "/c/Program Files/Inno Setup 6/ISCC.exe" \
+    ${la:+"$la/Programs/Inno Setup 6/ISCC.exe"}; do
+    if command -v "$c" >/dev/null 2>&1 || [ -x "$c" ]; then echo "$c"; return; fi
+  done
+  # Last resort: winget/choco install roots (per-user or machine-wide).
+  local g
+  for g in /c/Users/*/AppData/Local/Programs/Inno*/ISCC.exe /c/Program*/Inno*/ISCC.exe; do
+    [ -x "$g" ] && { echo "$g"; return; }
+  done
+}
+iscc="$(find_iscc)"
+if [ -z "$iscc" ] && command -v choco >/dev/null 2>&1; then
+  choco install innosetup --no-progress -y || true
+  iscc="$(find_iscc)"
+fi
+if [ -z "$iscc" ]; then
+  echo "Inno Setup (ISCC) not found. Install it, e.g.:" >&2
+  echo "  choco install innosetup            # CI / Windows" >&2
+  echo "  winget install JRSoftware.InnoSetup # local dev box" >&2
+  exit 1
+fi
+# Pass the Setup.exe icon only if it was generated (ImageMagick present).
+iss_defs=("/DAppVersion=$V3")
+[ -f graphics/icon.ico ] && iss_defs+=("/DIconFile=$(cygpath -w "$PWD/graphics/icon.ico")")
+# Disable MSYS2 path-mangling of the /D and /O switches for this native exe.
+MSYS2_ARG_CONV_EXCL='*' "$iscc" "${iss_defs[@]}" "/Oinstaller" packaging/windows/bufflehead.iss
+
+step "done"
+echo "bundle:    $OUT/"
+echo "installer: installer/Bufflehead-Setup.exe"
