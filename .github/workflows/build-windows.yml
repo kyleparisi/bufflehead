@@ -129,9 +129,24 @@ jobs:
             --set-file-version "0.20.0.0" `
             --set-product-version "0.20.0.0"
 
-      - name: Upload exe
+      # The Go app logic lives in the GDExtension DLL, which must ship next to
+      # the exe — Bufflehead.exe alone fails at launch with "GDExtension
+      # dynamic library not found: 'res://library.gdextension'". gd builds it
+      # at graphics/windows_amd64.dll; place it beside the exe so the uploaded
+      # artifact is self-contained and runnable.
+      - name: Bundle GDExtension DLL next to exe
+        shell: pwsh
+        run: |
+          $dll = "graphics/windows_amd64.dll"
+          if (-not (Test-Path $dll)) { throw "GDExtension DLL not found at $dll" }
+          Copy-Item $dll "releases/windows/amd64/" -Force
+          Get-ChildItem releases/windows/amd64/ | Format-Table Name, Length -Auto
+
+      - name: Upload exe + GDExtension DLL
         uses: actions/upload-artifact@v4
         with:
           name: Bufflehead-windows-amd64
-          path: releases/windows/amd64/Bufflehead.exe
+          path: |
+            releases/windows/amd64/Bufflehead.exe
+            releases/windows/amd64/windows_amd64.dll
           if-no-files-found: error
