@@ -18,7 +18,10 @@ jobs:
           go-version-file: go.mod
 
       - name: Install gd CLI
-        run: go install graphics.gd/cmd/gd@release
+        # Pinned to match the graphics.gd library version in go.mod (and its
+        # Godot 4.6.1 target). `@release` floats and silently pulled a newer
+        # gd/Godot 4.7, so pin for deterministic, reproducible builds.
+        run: go install graphics.gd/cmd/gd@v0.0.0-20260301004336-07bec6a0140d
 
       - uses: msys2/setup-msys2@v2
         with:
