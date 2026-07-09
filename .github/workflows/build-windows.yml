@@ -57,6 +57,14 @@ jobs:
             tar -C "$gccdir" --strip-components=1 --use-compress-program=zstd \
               -xf "mingw-w64-ucrt-x86_64-$pkg-any.pkg.tar.zst" ucrt64
           done
+          # Force a fully static libstdc++ in the GDExtension DLL. go-duckdb
+          # links -lstdc++ explicitly, which -static-libstdc++ does NOT override
+          # (that flag only affects the compiler-implicit libstdc++). With the
+          # dynamic import lib present, -lstdc++ resolves to it and the DLL ends
+          # up depending on libstdc++-6.dll at runtime -> "Error 126: module not
+          # found" on any machine without MinGW. Deleting the import libs makes
+          # -lstdc++ resolve to the static libstdc++.a instead (emutls-safe).
+          find "$gccdir" -name 'libstdc++.dll.a' -print -delete
           "$gccdir/bin/gcc.exe" --version | head -1
           "$gccdir/bin/gcc.exe" -v 2>&1 | grep -i 'thread model'
           # Expose for later steps (Windows paths for Go's cgo).
@@ -105,6 +113,23 @@ jobs:
           # Definitive check: ask Windows to actually load it.
           $h = [Runtime.InteropServices.NativeLibrary]::Load((Resolve-Path $dll))
           Write-Host "DLL loaded successfully (handle $h) - valid Win32 amd64 PE"
+
+      # Guard the static-libstdc++ fix: the shipped DLL must not dynamically
+      # depend on any MinGW runtime, or it dies with "Error 126: module not
+      # found" on end-user machines without MinGW. (NativeLibrary.Load above
+      # can't catch this — the CI runner has MinGW on PATH.)
+      - name: Verify DLL is self-contained (no MinGW runtime deps)
+        shell: msys2 {0}
+        run: |
+          set -e
+          deps=$(objdump -p graphics/windows_amd64.dll | grep -i 'DLL Name' \
+            | grep -iE 'libstdc|libgcc|libwinpthread|libc\+\+' || true)
+          if [ -n "$deps" ]; then
+            echo "::error::GDExtension DLL has MinGW runtime dependencies (not portable):"
+            echo "$deps"
+            exit 1
+          fi
+          echo "DLL is self-contained (no MinGW runtime imports)."
 
       # Godot's modify_resources step silently skips icon/metadata embedding
       # when rcedit isn't configured, so embed them explicitly here. ImageMagick
