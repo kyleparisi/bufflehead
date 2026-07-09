@@ -1,8 +1,10 @@
 name: Build Windows
 
-# Builds the Windows .exe natively on a Windows runner. Cross-compiling from
-# macOS fails in graphics.gd's tooling, so this is the supported path for
-# producing Bufflehead.exe. Triggered manually (or by bin/release-exe).
+# Builds the Windows bundle (exe + GDExtension DLL + MinGW runtime) and a
+# one-click installer, natively on a Windows runner. The build logic lives in
+# bin/build-windows so it can be run locally too (MSYS2 UCRT64), rather than
+# being spread across GitHub Actions steps. Triggered manually (or by
+# bin/release-exe).
 
 on:
   workflow_dispatch:
@@ -17,118 +19,28 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Install gd CLI
-        run: go install graphics.gd/cmd/gd@release
-
+      # UCRT64 + inherit so bin/build-windows can see Go, ImageMagick and
+      # Inno Setup from the Windows PATH. The pinned gcc 14.2 prefix and pacman
+      # deps are set up by the script itself.
       - uses: msys2/setup-msys2@v2
         with:
           msystem: UCRT64
           path-type: inherit
-          install: base-devel mingw-w64-ucrt-x86_64-binutils mingw-w64-ucrt-x86_64-winpthreads
 
-      # Pin GCC 14.2.0. go-duckdb v1.8.5's prebuilt libduckdb.a was compiled
-      # with an emulated-TLS GCC (~14.2). On 2026-05-11 MSYS2's GCC 16 switched
-      # to native TLS and dropped __emutls_v._ZSt11__once_call /
-      # __ZSt15__once_callable from libstdc++, so GCC 16 can't link the prebuilt
-      # lib (undefined references). GCC 14.2 still has those emutls symbols.
-      # (Ref: msys2.org/news 2026-05-11, MINGW-packages#29272.)
-      #
-      # We can't `pacman -U` the downgrade: 14.2.0 gcc-libs predates the
-      # `cc-libs` virtual that the installed mpfr/zstd/gettext now require. So
-      # extract the 14.2 toolchain into a side prefix and use it via CC/CXX,
-      # leaving the system packages (and their runtime libs) untouched.
-      - name: Install pinned GCC 14.2.0 (emutls) to side prefix
+      - name: Build Windows bundle + installer
         shell: msys2 {0}
-        run: |
-          set -e
-          base="https://repo.msys2.org/mingw/ucrt64"
-          gccdir="/d/gcc142"
-          # Start from a full copy of the working system sysroot (headers, CRT,
-          # winpthreads, binutils — all ABI-stable), then overlay the pinned
-          # gcc 14.2 compiler + its emutls runtime libs on top. This gives gcc
-          # 14.2 a complete sysroot (fixes "stddef.h: No such file") while only
-          # the libstdc++/compiler bits are downgraded.
-          cp -a /ucrt64 "$gccdir"
-          for pkg in gcc-14.2.0-3 gcc-libs-14.2.0-3; do
-            curl -fLO "$base/mingw-w64-ucrt-x86_64-$pkg-any.pkg.tar.zst"
-            tar -C "$gccdir" --strip-components=1 --use-compress-program=zstd \
-              -xf "mingw-w64-ucrt-x86_64-$pkg-any.pkg.tar.zst" ucrt64
-          done
-          "$gccdir/bin/gcc.exe" --version | head -1
-          "$gccdir/bin/gcc.exe" -v 2>&1 | grep -i 'thread model'
-          # Expose for later steps (Windows paths for Go's cgo).
-          echo "CC=$(cygpath -w "$gccdir/bin/gcc.exe")" >> "$GITHUB_ENV"
-          echo "CXX=$(cygpath -w "$gccdir/bin/g++.exe")" >> "$GITHUB_ENV"
-          # gcc 14.2 needs its own runtime libs (and binutils) ahead of the
-          # system gcc 16 on PATH so it links against the emutls libstdc++.
-          echo "$(cygpath -w "$gccdir/bin")" >> "$GITHUB_PATH"
+        run: ./bin/build-windows
 
-      - name: Build Windows executable
-        run: gd build ./cmd/viewer
-        env:
-          GOOS: windows
-          # Statically link the C/C++ runtimes so the exe needs no MinGW DLLs
-          # on the user's machine.
-          CGO_LDFLAGS: "-static-libgcc -static-libstdc++ -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic"
-
-      # Diagnostic: show what the build actually produced in graphics/, with
-      # sizes and the first bytes of every windows DLL (Godot's export renames
-      # windows_amd64.dll during hot-reload, which may leave a non-PE file).
-      - name: Diagnose DLL artifacts
-        shell: pwsh
-        run: |
-          Get-ChildItem graphics -Filter "*windows*" -Force | Format-Table Name,Length,LastWriteTime -Auto
-          Get-ChildItem graphics -Filter "*.dll" -Force | Format-Table Name,Length -Auto
-          foreach ($f in Get-ChildItem graphics -Include "*.dll","~*" -Recurse -Force -ErrorAction SilentlyContinue) {
-            $b = [System.IO.File]::ReadAllBytes($f.FullName)[0..1]
-            $sig = -join ($b | ForEach-Object { [char]$_ })
-            Write-Host ("{0,-30} {1,12} bytes  first2='{2}'" -f $f.Name, $f.Length, $sig)
-          }
-
-      # Fail loudly if the Go GDExtension DLL is malformed. A broken DLL makes
-      # Godot export "succeed" but the app dies at launch with
-      # "MainLoop type doesn't exist: GoMainLoop", so validate the PE here.
-      - name: Verify Go DLL is a valid Windows PE
-        shell: pwsh
-        run: |
-          $dll = "graphics/windows_amd64.dll"
-          if (-not (Test-Path $dll)) { throw "DLL not found at $dll" }
-          $bytes = [System.IO.File]::ReadAllBytes($dll)
-          if ($bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) { throw "DLL has no MZ header" }
-          $peOff = [BitConverter]::ToInt32($bytes, 0x3C)
-          if ($bytes[$peOff] -ne 0x50 -or $bytes[$peOff+1] -ne 0x45) { throw "DLL has no PE signature" }
-          $machine = [BitConverter]::ToUInt16($bytes, $peOff + 4)
-          if ($machine -ne 0x8664) { throw ("DLL machine is 0x{0:X} (expected 0x8664/amd64)" -f $machine) }
-          # Definitive check: ask Windows to actually load it.
-          $h = [Runtime.InteropServices.NativeLibrary]::Load((Resolve-Path $dll))
-          Write-Host "DLL loaded successfully (handle $h) - valid Win32 amd64 PE"
-
-      # Godot's modify_resources step silently skips icon/metadata embedding
-      # when rcedit isn't configured, so embed them explicitly here. ImageMagick
-      # is preinstalled on windows-latest; rcedit is fetched from its release.
-      - name: Embed icon and metadata
-        shell: pwsh
-        run: |
-          $exe = "releases/windows/amd64/Bufflehead.exe"
-
-          # Build a multi-resolution .ico from the 1024px source PNG.
-          magick graphics/icon-1024.png -define icon:auto-resize=256,128,64,48,32,16 graphics/icon.ico
-
-          # Fetch rcedit.
-          Invoke-WebRequest -Uri "https://github.com/electron/rcedit/releases/download/v2.0.0/rcedit-x64.exe" -OutFile rcedit.exe
-
-          ./rcedit.exe "$exe" `
-            --set-icon graphics/icon.ico `
-            --set-version-string "ProductName" "Bufflehead" `
-            --set-version-string "FileDescription" "Bufflehead Parquet Viewer" `
-            --set-version-string "CompanyName" "Bufflehead.app" `
-            --set-version-string "LegalCopyright" "Copyright 2026 Bufflehead.app" `
-            --set-file-version "0.20.0.0" `
-            --set-product-version "0.20.0.0"
-
-      - name: Upload exe
+      - name: Upload Windows bundle (exe + GDExtension + runtime DLLs)
         uses: actions/upload-artifact@v4
         with:
           name: Bufflehead-windows-amd64
-          path: releases/windows/amd64/Bufflehead.exe
+          path: releases/windows/amd64/
+          if-no-files-found: error
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: Bufflehead-windows-installer
+          path: installer/Bufflehead-Setup.exe
           if-no-files-found: error
