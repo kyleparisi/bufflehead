@@ -98,6 +98,11 @@ type GatewayScreen struct {
 	formIAMAuth   bool // true = IAM auth, false = password
 	formPassBtn   Button.Instance
 	formIAMBtn    Button.Instance
+
+	// Numbered step indicators (turn into a green ✓ when the step is satisfied)
+	step1Num Label.Instance
+	step2Num Label.Instance
+	step3Num Label.Instance
 }
 
 type gatewayCard struct {
@@ -248,12 +253,8 @@ func (g *GatewayScreen) buildSSOPanel() PanelContainer.Instance {
 	vbox := VBoxContainer.New()
 	vbox.AsControl().AddThemeConstantOverride("separation", 8)
 
-	// Header
-	header := Label.New()
-	header.SetText("AWS SSO Login")
-	header.AsControl().AddThemeFontSizeOverride("font_size", fontSize(14))
-	header.AsControl().AddThemeColorOverride("font_color", colorText)
-	vbox.AsNode().AddChild(header.AsNode())
+	// ── Step 1: Authenticate (AWS SSO) ──
+	g.step1Num = g.makeStepHeader(vbox, "①", "Authenticate — AWS SSO")
 
 	// Start URL field
 	urlVBox := VBoxContainer.New()
@@ -399,6 +400,7 @@ func (g *GatewayScreen) showSessionActive() {
 	g.ssoRegion.SetEditable(false)
 	g.ssoLoginBtn.AsCanvasItem().SetVisible(false)
 	g.ssoLogoutBtn.AsCanvasItem().SetVisible(true)
+	setStepDone(g.step1Num, "①", true)
 }
 
 // showSessionInactive switches the SSO panel back to login mode.
@@ -409,6 +411,7 @@ func (g *GatewayScreen) showSessionInactive() {
 	g.ssoLoginBtn.AsBaseButton().SetDisabled(false)
 	g.ssoLoginBtn.SetText("Login")
 	g.ssoLogoutBtn.AsCanvasItem().SetVisible(false)
+	setStepDone(g.step1Num, "①", false)
 }
 
 func (g *GatewayScreen) onSSOLogout() {
@@ -668,58 +671,13 @@ func (g *GatewayScreen) buildForm() PanelContainer.Instance {
 	vbox := VBoxContainer.New()
 	vbox.AsControl().AddThemeConstantOverride("separation", 8)
 
-	// Section header
-	header := Label.New()
-	header.SetText("Connect to Database")
-	header.AsControl().AddThemeFontSizeOverride("font_size", fontSize(14))
-	header.AsControl().AddThemeColorOverride("font_color", colorText)
-	vbox.AsNode().AddChild(header.AsNode())
+	// Connection naming
+	g.formLabel, g.formEnv = g.makeFieldPair(vbox, "Label", "e.g. prod-analytics", 1, "Environment", "e.g. production", 1)
 
-	// Bookmark label + env row
-	labelRow := HBoxContainer.New()
-	labelRow.AsControl().AddThemeConstantOverride("separation", 8)
+	// ── Step 2: AWS Resources ──
+	g.step2Num = g.makeStepHeader(vbox, "②", "AWS Resources")
 
-	labelVBox := VBoxContainer.New()
-	labelVBox.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
-	labelVBox.AsControl().AddThemeConstantOverride("separation", 2)
-	labelLbl := Label.New()
-	labelLbl.SetText("Label")
-	labelLbl.AsControl().AddThemeFontSizeOverride("font_size", fontSize(10))
-	labelLbl.AsControl().AddThemeColorOverride("font_color", colorTextMuted)
-	g.formLabel = LineEdit.New()
-	g.formLabel.SetPlaceholderText("e.g. prod-analytics")
-	applyInputTheme(g.formLabel.AsControl())
-	g.formLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(12))
-	labelVBox.AsNode().AddChild(labelLbl.AsNode())
-	labelVBox.AsNode().AddChild(g.formLabel.AsNode())
-	labelRow.AsNode().AddChild(labelVBox.AsNode())
-
-	envVBox := VBoxContainer.New()
-	envVBox.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
-	envVBox.AsControl().AddThemeConstantOverride("separation", 2)
-	envLbl := Label.New()
-	envLbl.SetText("Environment")
-	envLbl.AsControl().AddThemeFontSizeOverride("font_size", fontSize(10))
-	envLbl.AsControl().AddThemeColorOverride("font_color", colorTextMuted)
-	g.formEnv = LineEdit.New()
-	g.formEnv.SetPlaceholderText("e.g. production")
-	applyInputTheme(g.formEnv.AsControl())
-	g.formEnv.AsControl().AddThemeFontSizeOverride("font_size", fontSize(12))
-	envVBox.AsNode().AddChild(envLbl.AsNode())
-	envVBox.AsNode().AddChild(g.formEnv.AsNode())
-	labelRow.AsNode().AddChild(envVBox.AsNode())
-
-	vbox.AsNode().AddChild(labelRow.AsNode())
-
-	// AWS section
-	awsLabel := Label.New()
-	awsLabel.SetText("AWS")
-	awsLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
-	awsLabel.AsControl().AddThemeColorOverride("font_color", colorTextDim)
-	vbox.AsNode().AddChild(awsLabel.AsNode())
-
-	g.formProfile = g.makeField(vbox, "AWS Profile", "e.g. my-sso-profile")
-	g.formRegion = g.makeField(vbox, "AWS Region", "e.g. us-east-1")
+	g.formProfile, g.formRegion = g.makeFieldPair(vbox, "AWS Profile", "e.g. my-sso-profile", 1, "AWS Region", "e.g. us-east-1", 1)
 
 	// Bastion instance dropdown + refresh button
 	instanceVBox := VBoxContainer.New()
@@ -753,14 +711,7 @@ func (g *GatewayScreen) buildForm() PanelContainer.Instance {
 	instanceVBox.AsNode().AddChild(instanceRow.AsNode())
 	vbox.AsNode().AddChild(instanceVBox.AsNode())
 
-	// RDS section
-	rdsLabel := Label.New()
-	rdsLabel.SetText("RDS / Database")
-	rdsLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
-	rdsLabel.AsControl().AddThemeColorOverride("font_color", colorTextDim)
-	vbox.AsNode().AddChild(rdsLabel.AsNode())
-
-	// RDS instance dropdown + load button
+	// RDS instance dropdown + load button (auto-fills host/port below)
 	rdsPickerVBox := VBoxContainer.New()
 	rdsPickerVBox.AsControl().AddThemeConstantOverride("separation", 2)
 	rdsPickerLbl := Label.New()
@@ -795,13 +746,19 @@ func (g *GatewayScreen) buildForm() PanelContainer.Instance {
 	rdsPickerVBox.AsNode().AddChild(rdsPickerRow.AsNode())
 	vbox.AsNode().AddChild(rdsPickerVBox.AsNode())
 
-	g.formRDSHost = g.makeField(vbox, "RDS Host", "e.g. my-db.cluster-xyz.rds.amazonaws.com")
+	// ── Step 3: Database ──
+	g.step3Num = g.makeStepHeader(vbox, "③", "Database")
 
-	g.formRDSPort = g.makeField(vbox, "RDS Port", "5432")
+	g.formRDSHost, g.formRDSPort = g.makeFieldPair(vbox, "RDS Host", "e.g. my-db.cluster-xyz.rds.amazonaws.com", 3, "Port", "5432", 1)
 	g.formRDSPort.SetText("5432")
 
-	g.formDBName = g.makeField(vbox, "Database Name", "e.g. mydb")
-	g.formDBUser = g.makeField(vbox, "Username", "e.g. readonly_user")
+	g.formDBName, g.formDBUser = g.makeFieldPair(vbox, "Database Name", "e.g. mydb", 1, "Username", "e.g. readonly_user", 1)
+
+	// Live step-indicator updates as the AWS/DB fields are filled in.
+	for _, f := range []LineEdit.Instance{g.formProfile, g.formRegion, g.formRDSHost, g.formDBName, g.formDBUser} {
+		f.OnTextChanged(func(string) { g.refreshStepIndicators() })
+	}
+	g.formInstance.OnItemSelected(func(int) { g.refreshStepIndicators() })
 
 	// Auth mode toggle
 	authLabel := Label.New()
@@ -867,24 +824,48 @@ func (g *GatewayScreen) buildForm() PanelContainer.Instance {
 	g.formStatus.SetAutowrapMode(3)
 	vbox.AsNode().AddChild(g.formStatus.AsNode())
 
-	// Connect button
+	// Connect + Test Connection
+	btnRow := HBoxContainer.New()
+	btnRow.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	btnRow.AsControl().AddThemeConstantOverride("separation", 8)
+
 	connectBtn := Button.New()
 	connectBtn.SetText("Connect")
 	connectBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(13))
 	applyButtonTheme(connectBtn.AsControl())
+	connectBtn.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	connectBtn.AsControl().SetSizeFlagsStretchRatio(2)
 	connectBtn.AsControl().SetCustomMinimumSize(Vector2.New(0, scaled(34)))
 	connectBtn.AsBaseButton().OnPressed(func() {
 		g.onFormConnect()
 	})
-	vbox.AsNode().AddChild(connectBtn.AsNode())
+
+	testBtn := Button.New()
+	testBtn.SetText("Test Connection")
+	testBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(12))
+	applySecondaryButtonTheme(testBtn.AsControl())
+	testBtn.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	testBtn.AsControl().SetSizeFlagsStretchRatio(1)
+	testBtn.AsControl().SetCustomMinimumSize(Vector2.New(0, scaled(34)))
+	testBtn.AsControl().SetTooltipText("Validate the form and verify AWS credentials without connecting")
+	testBtn.AsBaseButton().OnPressed(func() {
+		g.onFormTest()
+	})
+
+	btnRow.AsNode().AddChild(connectBtn.AsNode())
+	btnRow.AsNode().AddChild(testBtn.AsNode())
+	vbox.AsNode().AddChild(btnRow.AsNode())
 
 	panel.AsNode().AddChild(vbox.AsNode())
 	return panel
 }
 
-func (g *GatewayScreen) makeField(parent VBoxContainer.Instance, label, placeholder string) LineEdit.Instance {
-	fieldVBox := VBoxContainer.New()
-	fieldVBox.AsControl().AddThemeConstantOverride("separation", 2)
+// makeFieldCol builds a labeled input column (label above input) that expands
+// horizontally so it can sit in a two-column row.
+func (g *GatewayScreen) makeFieldCol(label, placeholder string) (VBoxContainer.Instance, LineEdit.Instance) {
+	col := VBoxContainer.New()
+	col.AsControl().AddThemeConstantOverride("separation", 2)
+	col.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 
 	lbl := Label.New()
 	lbl.SetText(label)
@@ -896,10 +877,69 @@ func (g *GatewayScreen) makeField(parent VBoxContainer.Instance, label, placehol
 	applyInputTheme(input.AsControl())
 	input.AsControl().AddThemeFontSizeOverride("font_size", fontSize(12))
 
-	fieldVBox.AsNode().AddChild(lbl.AsNode())
-	fieldVBox.AsNode().AddChild(input.AsNode())
-	parent.AsNode().AddChild(fieldVBox.AsNode())
+	col.AsNode().AddChild(lbl.AsNode())
+	col.AsNode().AddChild(input.AsNode())
+	return col, input
+}
+
+func (g *GatewayScreen) makeField(parent VBoxContainer.Instance, label, placeholder string) LineEdit.Instance {
+	col, input := g.makeFieldCol(label, placeholder)
+	parent.AsNode().AddChild(col.AsNode())
 	return input
+}
+
+// makeFieldPair places two labeled fields side by side. ratio1/ratio2 control
+// their relative widths (e.g. 3:1 for host:port).
+func (g *GatewayScreen) makeFieldPair(parent VBoxContainer.Instance, l1, p1 string, ratio1 float32, l2, p2 string, ratio2 float32) (LineEdit.Instance, LineEdit.Instance) {
+	row := HBoxContainer.New()
+	row.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	row.AsControl().AddThemeConstantOverride("separation", 8)
+
+	col1, in1 := g.makeFieldCol(l1, p1)
+	col1.AsControl().SetSizeFlagsStretchRatio(ratio1)
+	col2, in2 := g.makeFieldCol(l2, p2)
+	col2.AsControl().SetSizeFlagsStretchRatio(ratio2)
+
+	row.AsNode().AddChild(col1.AsNode())
+	row.AsNode().AddChild(col2.AsNode())
+	parent.AsNode().AddChild(row.AsNode())
+	return in1, in2
+}
+
+// makeStepHeader builds a "① Title" numbered step header and returns the number
+// label so its state can be updated (turns into a green ✓ when the step is done).
+func (g *GatewayScreen) makeStepHeader(parent VBoxContainer.Instance, numGlyph, title string) Label.Instance {
+	row := HBoxContainer.New()
+	row.AsControl().AddThemeConstantOverride("separation", 8)
+
+	num := Label.New()
+	num.SetText(numGlyph)
+	num.AsControl().AddThemeFontSizeOverride("font_size", fontSize(16))
+	num.AsControl().AddThemeColorOverride("font_color", colorTextMuted)
+
+	lbl := Label.New()
+	lbl.SetText(title)
+	lbl.AsControl().AddThemeFontSizeOverride("font_size", fontSize(14))
+	lbl.AsControl().AddThemeColorOverride("font_color", colorText)
+
+	row.AsNode().AddChild(num.AsNode())
+	row.AsNode().AddChild(lbl.AsNode())
+	parent.AsNode().AddChild(row.AsNode())
+	return num
+}
+
+// setStepDone flips a step header's number to a green check when complete.
+func setStepDone(num Label.Instance, glyph string, done bool) {
+	if num == (Label.Instance{}) {
+		return
+	}
+	if done {
+		num.SetText("✓")
+		num.AsControl().AddThemeColorOverride("font_color", colorStatusGreen)
+	} else {
+		num.SetText(glyph)
+		num.AsControl().AddThemeColorOverride("font_color", colorTextMuted)
+	}
 }
 
 func (g *GatewayScreen) onLoadInstances() {
@@ -1124,6 +1164,51 @@ func (g *GatewayScreen) onFormConnect() {
 	}()
 }
 
+// onFormTest validates the form fields locally (no network) and reports what's
+// missing or that the form is ready to Connect. A full live connectivity test
+// (tunnel + DB ping) happens on Connect.
+func (g *GatewayScreen) onFormTest() {
+	var missing []string
+	if g.formProfile.Text() == "" {
+		missing = append(missing, "AWS Profile")
+	}
+	if g.formRegion.Text() == "" {
+		missing = append(missing, "AWS Region")
+	}
+	if g.formInstance.Selected() <= 0 {
+		missing = append(missing, "Bastion Instance")
+	}
+	if g.formRDSHost.Text() == "" {
+		missing = append(missing, "RDS Host")
+	}
+	if g.formDBName.Text() == "" {
+		missing = append(missing, "Database Name")
+	}
+	if g.formDBUser.Text() == "" {
+		missing = append(missing, "Username")
+	}
+	g.refreshStepIndicators()
+	if len(missing) > 0 {
+		g.formStatus.SetText("Missing: " + strings.Join(missing, ", "))
+		g.formStatus.AsControl().AddThemeColorOverride("font_color", colorStatusRed)
+		return
+	}
+	g.formStatus.SetText("✓ Form looks complete — Connect to establish the tunnel.")
+	g.formStatus.AsControl().AddThemeColorOverride("font_color", colorStatusGreen)
+}
+
+// refreshStepIndicators updates the numbered step markers to green ✓ as each
+// step's fields are filled in (step 1/auth is driven by the SSO session state).
+func (g *GatewayScreen) refreshStepIndicators() {
+	if g.step2Num == (Label.Instance{}) {
+		return
+	}
+	step2Done := g.formProfile.Text() != "" && g.formRegion.Text() != "" && g.formInstance.Selected() > 0
+	setStepDone(g.step2Num, "②", step2Done)
+	step3Done := g.formRDSHost.Text() != "" && g.formDBName.Text() != "" && g.formDBUser.Text() != ""
+	setStepDone(g.step3Num, "③", step3Done)
+}
+
 func (g *GatewayScreen) buildCardPanel(entry models.GatewayEntry, idx int) PanelContainer.Instance {
 	panel := PanelContainer.New()
 	border := makeStyleBox(colorBgPanel, 6, 1, colorBorderDim)
@@ -1268,12 +1353,7 @@ func (g *GatewayScreen) buildBookmarkCard(bm models.Bookmark) PanelContainer.Ins
 	row1.AsNode().AddChild(nameLabel.AsNode())
 
 	if bm.Env != "" {
-		envLabel := Label.New()
-		envLabel.SetText(bm.Env)
-		envLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(10))
-		envLabel.AsControl().AddThemeColorOverride("font_color", envBadgeColor(bm.Env))
-		envLabel.AsControl().SetSizeFlagsVertical(Control.SizeShrinkCenter)
-		row1.AsNode().AddChild(envLabel.AsNode())
+		row1.AsNode().AddChild(makeAccentChip(strings.ToUpper(bm.Env), envBadgeColor(bm.Env), "EnvBadge").AsNode())
 	}
 
 	// Detail rows
