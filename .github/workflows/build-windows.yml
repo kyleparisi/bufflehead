@@ -29,6 +29,10 @@ jobs:
 
       - name: Build Windows bundle + installer
         shell: msys2 {0}
+        # Pin GDPATH so gd is not in "local toolchain" mode and will
+        # auto-download the pinned Godot 4.6.1 editor + libgodot.
+        env:
+          GDPATH: ${{ runner.temp }}/gd
         run: ./bin/build-windows
 
       - name: Upload Windows bundle (exe + GDExtension + runtime DLLs)
