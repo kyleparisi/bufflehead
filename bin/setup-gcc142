@@ -40,6 +40,21 @@ if [ ! -x "$GCCDIR/bin/gcc.exe" ]; then
 fi
 "$GCCDIR/bin/gcc.exe" --version | head -1
 
+# Go links Windows .exe test binaries against default-manifest.o (a mingw crt
+# object). Its lib subdir varies by crt version, so make sure a copy sits in
+# $GCCDIR/lib where the linker searches (build-windows links a DLL and never
+# needs this).
+if [ ! -f "$GCCDIR/lib/default-manifest.o" ]; then
+  src="$(find "$GCCDIR" /ucrt64 -name default-manifest.o 2>/dev/null | head -1)"
+  if [ -n "$src" ]; then
+    echo "placing default-manifest.o from $src"
+    cp "$src" "$GCCDIR/lib/default-manifest.o"
+  else
+    echo "ERROR: default-manifest.o not found (mingw crt missing)" >&2
+    return 1 2>/dev/null || exit 1
+  fi
+fi
+
 export PATH="$GCCDIR/bin:$(go env GOPATH)/bin:$PATH"
 export CC="$(cygpath -w "$GCCDIR/bin/gcc.exe")"
 export CXX="$(cygpath -w "$GCCDIR/bin/g++.exe")"
