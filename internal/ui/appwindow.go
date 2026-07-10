@@ -88,6 +88,7 @@ type AppWindow struct {
 	navWired bool
 
 	// Gateway
+	gatewayScreenOpen   bool // the connection screen is showing (Esc closes it)
 	pendingGateway      *GatewayConnection
 	gatewayLoadingLabel Label.Instance
 	gatewayTracker      *stepTracker // connection-status step tracker on the loading screen
@@ -288,35 +289,7 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 	w.emptyView.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	w.emptyView.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
 	w.emptyView.AsBoxContainer().SetAlignment(BoxContainer.AlignmentCenter)
-
-	emptyCenter := VBoxContainer.New()
-	emptyCenter.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
-	emptyCenter.AsControl().SetSizeFlagsVertical(Control.SizeShrinkCenter)
-	emptyCenter.AsControl().AddThemeConstantOverride("separation", 16)
-	emptyCenter.AsBoxContainer().SetAlignment(BoxContainer.AlignmentCenter)
-
-	emptyIcon := Label.New()
-	emptyIcon.SetText("⬡")
-	emptyIcon.AsControl().AddThemeFontSizeOverride("font_size", fontSize(48))
-	emptyIcon.AsControl().AddThemeColorOverride("font_color", colorTextDim)
-	emptyIcon.SetHorizontalAlignment(1)
-
-	emptyTitle := Label.New()
-	emptyTitle.SetText("Bufflehead")
-	emptyTitle.AsControl().AddThemeFontSizeOverride("font_size", fontSize(18))
-	emptyTitle.AsControl().AddThemeColorOverride("font_color", colorText)
-	emptyTitle.SetHorizontalAlignment(1)
-
-	emptyHint := Label.New()
-	emptyHint.SetText("＋  New Connection (left rail)   ·   Open a file   ·   Drop .parquet here")
-	emptyHint.AsControl().AddThemeFontSizeOverride("font_size", fontSize(13))
-	emptyHint.AsControl().AddThemeColorOverride("font_color", colorTextDim)
-	emptyHint.SetHorizontalAlignment(1)
-
-	emptyCenter.AsNode().AddChild(emptyIcon.AsNode())
-	emptyCenter.AsNode().AddChild(emptyTitle.AsNode())
-	emptyCenter.AsNode().AddChild(emptyHint.AsNode())
-	w.emptyView.AsNode().AddChild(emptyCenter.AsNode())
+	w.buildEmptyPlaceholder()
 
 	// Connection rail (far-left column)
 	w.connRailWrap = PanelContainer.New()
@@ -758,6 +731,57 @@ func (w *AppWindow) showEmptyView() {
 	w.titleBar.SetFileInfo("")
 	w.statusBar.SetStatus("No tabs open")
 	w.statusBar.SetPage(0, 0)
+}
+
+// buildEmptyPlaceholder (re)builds the centered "Bufflehead" placeholder in the
+// empty view, replacing whatever it currently holds (e.g. a gateway screen).
+func (w *AppWindow) buildEmptyPlaceholder() {
+	for w.emptyView.AsNode().GetChildCount() > 0 {
+		c := w.emptyView.AsNode().GetChild(0)
+		w.emptyView.AsNode().RemoveChild(c)
+		c.QueueFree()
+	}
+
+	emptyCenter := VBoxContainer.New()
+	emptyCenter.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	emptyCenter.AsControl().SetSizeFlagsVertical(Control.SizeShrinkCenter)
+	emptyCenter.AsControl().AddThemeConstantOverride("separation", 16)
+	emptyCenter.AsBoxContainer().SetAlignment(BoxContainer.AlignmentCenter)
+
+	emptyIcon := Label.New()
+	emptyIcon.SetText("⬡")
+	emptyIcon.AsControl().AddThemeFontSizeOverride("font_size", fontSize(48))
+	emptyIcon.AsControl().AddThemeColorOverride("font_color", colorTextDim)
+	emptyIcon.SetHorizontalAlignment(1)
+
+	emptyTitle := Label.New()
+	emptyTitle.SetText("Bufflehead")
+	emptyTitle.AsControl().AddThemeFontSizeOverride("font_size", fontSize(18))
+	emptyTitle.AsControl().AddThemeColorOverride("font_color", colorText)
+	emptyTitle.SetHorizontalAlignment(1)
+
+	emptyHint := Label.New()
+	emptyHint.SetText("＋  New Connection (left rail)   ·   Open a file   ·   Drop .parquet here")
+	emptyHint.AsControl().AddThemeFontSizeOverride("font_size", fontSize(13))
+	emptyHint.AsControl().AddThemeColorOverride("font_color", colorTextDim)
+	emptyHint.SetHorizontalAlignment(1)
+
+	emptyCenter.AsNode().AddChild(emptyIcon.AsNode())
+	emptyCenter.AsNode().AddChild(emptyTitle.AsNode())
+	emptyCenter.AsNode().AddChild(emptyHint.AsNode())
+	w.emptyView.AsNode().AddChild(emptyCenter.AsNode())
+}
+
+// exitGatewayScreen restores the normal view after cancelling the connection
+// screen: the data view if any tabs are open, else the empty placeholder.
+func (w *AppWindow) exitGatewayScreen() {
+	w.gatewayScreenOpen = false
+	w.buildEmptyPlaceholder()
+	if len(w.tabs) > 0 {
+		w.showTabView()
+	} else {
+		w.showEmptyView()
+	}
 }
 
 func (w *AppWindow) showTabView() {

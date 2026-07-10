@@ -633,6 +633,22 @@ class TestConnectionControls:
         assert find_node(tree, "GatewayScreen") is not None, (
             "gateway screen should be shown after open-gateway"
         )
+        assert has_node_named(tree, "GatewayCloseButton"), (
+            "gateway screen must have a visible Close button to exit"
+        )
+
+        # Closing the screen restores the normal view (bug fix: it used to have
+        # no exit). Data view returns because a tab is open.
+        result = post("close-gateway")
+        assert result["ok"] is True
+        time.sleep(0.3)
+        tree = ui_tree()
+        assert find_node(tree, "GatewayScreen") is None, (
+            "gateway screen should be gone after close"
+        )
+        assert find_node(tree, "SchemaPanel") is not None, (
+            "the normal data view should be restored after closing the gateway screen"
+        )
 
         # Restore a normal data view for subsequent tests.
         open_file(SAMPLE)

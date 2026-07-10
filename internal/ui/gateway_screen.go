@@ -8,7 +8,6 @@ import (
 	bfaws "bufflehead/internal/aws"
 	"bufflehead/internal/models"
 
-	"graphics.gd/classdb/BoxContainer"
 	"graphics.gd/classdb/Button"
 	"graphics.gd/classdb/Control"
 	"graphics.gd/classdb/HBoxContainer"
@@ -41,6 +40,7 @@ type GatewayScreen struct {
 	cards     []*gatewayCard
 
 	OnConnect func(entry models.GatewayEntry, auth *bfaws.AuthManager, tunnel *bfaws.TunnelManager)
+	OnCancel  func() // exit the connection screen
 
 	// SSO login section
 	ssoStartURL  LineEdit.Instance
@@ -132,7 +132,33 @@ func (g *GatewayScreen) SetBookmarks(store *models.BookmarkStore) {
 func (g *GatewayScreen) Ready() {
 	g.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	g.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
-	g.AsBoxContainer().SetAlignment(BoxContainer.AlignmentCenter)
+	g.AsControl().AddThemeConstantOverride("separation", 8)
+
+	// ── Header: title + Close (exit the connection screen) ──
+	header := HBoxContainer.New()
+	header.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+
+	hdrTitle := Label.New()
+	hdrTitle.SetText("Connect to a database")
+	hdrTitle.AsControl().AddThemeFontSizeOverride("font_size", fontSize(13))
+	hdrTitle.AsControl().AddThemeColorOverride("font_color", colorTextDim)
+	hdrTitle.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+
+	closeBtn := Button.New()
+	closeBtn.AsNode().SetName("GatewayCloseButton")
+	closeBtn.SetText("✕  Close")
+	closeBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
+	closeBtn.AsControl().SetTooltipText("Close (Esc)")
+	applySecondaryButtonTheme(closeBtn.AsControl())
+	closeBtn.AsBaseButton().OnPressed(func() {
+		if g.OnCancel != nil {
+			g.OnCancel()
+		}
+	})
+
+	header.AsNode().AddChild(hdrTitle.AsNode())
+	header.AsNode().AddChild(closeBtn.AsNode())
+	g.AsNode().AddChild(header.AsNode())
 
 	// ── Two-column layout ──
 	columns := HBoxContainer.New()

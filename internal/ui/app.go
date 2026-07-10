@@ -164,15 +164,16 @@ func (t *TitleBar) Ready() {
 	t.infoLabel.AsControl().SetMouseFilter(Control.MouseFilterPass)
 
 	t.copyBtn = Button.New()
-	t.copyBtn.SetText("AI ⎘")
 	t.copyBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(10))
 	applyFooterGhostButton(t.copyBtn.AsControl())
+	t.copyBtn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(62), 0))
 	t.copyBtn.AsControl().SetTooltipText("Copy an AI prompt describing this connection")
 	t.copyBtn.AsCanvasItem().SetVisible(false)
+	t.setAIButtonDefault()
 	t.copyBtn.AsBaseButton().OnPressed(func() {
 		if t.aiPrompt != "" {
 			DisplayServer.ClipboardSet(t.aiPrompt)
-			t.copyBtn.SetText("Copied!")
+			t.setAIButtonCopied()
 			go func() {
 				<-time.After(1500 * time.Millisecond)
 				t.resetCopyText = true
@@ -227,10 +228,23 @@ func (t *TitleBar) Ready() {
 	t.AsNode().AddChild(margin.AsNode())
 }
 
+// setAIButtonDefault shows the AI copy button in its resting state (a lavender
+// "✦ Ask AI").
+func (t *TitleBar) setAIButtonDefault() {
+	t.copyBtn.SetText("✦ Ask AI")
+	t.copyBtn.AsControl().AddThemeColorOverride("font_color", colorAccent)
+}
+
+// setAIButtonCopied shows the green "✓ Copied!" confirmation state.
+func (t *TitleBar) setAIButtonCopied() {
+	t.copyBtn.SetText("✓ Copied!")
+	t.copyBtn.AsControl().AddThemeColorOverride("font_color", colorStatusGreen)
+}
+
 func (t *TitleBar) Process(delta Float.X) {
 	if t.resetCopyText {
 		t.resetCopyText = false
-		t.copyBtn.SetText("AI ⎘")
+		t.setAIButtonDefault()
 	}
 }
 
@@ -241,7 +255,7 @@ func (t *TitleBar) SetConnectionInfo(driver, name, dbName string) {
 func (t *TitleBar) SetAIPrompt(prompt string) {
 	t.aiPrompt = prompt
 	t.copyBtn.AsCanvasItem().SetVisible(prompt != "")
-	t.copyBtn.SetText("AI ⎘")
+	t.setAIButtonDefault()
 	t.refreshBtn.AsCanvasItem().SetVisible(prompt != "")
 }
 
@@ -2040,6 +2054,7 @@ type App struct {
 	history      *models.QueryHistory     `gd:"-"`
 	pendingInit  bool                     `gd:"-"`
 	prevKeys     map[Input.Key]bool       `gd:"-"`
+	escPrev      bool                     `gd:"-"` // Escape key state for the connection screen
 	cachedState  json.RawMessage          `gd:"-"` // updated on main thread each frame
 }
 
@@ -2296,10 +2311,15 @@ func (a *App) showGatewayScreen() {
 	screen.SetBookmarks(a.BookmarkStore)
 	screen.OnConnect = func(entry models.GatewayEntry, auth *bfaws.AuthManager, tunnel *bfaws.TunnelManager) {
 		// Replace gateway screen with loading indicator
+		w.gatewayScreenOpen = false
 		screen.AsCanvasItem().SetVisible(false)
 		a.showGatewayLoading(entry.Name)
 		a.onGatewayConnected(entry, auth, tunnel)
 	}
+	screen.OnCancel = func() {
+		w.exitGatewayScreen()
+	}
+	w.gatewayScreenOpen = true
 	// Add gateway screen to emptyView (which is already visible)
 	// Clear default empty view children and add gateway screen
 	for w.emptyView.AsNode().GetChildCount() > 0 {
@@ -2620,6 +2640,15 @@ func (a *App) Process(delta Float.X) {
 			a.prevKeys[k] = false
 		}
 	}
+
+	// Escape closes the connection screen (tracked separately from ⌘-shortcuts).
+	escNow := Input.IsKeyPressed(Input.KeyEscape)
+	if escNow && !a.escPrev {
+		if w := a.activeWindow(); w != nil && w.gatewayScreenOpen {
+			w.exitGatewayScreen()
+		}
+	}
+	a.escPrev = escNow
 
 	// Update State pointer
 	if w := a.activeWindow(); w != nil {
@@ -2999,6 +3028,10 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 			return
 		}
 		w.showExtensionsSidebar(ts)
+		cmd.Respond(control.Result{OK: true})
+
+	case "close_gateway":
+		w.exitGatewayScreen()
 		cmd.Respond(control.Result{OK: true})
 
 	case "nav_back":

@@ -254,6 +254,11 @@ func buildMux(s *Server) *http.ServeMux {
 		s.handleCommand(w, r, "show_extensions")
 	})
 
+	// Exit the gateway/new-connection screen (same as the screen's Close button).
+	mux.HandleFunc("POST /close-gateway", func(w http.ResponseWriter, r *http.Request) {
+		s.handleCommand(w, r, "close_gateway")
+	})
+
 	mux.HandleFunc("POST /select-row", func(w http.ResponseWriter, r *http.Request) {
 		s.handleCommand(w, r, "select_row")
 	})
