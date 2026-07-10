@@ -127,6 +127,12 @@ func (bs *BookmarkStore) FindByLabel(label string) *Bookmark {
 	return nil
 }
 
+// Path returns the on-disk path of the bookmarks file (e.g.
+// %AppData%/Bufflehead/bookmarks.json on Windows).
+func (bs *BookmarkStore) Path() string {
+	return bs.path
+}
+
 // All returns a copy of all bookmarks.
 func (bs *BookmarkStore) All() []Bookmark {
 	bs.mu.Lock()

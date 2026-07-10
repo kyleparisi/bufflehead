@@ -265,6 +265,12 @@ func buildMux(s *Server) *http.ServeMux {
 		s.handleCommand(w, r, "close_gateway")
 	})
 
+	// Write a dummy bookmark and report the on-disk path — used to verify
+	// bookmark persistence across platforms (esp. Windows) and restarts.
+	mux.HandleFunc("POST /create-test-bookmark", func(w http.ResponseWriter, r *http.Request) {
+		s.handleCommand(w, r, "create_test_bookmark")
+	})
+
 	mux.HandleFunc("POST /select-row", func(w http.ResponseWriter, r *http.Request) {
 		s.handleCommand(w, r, "select_row")
 	})

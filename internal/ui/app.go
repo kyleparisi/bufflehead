@@ -3148,6 +3148,36 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 		w.exitGatewayScreen()
 		cmd.Respond(control.Result{OK: true})
 
+	case "create_test_bookmark":
+		// Test hook: write a dummy bookmark so persistence can be verified
+		// across restarts / platforms (esp. Windows). Idempotent — repeated
+		// calls update the same "dummy-bookmark" entry.
+		if a.BookmarkStore == nil {
+			cmd.Respond(control.Result{Error: "no bookmark store"})
+			return
+		}
+		bm := models.Bookmark{
+			Label:      "dummy-bookmark",
+			Env:        "test",
+			AWSProfile: "test-profile",
+			AWSRegion:  "us-east-1",
+			RDSHost:    "dummy-db.example.com",
+			RDSPort:    5432,
+			DBName:     "testdb",
+			DBUser:     "tester",
+			AuthMode:   "password",
+		}
+		if err := a.BookmarkStore.Add(bm); err != nil {
+			cmd.Respond(control.Result{Error: err.Error()})
+			return
+		}
+		payload, _ := json.Marshal(map[string]any{
+			"path":  a.BookmarkStore.Path(),
+			"count": len(a.BookmarkStore.All()),
+			"label": bm.Label,
+		})
+		cmd.Respond(control.Result{OK: true, Data: payload})
+
 	case "nav_back":
 		w.navBackWithCmd(cmd)
 		// Response deferred to async result handler
