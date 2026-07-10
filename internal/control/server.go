@@ -57,6 +57,12 @@ type CloseConnectionData struct {
 	Index int `json:"index"`
 }
 
+// SelectColumnsData is the payload for the "select_columns" action: the set of
+// column names to keep visible (empty means all).
+type SelectColumnsData struct {
+	Columns []string `json:"columns"`
+}
+
 // ReconnectData is the payload for the "reconnect" action. Either Connection
 // (name) or Index may be supplied; empty/zero means the active connection.
 type ReconnectData struct {
@@ -281,6 +287,18 @@ func buildMux(s *Server) *http.ServeMux {
 
 	mux.HandleFunc("POST /close-connection", func(w http.ResponseWriter, r *http.Request) {
 		s.handleCommand(w, r, "close_connection")
+	})
+
+	mux.HandleFunc("POST /select-connection", func(w http.ResponseWriter, r *http.Request) {
+		s.handleCommand(w, r, "select_connection")
+	})
+
+	mux.HandleFunc("POST /select-tab", func(w http.ResponseWriter, r *http.Request) {
+		s.handleCommand(w, r, "select_tab")
+	})
+
+	mux.HandleFunc("POST /select-columns", func(w http.ResponseWriter, r *http.Request) {
+		s.handleCommand(w, r, "select_columns")
 	})
 
 	mux.HandleFunc("POST /reconnect", func(w http.ResponseWriter, r *http.Request) {

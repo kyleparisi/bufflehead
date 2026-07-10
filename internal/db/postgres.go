@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"os/user"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -288,6 +289,18 @@ func splitSchemaTable(name string) (string, string) {
 		}
 	}
 	return "public", name
+}
+
+// QuoteQualifiedName double-quotes each dot-separated segment of an identifier
+// so a schema-qualified name like `public.django_session` becomes
+// `"public"."django_session"` rather than the invalid `"public.django_session"`.
+// Embedded double quotes in a segment are escaped by doubling.
+func QuoteQualifiedName(name string) string {
+	parts := strings.Split(name, ".")
+	for i, p := range parts {
+		parts[i] = `"` + strings.ReplaceAll(p, `"`, `""`) + `"`
+	}
+	return strings.Join(parts, ".")
 }
 
 // AllTableSchemas fetches column info for all given tables in a single query.

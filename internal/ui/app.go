@@ -358,6 +358,7 @@ type SchemaPanel struct {
 	selectAllDivider PanelContainer.Instance
 	selectAllCb      CheckBox.Instance
 	checkBoxes       []CheckBox.Instance
+	checkCols        []string // column name per checkbox (parallel to checkBoxes)
 	checkRows        []HBoxContainer.Instance
 }
 
@@ -477,10 +478,13 @@ func (s *SchemaPanel) SetCheckedColumns(selected []string) {
 	for _, c := range selected {
 		selSet[c] = true
 	}
-	for _, cb := range s.checkBoxes {
-		name := cb.AsControl().GetTooltip()
+	for i, cb := range s.checkBoxes {
+		name := ""
+		if i < len(s.checkCols) {
+			name = s.checkCols[i]
+		}
 		checked := len(selected) == 0 || selSet[name]
-		cb.AsBaseButton().SetButtonPressed(checked)
+		cb.AsBaseButton().SetPressedNoSignal(checked)
 	}
 }
 
@@ -497,9 +501,9 @@ func (s *SchemaPanel) selectOnly(target CheckBox.Instance) {
 
 func (s *SchemaPanel) getCheckedColumns() []string {
 	var cols []string
-	for _, cb := range s.checkBoxes {
-		if cb.AsBaseButton().ButtonPressed() {
-			cols = append(cols, cb.AsControl().GetTooltip())
+	for i, cb := range s.checkBoxes {
+		if cb.AsBaseButton().ButtonPressed() && i < len(s.checkCols) {
+			cols = append(cols, s.checkCols[i])
 		}
 	}
 	return cols
@@ -513,6 +517,7 @@ func (s *SchemaPanel) filterCols(query string) {
 		row.AsNode().QueueFree()
 	}
 	s.checkBoxes = nil
+	s.checkCols = nil
 	s.checkRows = nil
 
 	for _, col := range s.allCols {
@@ -591,6 +596,7 @@ func (s *SchemaPanel) filterCols(query string) {
 		row.AsNode().AddChild(typeChip.AsNode())
 		s.colsList.AsNode().AddChild(row.AsNode())
 		s.checkBoxes = append(s.checkBoxes, cb)
+		s.checkCols = append(s.checkCols, col.Name)
 		s.checkRows = append(s.checkRows, row)
 	}
 }
@@ -1078,8 +1084,11 @@ func (d *DataGrid) ShowError(msg string) {
 	d.selectedCol = -1
 	d.selectedRows = make(map[int]bool)
 	d.lastSelectedRow = -1
-	d.columns = nil
-	d.rows = nil
+	// Model the error as a single-cell result so the standard cell-copy paths
+	// (double-click overlay, right-click Copy) work on the error text.
+	d.columns = []string{"Error"}
+	d.rows = [][]string{{msg}}
+	d.colTypes = []string{"VARCHAR"}
 	t := d.Super()
 	t.Clear()
 	t.SetColumns(1)
@@ -2451,7 +2460,26 @@ func (a *App) updateCachedState() {
 	if a.mainWin != nil {
 		state["windowCount"] = 1 + len(a.secondWins)
 	}
+	state["activeConnIdx"] = w.activeConnIdx
+	state["visibleTabCount"] = w.tabBar.TabCount()
+	// Ordered tabIDs of the visible (connection-scoped) tab bar, plus the
+	// active tab's position within it, so tests can verify ordering/selection.
+	visIDs := make([]uint64, 0, len(w.tabs))
+	visTitles := make([]string, 0, len(w.tabs))
+	for _, ts := range w.visibleTabs() {
+		visIDs = append(visIDs, ts.tabID)
+		visTitles = append(visTitles, w.tabTitle(ts))
+	}
+	state["visibleTabIDs"] = visIDs
+	state["visibleTabTitles"] = visTitles
+	state["activeBarIndex"] = w.tabBar.CurrentTab()
 	if ts := w.currentTab(); ts != nil {
+		state["connIdx"] = ts.connIdx
+		state["activeTabID"] = ts.tabID
+		state["activeTabTitle"] = w.tabTitle(ts)
+		if ts.schema != nil {
+			state["schemaTableCount"] = len(ts.schema.allTables)
+		}
 		state["detailVisible"] = ts.detailWrap.AsCanvasItem().Visible()
 		totalWidth := ts.outerWrap.AsControl().Size().X
 		if totalWidth > 0 {
@@ -2890,6 +2918,55 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 		w.closeConnection(d.Index)
 		cmd.Respond(control.Result{OK: true})
 
+	case "select_connection":
+		var d control.CloseConnectionData
+		if err := json.Unmarshal(cmd.Data, &d); err != nil {
+			cmd.Respond(control.Result{Error: err.Error()})
+			return
+		}
+		if d.Index < 0 || d.Index >= len(w.connections) {
+			cmd.Respond(control.Result{Error: "invalid connection index"})
+			return
+		}
+		w.selectConnection(d.Index)
+		cmd.Respond(control.Result{OK: true})
+
+	case "select_tab":
+		// Select a tab by its position in the visible (connection-scoped) tab
+		// bar. Mirrors clicking a tab in the UI.
+		var d control.CloseConnectionData // reuse {index}
+		if err := json.Unmarshal(cmd.Data, &d); err != nil {
+			cmd.Respond(control.Result{Error: err.Error()})
+			return
+		}
+		id, ok := w.tabIDAtBar(d.Index)
+		if !ok {
+			cmd.Respond(control.Result{Error: "invalid visible tab index"})
+			return
+		}
+		w.selectTab(id)
+		cmd.Respond(control.Result{OK: true})
+
+	case "select_columns":
+		// Mirror clicking column checkboxes in the schema panel: set the visible
+		// column set and re-run the query (projection applied via VirtualSQL).
+		var d control.SelectColumnsData
+		if err := json.Unmarshal(cmd.Data, &d); err != nil {
+			cmd.Respond(control.Result{Error: err.Error()})
+			return
+		}
+		ts := w.currentTab()
+		if ts == nil {
+			cmd.Respond(control.Result{Error: "no active tab"})
+			return
+		}
+		ts.State.SelectedCols = d.Columns
+		ts.State.PageOffset = 0
+		if ts.schema != nil {
+			ts.schema.SetCheckedColumns(d.Columns)
+		}
+		w.runCurrentQuery(cmd)
+
 	case "reconnect":
 		var d control.ReconnectData
 		hasData := len(cmd.Data) > 0
@@ -3007,7 +3084,21 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 		// Test/preview hook: render the connecting screen (with its step
 		// tracker) without a live AWS gateway. The tracker is seeded at the
 		// "Connect to database" stage, matching a real connection in progress.
+		// An optional {"failed": true} payload previews the failure state:
+		// the active step's dot turns red and the status line is hidden.
+		var pd struct {
+			Failed bool `json:"failed"`
+		}
+		if len(cmd.Data) > 0 {
+			_ = json.Unmarshal(cmd.Data, &pd)
+		}
 		a.showGatewayLoading("Preview")
+		if pd.Failed && w.gatewayTracker != nil {
+			w.gatewayTracker.markFailed()
+			if w.gatewayLoadingLabel != (Label.Instance{}) {
+				w.gatewayLoadingLabel.AsCanvasItem().SetVisible(false)
+			}
+		}
 		a.mainWin.emptyView.AsCanvasItem().SetVisible(true)
 		a.mainWin.split.AsCanvasItem().SetVisible(false)
 		cmd.Respond(control.Result{OK: true})
@@ -3102,6 +3193,13 @@ func walkNode(buf *bytes.Buffer, node Node.Instance, parentPath string) {
 	}
 
 	// Emit type-specific properties
+	if lbl, ok := Object.As[Label.Instance](node); ok {
+		fmt.Fprintf(buf, "text = %q\n", lbl.Text())
+		if lbl.AsControl().HasThemeColorOverride("font_color") {
+			c := lbl.AsControl().GetThemeColor("font_color")
+			fmt.Fprintf(buf, "font_color = Color(%v, %v, %v, %v)\n", c.R, c.G, c.B, c.A)
+		}
+	}
 	if sc, ok := Object.As[ScrollContainer.Instance](node); ok {
 		fmt.Fprintf(buf, "horizontal_scroll_mode = %d\n", int(sc.HorizontalScrollMode()))
 		fmt.Fprintf(buf, "vertical_scroll_mode = %d\n", int(sc.VerticalScrollMode()))

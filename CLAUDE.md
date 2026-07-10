@@ -67,6 +67,32 @@ Components expose public callback functions (e.g., `OnColumnsChanged`, `OnColumn
 
 **Query flow**: File opened → schema loaded via `duck.Schema()` → default query set → `execQuery()` builds virtual SQL with sort/pagination via `state.VirtualSQL()` → DuckDB executes → results populate DataGrid → state pushed to nav stack.
 
+## UI Rendering: Treat It As A State Machine, Not Procedural Mutations
+
+The UI (tabs, connections, sidebar, rail, title/status bars) is a **projection of state**. Model changes as a state machine, not as ad-hoc, scattered node mutations. This is the single most important convention for `internal/ui/`.
+
+**Rules:**
+
+1. **Separate state from rendering.** Keep the authoritative state in plain Go fields/structs (e.g. `AppWindow.connections`, `AppWindow.tabs`, `activeConnIdx`, per-connection active tab). Godot nodes are a *view* derived from that state — never a second source of truth.
+
+2. **Events mutate state only.** User/system actions (select connection, select tab, new tab, close tab, open/close connection) should change state fields and nothing else. They must NOT poke visibility, highlights, or the TabBar directly.
+
+3. **One `render()`/projection function updates the nodes.** After any event mutates state, call a single idempotent render pass that reconstructs the visible nodes from state: which TabBar entries exist and which is selected, which sidebar/content pane is visible, which rail tile is highlighted, title/status/AI-prompt text. Rendering is a pure function of state and must be safe to call repeatedly.
+
+4. **Rendering must never mutate state.** A render step that writes back into state (e.g. `switchTab` setting `activeConnIdx = ts.connIdx`) is the classic bug — it couples views to each other and causes cross-talk (clicking a tab jumps connections). If you find a render path writing state, that's the root cause to fix.
+
+5. **Godot signals are events, not render triggers.** Translate a signal (e.g. TabBar `tab_changed` with a bar index) into a state event, then render. Because the visible TabBar is a filtered subset of `tabs`, a bar index is NOT a `tabs` index — key bar tabs to a stable ID via `SetTabMetadata`/`GetTabMetadata` and translate.
+
+6. **Suppress signals at the render boundary, not with scattered guards.** If `render()` must call node setters that re-emit signals (`ClearTabs`, `AddTab`, `SetCurrentTab`), suppress those signals in one place around the render pass. Do NOT sprinkle re-entrancy flags across individual handlers — that's a symptom of missing separation.
+
+**Smell checklist (stop and refactor toward state+render if you see these):**
+- The same integer used as both a `tabs` index and a TabBar index (assumed 1:1 mapping).
+- A re-entrancy/`rebuilding*` boolean guarding multiple handlers.
+- A "switch"/"select" function updating unrelated view state (rail highlight, title bar) inline.
+- Copy-pasted node-update sequences in `open`, `select`, `close`, and `refresh` paths.
+
+**Derived state that belongs to the model, not the view:** e.g. "which tab is active for each connection" should live in state (per-connection active tab ID), so switching connections restores the right tab. Don't infer it from current node selection.
+
 ## MCP Tools
 
 If the `gopls` and `godoc` MCP servers are available, use them for Go workspace navigation, symbol search, file context, diagnostics, and package documentation. Prefer these over manually reading source files when exploring unfamiliar code.

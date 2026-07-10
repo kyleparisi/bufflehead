@@ -156,7 +156,9 @@ func ResolveDetailValue(col int, singleRow []string, multiRows [][]string) strin
 // VirtualSQL wraps the user's query with sorting and pagination.
 func (s *AppState) VirtualSQL() string {
 	cols := "*"
-	if len(s.SelectedCols) > 0 && len(s.SelectedCols) < len(s.Schema) {
+	// Project selected columns when a non-empty selection is a strict subset of
+	// the schema. When Schema is unknown (0), still honor a non-empty selection.
+	if len(s.SelectedCols) > 0 && (len(s.Schema) == 0 || len(s.SelectedCols) < len(s.Schema)) {
 		quoted := make([]string, len(s.SelectedCols))
 		for i, c := range s.SelectedCols {
 			quoted[i] = "\"" + c + "\""

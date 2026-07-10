@@ -15,6 +15,7 @@ type stepTracker struct {
 	root   VBoxContainer.Instance
 	dots   []Label.Instance
 	labels []Label.Instance
+	active int // index of the current in-progress stage
 }
 
 // newStepTracker builds a tracker for the given ordered stage labels. All stages
@@ -54,6 +55,7 @@ func newStepTracker(stageLabels []string) *stepTracker {
 // setActive marks every stage before `active` as done (green), the active stage
 // as in-progress (amber) or failed (red) per `failed`, and the rest pending.
 func (t *stepTracker) setActive(active int, failed bool) {
+	t.active = active
 	for i := range t.dots {
 		switch {
 		case i < active:
@@ -79,4 +81,10 @@ func (t *stepTracker) setActive(active int, failed bool) {
 // markAllDone marks every stage complete.
 func (t *stepTracker) markAllDone() {
 	t.setActive(len(t.dots), false)
+}
+
+// markFailed turns the current in-progress stage's dot red to indicate the
+// connection failed at that step.
+func (t *stepTracker) markFailed() {
+	t.setActive(t.active, true)
 }
