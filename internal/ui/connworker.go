@@ -315,7 +315,8 @@ func (cw *ConnWorker) handleRefresh(req DBRequest) {
 		return
 	}
 
-	// Bulk-load column schemas if the backend supports it (Postgres)
+	// Load column schemas so the schema tree keeps its table-level columns
+	// after a refresh (Postgres has a bulk API; DuckDB loads per-table).
 	if pgConn, ok := cw.db.(*db.PostgresDB); ok {
 		if err := pgConn.AllTableSchemas(tables); err != nil {
 			cw.results <- DBResult{
@@ -324,6 +325,11 @@ func (cw *ConnWorker) handleRefresh(req DBRequest) {
 				Err:     fmt.Errorf("load schemas: %w", err),
 			}
 			return
+		}
+	} else if duck, ok := cw.db.(*db.DB); ok {
+		for i := range tables {
+			cols, _ := duck.TableSchema(tables[i].Name)
+			tables[i].Columns = cols
 		}
 	}
 
