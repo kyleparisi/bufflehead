@@ -69,6 +69,12 @@ export PATH="$GCCDIR/bin:$(go env GOPATH)/bin:$PATH"
 # gd defaults CC to "zig cc" only when CC is unset in the process env, and zig
 # can't statically link libduckdb.a into the shared DLL. Setting CC makes gd use
 # our gcc 14.2 instead.
+#
+# gd treats an empty GDPATH as "local toolchain" mode and then REFUSES to
+# auto-download Godot ("automatic-downloads are disabled"). On CI runners its
+# HOME-based fallback resolves empty, so pin GDPATH to a concrete dir; gd then
+# downloads the pinned Godot 4.6.1 editor + libgodot into it on first build.
+export GDPATH="${GDPATH:-$HOME/gd}"
 step "gd build"
 export CC="$(cygpath -w "$GCCDIR/bin/gcc.exe")"
 export CXX="$(cygpath -w "$GCCDIR/bin/g++.exe")"
