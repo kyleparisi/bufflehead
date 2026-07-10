@@ -75,6 +75,13 @@ export PATH="$GCCDIR/bin:$(go env GOPATH)/bin:$PATH"
 # HOME-based fallback resolves empty, so pin GDPATH to a concrete dir; gd then
 # downloads the pinned Godot 4.6.1 editor + libgodot into it on first build.
 export GDPATH="${GDPATH:-$HOME/gd}"
+step "toolchain env (diagnostic)"
+echo "GDPATH=[$GDPATH]"
+echo "GDTOOLCHAIN(env)=[${GDTOOLCHAIN:-<unset>}]"
+echo "GOTOOLCHAIN(env)=[${GOTOOLCHAIN:-<unset>}]"
+echo "GOTOOLCHAIN(go env)=[$(go env GOTOOLCHAIN)]"
+echo "HOME=[$HOME]"
+echo "godot on PATH: [$(command -v godot || echo none)]"
 step "gd build"
 export CC="$(cygpath -w "$GCCDIR/bin/gcc.exe")"
 export CXX="$(cygpath -w "$GCCDIR/bin/g++.exe")"
