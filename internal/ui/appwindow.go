@@ -75,6 +75,7 @@ type AppWindow struct {
 
 	// Connection rail
 	connRail      VBoxContainer.Instance
+	connList      VBoxContainer.Instance // holds the connection buttons (mem + added)
 	connRailWrap  PanelContainer.Instance
 	connections   []*Connection
 	activeConnIdx int
@@ -89,14 +90,21 @@ type AppWindow struct {
 	// Gateway
 	pendingGateway      *GatewayConnection
 	gatewayLoadingLabel Label.Instance
-	gatewayLoadingMsg   string // set by background goroutine, read by Process
+	gatewayTracker      *stepTracker // connection-status step tracker on the loading screen
+	gatewayLoadingMsg   string       // set by background goroutine, read by Process
+
+	// Extension install/load result, set by a background goroutine and applied
+	// on the main thread in Process (mirrors the gatewayLoadingMsg pattern).
+	extActionMsg *extActionResult
+	extActionTab *tabState
 
 	// Control server address for AI prompt
 	controlAddr string
 
 	// Callbacks
-	onNewWindow func()
-	onReLogin   func() // opens the gateway/SSO screen to re-authenticate
+	onNewWindow     func()
+	onReLogin       func() // opens the gateway/SSO screen to re-authenticate
+	onNewConnection func() // opens the gateway screen to add a new connection
 
 	reLoginDialogOpen bool // guards against stacking re-login dialogs
 }
@@ -141,7 +149,42 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 
 	w.tabBar.OnTabChanged(func(tab int) { w.switchTab(tab) })
 	w.tabBar.OnTabClosePressed(func(tab int) { w.closeTab(tab) })
-	w.tabBarWrap.AsNode().AddChild(w.tabBar.AsNode())
+
+	// Tab row: [tabs ............] [+ new tab] [⧉ new window]
+	// The +/⧉ buttons are visible, cross-platform replacements for the
+	// macOS-only "New Tab" / "New Window" menu items.
+	tabRow := HBoxContainer.New()
+	tabRow.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	tabRow.AsControl().AddThemeConstantOverride("separation", 4)
+	tabRow.AsNode().AddChild(w.tabBar.AsNode())
+
+	newTabBtn := Button.New()
+	newTabBtn.AsNode().SetName("NewTabButton")
+	newTabBtn.SetText("+")
+	newTabBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(16))
+	newTabBtn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(26), 0))
+	newTabBtn.AsControl().SetSizeFlagsVertical(Control.SizeShrinkCenter)
+	newTabBtn.AsControl().SetTooltipText("New Tab")
+	applySecondaryButtonTheme(newTabBtn.AsControl())
+	newTabBtn.AsBaseButton().OnPressed(func() { w.addNewTab() })
+	tabRow.AsNode().AddChild(newTabBtn.AsNode())
+
+	newWindowBtn := Button.New()
+	newWindowBtn.AsNode().SetName("NewWindowButton")
+	newWindowBtn.SetText("⧉")
+	newWindowBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(14))
+	newWindowBtn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(26), 0))
+	newWindowBtn.AsControl().SetSizeFlagsVertical(Control.SizeShrinkCenter)
+	newWindowBtn.AsControl().SetTooltipText("New Window")
+	applySecondaryButtonTheme(newWindowBtn.AsControl())
+	newWindowBtn.AsBaseButton().OnPressed(func() {
+		if w.onNewWindow != nil {
+			w.onNewWindow()
+		}
+	})
+	tabRow.AsNode().AddChild(newWindowBtn.AsNode())
+
+	w.tabBarWrap.AsNode().AddChild(tabRow.AsNode())
 
 	// Split
 	w.split = HSplitContainer.New()
@@ -171,12 +214,16 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 
 	// Status bar - more padding for breathing room
 	statusWrap := PanelContainer.New()
-	applyPanelBg(statusWrap.AsControl(), colorBgSidebar)
+	// Darker footer surface with a thin top border (surface-container-lowest).
+	statusSB := makeStyleBox(colorBgDarker, 0, 0, colorBgDarker)
+	statusSB.SetBorderWidthTop(1)
+	statusSB.SetBorderColor(colorBorder)
+	statusWrap.AsControl().AddThemeStyleboxOverride("panel", statusSB.AsStyleBox())
 	statusMargin := MarginContainer.New()
-	statusMargin.AsControl().AddThemeConstantOverride("margin_top", 6)
-	statusMargin.AsControl().AddThemeConstantOverride("margin_left", 12)
-	statusMargin.AsControl().AddThemeConstantOverride("margin_right", 12)
-	statusMargin.AsControl().AddThemeConstantOverride("margin_bottom", 6)
+	statusMargin.AsControl().AddThemeConstantOverride("margin_top", 4)
+	statusMargin.AsControl().AddThemeConstantOverride("margin_left", 10)
+	statusMargin.AsControl().AddThemeConstantOverride("margin_right", 10)
+	statusMargin.AsControl().AddThemeConstantOverride("margin_bottom", 4)
 
 	w.statusBar = new(StatusBar)
 	w.statusBar.OnPrevPage = func() {
@@ -191,6 +238,26 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 		if ts != nil && ts.State.Result != nil && ts.State.PageOffset+ts.State.PageSize < int(ts.State.Result.Total) {
 			ts.State.PageOffset += ts.State.PageSize
 			w.runCurrentQuery(nil)
+		}
+	}
+	w.statusBar.OnFirstPage = func() {
+		ts := w.currentTab()
+		if ts != nil && ts.State.PageOffset > 0 {
+			ts.State.PageOffset = 0
+			w.runCurrentQuery(nil)
+		}
+	}
+	w.statusBar.OnLastPage = func() {
+		ts := w.currentTab()
+		if ts != nil && ts.State.Result != nil && ts.State.PageSize > 0 {
+			last := ((int(ts.State.Result.Total) - 1) / ts.State.PageSize) * ts.State.PageSize
+			if last < 0 {
+				last = 0
+			}
+			if last != ts.State.PageOffset {
+				ts.State.PageOffset = last
+				w.runCurrentQuery(nil)
+			}
 		}
 	}
 	w.statusBar.OnToggleLeftPane = func() {
@@ -241,7 +308,7 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 	emptyTitle.SetHorizontalAlignment(1)
 
 	emptyHint := Label.New()
-	emptyHint.SetText("⌘T  New Tab   ·   ⌘O  Open File   ·   Drop .parquet here")
+	emptyHint.SetText("＋  New Connection (left rail)   ·   Open a file   ·   Drop .parquet here")
 	emptyHint.AsControl().AddThemeFontSizeOverride("font_size", fontSize(13))
 	emptyHint.AsControl().AddThemeColorOverride("font_color", colorTextDim)
 	emptyHint.SetHorizontalAlignment(1)
@@ -254,7 +321,7 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 	// Connection rail (far-left column)
 	w.connRailWrap = PanelContainer.New()
 	w.connRailWrap.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
-	w.connRailWrap.AsControl().SetCustomMinimumSize(Vector2.New(scaled(36), 0))
+	w.connRailWrap.AsControl().SetCustomMinimumSize(Vector2.New(scaled(48), 0))
 	applyPanelBg(w.connRailWrap.AsControl(), colorBgDarker)
 
 	railMargin := MarginContainer.New()
@@ -270,16 +337,21 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 	w.connRail.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
 	w.connRail.AsControl().AddThemeConstantOverride("separation", 4)
 
+	// connList holds the connection buttons; a bottom-pinned "+" adds new ones.
+	w.connList = VBoxContainer.New()
+	w.connList.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	w.connList.AsControl().AddThemeConstantOverride("separation", 4)
+
 	railMargin.AsNode().AddChild(w.connRail.AsNode())
 	w.connRailWrap.AsNode().AddChild(railMargin.AsNode())
+	w.connRail.AsNode().AddChild(w.connList.AsNode())
 
 	// Memory connection is always index 0
 	memBtn := Button.New()
-	memBtn.SetText("mem")
-	memBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(10))
-	memBtn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(36), scaled(36)))
+	memBtn.SetText(models.ConnBadge("Memory"))
+	memBtn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(40), scaled(40)))
 	memBtn.SetClipText(true)
-	applyActiveButtonTheme(memBtn.AsControl()) // active by default
+	applyConnTileTheme(memBtn.AsControl(), true) // active by default
 	memWorker := NewConnWorker(w.duck, w.results)
 	memWorker.Start()
 	memConn := &Connection{
@@ -291,9 +363,28 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 		worker: memWorker,
 	}
 	w.connections = append(w.connections, memConn)
-	w.connRail.AsNode().AddChild(memBtn.AsNode())
+	w.connList.AsNode().AddChild(memBtn.AsNode())
 	w.activeConnIdx = 0
 	w.wireConnButton(memBtn, 0)
+
+	// Spacer pushes the "New Connection" button to the bottom of the rail.
+	railSpacer := Control.New()
+	railSpacer.SetSizeFlagsVertical(Control.SizeExpandFill)
+	w.connRail.AsNode().AddChild(railSpacer.AsNode())
+
+	// New Connection ("+") — visible, cross-platform replacement for the
+	// macOS-only "Connect to Gateway…" / "Open…" menu items.
+	newConnBtn := Button.New()
+	newConnBtn.AsNode().SetName("NewConnectionButton")
+	newConnBtn.SetText("+")
+	newConnBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(18))
+	newConnBtn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(36), scaled(36)))
+	newConnBtn.AsControl().SetTooltipText("New Connection")
+	applySecondaryButtonTheme(newConnBtn.AsControl())
+	newConnBtn.AsBaseButton().OnPressed(func() {
+		w.showNewConnectionMenu(newConnBtn)
+	})
+	w.connRail.AsNode().AddChild(newConnBtn.AsNode())
 
 	// Content area (rail | main)
 	contentHBox := HBoxContainer.New()
@@ -343,6 +434,11 @@ func (w *AppWindow) addNewTab() {
 		w.titleBar.OnRefresh = func() {
 			w.refreshConnection(w.activeConnIdx)
 		}
+		w.titleBar.OnRun = func() {
+			if ts := w.currentTab(); ts != nil && ts.sqlPanel != nil {
+				ts.sqlPanel.Run()
+			}
+		}
 		w.navWired = true
 	}
 
@@ -375,19 +471,29 @@ func (w *AppWindow) addNewTab() {
 	selectorRow.AsControl().AddThemeConstantOverride("separation", 0)
 
 	schemaBtn := Button.New()
-	schemaBtn.SetText("Items")
+	schemaBtn.SetText("Schema")
 	schemaBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(13))
 	schemaBtn.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	applySidebarTabTheme(schemaBtn.AsControl(), true)
+	ts.schemaBtn = schemaBtn
 
 	historyBtn := Button.New()
 	historyBtn.SetText("History")
 	historyBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(13))
 	historyBtn.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	applySidebarTabTheme(historyBtn.AsControl(), false)
+	ts.historyBtn = historyBtn
+
+	extBtn := Button.New()
+	extBtn.SetText("Extensions")
+	extBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(12))
+	extBtn.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	applySidebarTabTheme(extBtn.AsControl(), false)
+	ts.extBtn = extBtn
 
 	selectorRow.AsNode().AddChild(schemaBtn.AsNode())
 	selectorRow.AsNode().AddChild(historyBtn.AsNode())
+	selectorRow.AsNode().AddChild(extBtn.AsNode())
 
 	ts.schema = new(SchemaPanel)
 	ts.schema.OnColumnsChanged = func(selected []string) {
@@ -404,29 +510,23 @@ func (w *AppWindow) addNewTab() {
 		ts.sqlPanel.SetSQL(sql)
 		w.runCurrentQuery(nil)
 	}
+	ts.extPanel = new(ExtensionsPanel)
+	ts.extPanel.OnAction = func(name string, install bool) {
+		w.handleExtAction(ts, name, install)
+	}
 
-	// Start showing schema, hide history
+	// Start showing schema, hide the others
 	ts.historyPanel.AsCanvasItem().SetVisible(false)
+	ts.extPanel.AsCanvasItem().SetVisible(false)
 
-	schemaBtn.AsBaseButton().OnPressed(func() {
-		ts.schema.AsCanvasItem().SetVisible(true)
-		ts.historyPanel.AsCanvasItem().SetVisible(false)
-		applySidebarTabTheme(schemaBtn.AsControl(), true)
-		applySidebarTabTheme(historyBtn.AsControl(), false)
-	})
-	historyBtn.AsBaseButton().OnPressed(func() {
-		ts.schema.AsCanvasItem().SetVisible(false)
-		ts.historyPanel.AsCanvasItem().SetVisible(true)
-		applySidebarTabTheme(schemaBtn.AsControl(), false)
-		applySidebarTabTheme(historyBtn.AsControl(), true)
-		if w.history != nil {
-			ts.historyPanel.SetHistory(w.history.All())
-		}
-	})
+	schemaBtn.AsBaseButton().OnPressed(func() { w.showSchemaSidebar(ts) })
+	historyBtn.AsBaseButton().OnPressed(func() { w.showHistorySidebar(ts) })
+	extBtn.AsBaseButton().OnPressed(func() { w.showExtensionsSidebar(ts) })
 
 	sidebarVBox.AsNode().AddChild(selectorRow.AsNode())
 	sidebarVBox.AsNode().AddChild(ts.schema.AsNode())
 	sidebarVBox.AsNode().AddChild(ts.historyPanel.AsNode())
+	sidebarVBox.AsNode().AddChild(ts.extPanel.AsNode())
 	sidebarMargin.AsNode().AddChild(sidebarVBox.AsNode())
 	ts.sidebarWrap.AsNode().AddChild(sidebarMargin.AsNode())
 
@@ -492,7 +592,7 @@ func (w *AppWindow) addNewTab() {
 		if len(rows) == 0 {
 			return
 		}
-		ts.detailPanel.SetRows(ts.dataGrid.columns, rows)
+		ts.detailPanel.SetRows(ts.dataGrid.columns, ts.dataGrid.colTypes, rows)
 		if !ts.detailWrap.AsCanvasItem().Visible() {
 			// Open at 25% width
 			totalWidth := ts.outerWrap.AsControl().Size().X
@@ -568,11 +668,7 @@ func (w *AppWindow) switchTab(idx int) {
 	if ts.connIdx >= 0 && ts.connIdx < len(w.connections) {
 		w.activeConnIdx = ts.connIdx
 		for i, c := range w.connections {
-			if i == ts.connIdx {
-				applyActiveButtonTheme(c.button.AsControl())
-			} else {
-				applySecondaryButtonTheme(c.button.AsControl())
-			}
+			applyConnTileTheme(c.button.AsControl(), i == ts.connIdx)
 		}
 		w.titleBar.SetFileInfo(w.connections[ts.connIdx].Path)
 	}
@@ -822,16 +918,15 @@ func (w *AppWindow) handleOpenDBResult(res DBResult) {
 
 	// Add button to rail
 	btn := Button.New()
-	btn.SetText(name)
-	btn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(10))
-	btn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(36), scaled(36)))
+	btn.SetText(models.ConnBadge(name))
+	btn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(40), scaled(40)))
 	btn.SetClipText(true)
-	applySecondaryButtonTheme(btn.AsControl())
+	applyConnTileTheme(btn.AsControl(), false)
 	conn.button = btn
 
 	dbIdx := len(w.connections)
 	w.connections = append(w.connections, conn)
-	w.connRail.AsNode().AddChild(btn.AsNode())
+	w.connList.AsNode().AddChild(btn.AsNode())
 	w.connRailWrap.AsCanvasItem().SetVisible(true)
 
 	w.wireConnButton(btn, dbIdx)
@@ -870,13 +965,9 @@ func (w *AppWindow) selectConnection(idx int) {
 	}
 	w.activeConnIdx = idx
 
-	// Highlight active button
+	// Highlight active tile
 	for i, c := range w.connections {
-		if i == idx {
-			applyActiveButtonTheme(c.button.AsControl())
-		} else {
-			applySecondaryButtonTheme(c.button.AsControl())
-		}
+		applyConnTileTheme(c.button.AsControl(), i == idx)
 	}
 
 	// Show/hide AI prompt copy button based on connection type
@@ -887,6 +978,14 @@ func (w *AppWindow) selectConnection(idx int) {
 		w.titleBar.SetAIPrompt("")
 	}
 
+	// Reflect the active connection in the footer, including its health dot.
+	connName := conn.Name
+	if conn.Path == ":memory:" {
+		connName = "in-memory"
+	}
+	w.statusBar.SetConnection(connName)
+	w.statusBar.SetConnectionDot(connHealthColor(conn))
+
 	// Find the first tab bound to this connection and switch to it
 	for i, ts := range w.tabs {
 		if ts.connIdx == idx {
@@ -896,8 +995,107 @@ func (w *AppWindow) selectConnection(idx int) {
 	}
 }
 
+type sidebarView int
+
+const (
+	viewSchema sidebarView = iota
+	viewHistory
+	viewExtensions
+)
+
+// setSidebarView shows exactly one of the sidebar panels and highlights its tab.
+func (w *AppWindow) setSidebarView(ts *tabState, v sidebarView) {
+	ts.schema.AsCanvasItem().SetVisible(v == viewSchema)
+	ts.historyPanel.AsCanvasItem().SetVisible(v == viewHistory)
+	ts.extPanel.AsCanvasItem().SetVisible(v == viewExtensions)
+	applySidebarTabTheme(ts.schemaBtn.AsControl(), v == viewSchema)
+	applySidebarTabTheme(ts.historyBtn.AsControl(), v == viewHistory)
+	applySidebarTabTheme(ts.extBtn.AsControl(), v == viewExtensions)
+
+	switch v {
+	case viewHistory:
+		if w.history != nil {
+			ts.historyPanel.SetHistory(w.history.All())
+		}
+	case viewExtensions:
+		w.loadExtensions(ts)
+	}
+}
+
+func (w *AppWindow) showSchemaSidebar(ts *tabState)     { w.setSidebarView(ts, viewSchema) }
+func (w *AppWindow) showHistorySidebar(ts *tabState)    { w.setSidebarView(ts, viewHistory) }
+func (w *AppWindow) showExtensionsSidebar(ts *tabState) { w.setSidebarView(ts, viewExtensions) }
+
+// loadExtensions queries the DuckDB extension list and populates the panel.
+func (w *AppWindow) loadExtensions(ts *tabState) {
+	if w.duck == nil {
+		return
+	}
+	exts, err := w.duck.Extensions()
+	if err != nil {
+		w.statusBar.SetStatus("Extensions error: " + err.Error())
+		return
+	}
+	ts.extPanel.SetExtensions(exts)
+}
+
+// extActionResult carries the outcome of a background install/load back to the
+// main thread.
+type extActionResult struct {
+	name string
+	err  error
+}
+
+// handleExtAction installs (and loads) or loads an extension in the background,
+// then refreshes the panel. INSTALL may hit the network, so it must not run on
+// the main thread.
+func (w *AppWindow) handleExtAction(ts *tabState, name string, install bool) {
+	if w.duck == nil {
+		return
+	}
+	verb := "Loading"
+	if install {
+		verb = "Installing"
+	}
+	w.statusBar.SetStatus(verb + " " + name + "…")
+	go func() {
+		var err error
+		if install {
+			err = w.duck.InstallExtension(name)
+		}
+		if err == nil {
+			err = w.duck.LoadExtension(name)
+		}
+		w.extActionTab = ts
+		w.extActionMsg = &extActionResult{name: name, err: err}
+	}()
+}
+
 // wireConnButton sets up left-click (select) and right-click (context menu) on a rail button.
+// connHealthColor returns the footer status-dot color for a connection: green
+// when connected (all local connections, or a gateway with a live tunnel),
+// amber while a gateway tunnel is reconnecting, red on tunnel error.
+func connHealthColor(conn *Connection) Color.RGBA {
+	if conn == nil {
+		return colorStatusGray
+	}
+	if conn.Gateway == nil || conn.Gateway.Tunnel == nil {
+		return colorStatusGreen
+	}
+	switch conn.Gateway.Tunnel.Status() {
+	case bfaws.TunnelError:
+		return colorStatusRed
+	case bfaws.TunnelConnecting:
+		return colorStatusYellow
+	default:
+		return colorStatusGreen
+	}
+}
+
 func (w *AppWindow) wireConnButton(btn Button.Instance, idx int) {
+	if idx >= 0 && idx < len(w.connections) {
+		btn.AsControl().SetTooltipText(w.connections[idx].Name)
+	}
 	btn.AsBaseButton().OnPressed(func() {
 		w.selectConnection(idx)
 	})
@@ -938,6 +1136,53 @@ func (w *AppWindow) showConnContextMenu(idx int) {
 	w.connRail.AsNode().AddChild(popup.AsNode())
 	popup.AsWindow().SetPosition(DisplayServer.MouseGetPosition())
 	popup.AsWindow().Popup()
+}
+
+// showNewConnectionMenu opens the "+" rail menu offering the two ways to create
+// a connection. This is the cross-platform (Windows/Linux) entry point for
+// actions that previously lived only in the macOS native menu bar.
+func (w *AppWindow) showNewConnectionMenu(anchor Button.Instance) {
+	popup := PopupMenu.New()
+	popup.AddItem("Open File…")
+	popup.AddItem("Connect to Gateway…")
+
+	popup.OnIdPressed(func(id int) {
+		switch id {
+		case 0:
+			w.showOpenFileDialog()
+		case 1:
+			if w.onNewConnection != nil {
+				w.onNewConnection()
+			}
+		}
+		popup.AsNode().QueueFree()
+	})
+	popup.AsWindow().OnCloseRequested(func() {
+		popup.AsNode().QueueFree()
+	})
+
+	w.connRail.AsNode().AddChild(popup.AsNode())
+	popup.AsWindow().SetPosition(DisplayServer.MouseGetPosition())
+	popup.AsWindow().Popup()
+}
+
+// showOpenFileDialog presents the native file picker for the file types
+// Bufflehead can open and loads the selection into the active tab.
+func (w *AppWindow) showOpenFileDialog() {
+	DisplayServer.FileDialogShow(
+		"Open Data File",
+		"",
+		"",
+		false,
+		DisplayServer.FileDialogModeOpenFile,
+		[]string{"*.parquet,*.duckdb,*.db,*.ddb,*.csv,*.json,*.tsv ; Data Files"},
+		func(status bool, selectedPaths []string, selectedFilterIndex int) {
+			if status && len(selectedPaths) > 0 {
+				w.onFileSelected(selectedPaths[0])
+			}
+		},
+		0,
+	)
 }
 
 // refreshConnection refreshes a connection. For remote gateway connections it
@@ -1062,12 +1307,14 @@ func (w *AppWindow) handleDBResult(res DBResult) {
 // handleOpenGatewayResult processes the result of an async gateway (Postgres) open.
 func (w *AppWindow) handleOpenGatewayResult(res DBResult) {
 	if res.Err != nil {
+		w.gatewayTracker = nil
 		w.showConnError(w.currentTab(), res.Err, "Gateway error: ")
 		return
 	}
 
 	gw := w.pendingGateway
 	w.pendingGateway = nil
+	w.gatewayTracker = nil
 	if gw == nil {
 		return
 	}
@@ -1091,16 +1338,15 @@ func (w *AppWindow) handleOpenGatewayResult(res DBResult) {
 
 	// Add button to rail
 	btn := Button.New()
-	btn.SetText(name)
-	btn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(10))
-	btn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(36), scaled(36)))
+	btn.SetText(models.ConnBadge(name))
+	btn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(40), scaled(40)))
 	btn.SetClipText(true)
-	applySecondaryButtonTheme(btn.AsControl())
+	applyConnTileTheme(btn.AsControl(), false)
 	conn.button = btn
 
 	gwIdx := len(w.connections)
 	w.connections = append(w.connections, conn)
-	w.connRail.AsNode().AddChild(btn.AsNode())
+	w.connList.AsNode().AddChild(btn.AsNode())
 	w.connRailWrap.AsCanvasItem().SetVisible(true)
 
 	w.wireConnButton(btn, gwIdx)
@@ -1272,6 +1518,17 @@ func (w *AppWindow) handleQueryResult(res DBResult) {
 	ts.dataGrid.AsCanvasItem().SetModulate(Color.RGBA{R: 1, G: 1, B: 1, A: 1})
 
 	if res.Err != nil {
+		if !res.Navigating && w.history != nil {
+			if sql := res.VirtualSQL; sql != "" {
+				w.history.Add(models.HistoryEntry{
+					SQL:        sql,
+					FilePath:   ts.State.FilePath,
+					Timestamp:  time.Now(),
+					DurationMs: res.Elapsed.Milliseconds(),
+					Error:      res.Err.Error(),
+				})
+			}
+		}
 		w.showConnError(ts, res.Err, "Error: ")
 		ts.navigating = false
 		if res.ControlCmd != nil {

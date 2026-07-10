@@ -233,6 +233,27 @@ func buildMux(s *Server) *http.ServeMux {
 		s.handleCommand(w, r, "new_window")
 	})
 
+	mux.HandleFunc("POST /open-gateway", func(w http.ResponseWriter, r *http.Request) {
+		s.handleCommand(w, r, "open_gateway")
+	})
+
+	// Preview the connecting screen (with its step tracker) without a live
+	// gateway — used by integration tests and manual UI inspection.
+	mux.HandleFunc("POST /preview-connecting", func(w http.ResponseWriter, r *http.Request) {
+		s.handleCommand(w, r, "preview_connecting")
+	})
+
+	// Show + populate the query history panel (normally opened via the sidebar
+	// "History" tab) — used by integration tests and manual UI inspection.
+	mux.HandleFunc("POST /show-history", func(w http.ResponseWriter, r *http.Request) {
+		s.handleCommand(w, r, "show_history")
+	})
+
+	// Show + populate the DuckDB extensions panel (sidebar "Extensions" tab).
+	mux.HandleFunc("POST /show-extensions", func(w http.ResponseWriter, r *http.Request) {
+		s.handleCommand(w, r, "show_extensions")
+	})
+
 	mux.HandleFunc("POST /select-row", func(w http.ResponseWriter, r *http.Request) {
 		s.handleCommand(w, r, "select_row")
 	})

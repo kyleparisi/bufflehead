@@ -102,6 +102,17 @@ def find_node(tscn_text, cls, ancestor=None):
     return None
 
 
+def has_node_named(tscn_text, name):
+    """True if any node in the scene tree has the given node name."""
+    return any(n["path"].split("/")[-1] == name for n in parse_tscn(tscn_text))
+
+
+def count_nodes_named(tscn_text, name):
+    """Count nodes whose leaf name equals `name` (siblings get unique names,
+    so each type chip keeps its own parent and stays 'TypeChip')."""
+    return sum(1 for n in parse_tscn(tscn_text) if n["path"].split("/")[-1] == name)
+
+
 def ui_tree(width=None, height=None, scale=None):
     params = {}
     if width:
@@ -579,3 +590,146 @@ class TestReconnect:
         # Clean up so the opened connection doesn't leak into later tests.
         post("close-connection", {"index": 1})
         time.sleep(0.2)
+
+
+class TestConnectionControls:
+    """The connection rail and tab row expose visible, cross-platform controls
+    for actions that previously lived only in the macOS native menu bar
+    (which does not render on Windows/Linux)."""
+
+    def test_new_connection_button_visible(self):
+        close_all_tabs()
+        open_file(SAMPLE)
+        tree = ui_tree()
+        assert has_node_named(tree, "NewConnectionButton"), (
+            "connection rail should have a visible '+' New Connection button"
+        )
+
+    def test_new_tab_button_visible(self):
+        tree = ui_tree()
+        assert has_node_named(tree, "NewTabButton"), (
+            "tab row should have a visible '+' New Tab button"
+        )
+
+    def test_new_window_button_visible(self):
+        tree = ui_tree()
+        assert has_node_named(tree, "NewWindowButton"), (
+            "tab row should have a visible New Window button"
+        )
+
+    def test_open_gateway_shows_gateway_screen(self):
+        """The 'Connect to Gateway…' action opens the gateway screen — the same
+        code path the connection rail '+' menu triggers."""
+        close_all_connections()
+        close_all_tabs()
+        post("new-tab")
+        time.sleep(0.3)
+
+        result = post("open-gateway")
+        assert result["ok"] is True
+        time.sleep(0.3)
+
+        tree = ui_tree()
+        assert find_node(tree, "GatewayScreen") is not None, (
+            "gateway screen should be shown after open-gateway"
+        )
+
+        # Restore a normal data view for subsequent tests.
+        open_file(SAMPLE)
+
+
+class TestNewWindow:
+    def test_new_window_increments_count(self):
+        close_all_tabs()
+        open_file(SAMPLE)
+        before = state()["windowCount"]
+
+        result = post("new-window")
+        assert result["ok"] is True
+        time.sleep(0.3)
+
+        assert state()["windowCount"] == before + 1
+
+
+class TestTypeChips:
+    """Color-coded data-type chips appear in the schema panel and, when a row is
+    selected, in the row inspector (blue INT, green FLOAT, amber TIMESTAMP, …)."""
+
+    def test_schema_panel_has_type_chips(self):
+        close_all_tabs()
+        open_file(SAMPLE)  # 8 columns
+        tree = ui_tree()
+        assert count_nodes_named(tree, "TypeChip") >= 8, (
+            "schema panel should show a type chip per column"
+        )
+
+    def test_row_inspector_has_type_chips(self):
+        open_file(SAMPLE)
+        before = count_nodes_named(ui_tree(), "TypeChip")
+
+        post("select-row", {"row": 0})
+        time.sleep(0.3)
+        after = count_nodes_named(ui_tree(), "TypeChip")
+
+        assert after > before, (
+            "row inspector should add a type chip per field when a row is selected"
+        )
+
+
+class TestConnectingTracker:
+    """The connecting screen shows a step tracker (Authenticate → Establish
+    tunnel → Connect database → Load schema). Previewed without a live gateway
+    via the /preview-connecting hook."""
+
+    def test_preview_shows_step_tracker(self):
+        close_all_tabs()
+        result = post("preview-connecting")
+        assert result["ok"] is True
+        time.sleep(0.3)
+
+        tree = ui_tree()
+        assert has_node_named(tree, "StepTracker"), (
+            "connecting screen should render a StepTracker"
+        )
+
+        # Restore a normal data view for any later tests.
+        open_file(SAMPLE)
+
+
+class TestHistoryPanel:
+    """The history panel renders rich cards: SQL + SUCCESS/ERROR status chip,
+    relative time, duration, and row count. Shown via the /show-history hook."""
+
+    def test_history_shows_rows_and_status_chips(self):
+        close_all_tabs()
+        open_file(SAMPLE)
+        # A success and a failure so both chip states are recorded.
+        post("query", {"sql": f"SELECT id FROM '{SAMPLE}' LIMIT 5"})
+        time.sleep(0.3)
+        post("query", {"sql": "SELEKT bad syntax"})
+        time.sleep(0.3)
+
+        result = post("show-history")
+        assert result["ok"] is True
+        time.sleep(0.3)
+
+        tree = ui_tree()
+        assert has_node_named(tree, "HistoryRow"), "history should render entry cards"
+        assert has_node_named(tree, "HistoryStatus"), "history cards should show a status chip"
+
+
+class TestExtensionsPanel:
+    """The Extensions tab lists DuckDB extensions with status chips and
+    Install/Load actions. Shown via the /show-extensions hook."""
+
+    def test_extensions_panel_lists_extensions(self):
+        close_all_tabs()
+        open_file(SAMPLE)
+
+        result = post("show-extensions")
+        assert result["ok"] is True
+        time.sleep(0.3)
+
+        tree = ui_tree()
+        assert has_node_named(tree, "ExtensionRow"), "extensions panel should list extension cards"
+        assert has_node_named(tree, "ExtensionStatus"), "extension cards should show a status chip"

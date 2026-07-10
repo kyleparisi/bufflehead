@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -40,6 +41,7 @@ import (
 	"graphics.gd/classdb/Label"
 	"graphics.gd/classdb/LineEdit"
 	"graphics.gd/classdb/MarginContainer"
+	"graphics.gd/classdb/TextureRect"
 	"graphics.gd/classdb/Node"
 	"graphics.gd/classdb/PanelContainer"
 	"graphics.gd/classdb/PopupMenu"
@@ -54,6 +56,7 @@ import (
 	"graphics.gd/classdb/VSplitContainer"
 	"graphics.gd/classdb/Window"
 
+	"graphics.gd/variant/Color"
 	"graphics.gd/variant/Float"
 	"graphics.gd/variant/Object"
 	"graphics.gd/variant/Vector2"
@@ -68,10 +71,12 @@ type TitleBar struct {
 	infoLabel     Label.Instance
 	copyBtn       Button.Instance
 	refreshBtn    Button.Instance
+	runBtn        Button.Instance
 	aiPrompt      string
 	NavBackBtn    Button.Instance
 	NavFwdBtn     Button.Instance
 	OnRefresh     func() // called when refresh button is pressed
+	OnRun         func() // called when the Run button is pressed
 	WindowID      int
 	resetCopyText bool // set by goroutine, read by Process on main thread
 }
@@ -100,52 +105,69 @@ func (t *TitleBar) Ready() {
 
 	row := HBoxContainer.New()
 	row.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	row.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
 	row.AsControl().AddThemeConstantOverride("separation", 6)
 
-	// Nav buttons
+	// ── Left: brand + nav ───────────────────────────────────────────────
+	brand := Label.New()
+	brand.SetText("Bufflehead")
+	brand.AsControl().AddThemeColorOverride("font_color", colorTextBright)
+	brand.AsControl().AddThemeFontSizeOverride("font_size", fontSize(14))
+	brand.AsControl().SetMouseFilter(Control.MouseFilterPass)
+	brand.AsControl().SetSizeFlagsVertical(Control.SizeShrinkCenter)
+
+	brandDiv := footerDivider()
+	brandDiv.AsControl().SetMouseFilter(Control.MouseFilterPass)
+
+	// Ghost nav buttons
 	t.NavBackBtn = Button.New()
 	t.NavBackBtn.SetText("◀")
-	t.NavBackBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
 	t.NavBackBtn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(24), 0))
-	applySecondaryButtonTheme(t.NavBackBtn.AsControl())
+	applyFooterGhostButton(t.NavBackBtn.AsControl())
 	t.NavBackBtn.AsBaseButton().SetDisabled(true)
 	t.NavBackBtn.AsControl().SetMouseFilter(Control.MouseFilterStop)
 
 	t.NavFwdBtn = Button.New()
 	t.NavFwdBtn.SetText("▶")
-	t.NavFwdBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
 	t.NavFwdBtn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(24), 0))
-	applySecondaryButtonTheme(t.NavFwdBtn.AsControl())
+	applyFooterGhostButton(t.NavFwdBtn.AsControl())
 	t.NavFwdBtn.AsBaseButton().SetDisabled(true)
 	t.NavFwdBtn.AsControl().SetMouseFilter(Control.MouseFilterStop)
 
-	// Spacer after nav buttons
-	leftSpacer := Control.New()
-	leftSpacer.SetSizeFlagsHorizontal(Control.SizeExpandFill)
-	leftSpacer.AsControl().SetSizeFlagsStretchRatio(1)
+	// Spacer (draggable area)
+	spacer := Control.New()
+	spacer.SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	spacer.SetMouseFilter(Control.MouseFilterPass)
 
-	// Connection info pill (centered, 50%)
+	// ── Right: breadcrumb pill (db icon + connection) + AI + reconnect ──
 	pill := PanelContainer.New()
-	applyPillTheme(pill.AsControl())
-	pill.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
-	pill.AsControl().AsControl().SetSizeFlagsStretchRatio(2)
+	pill.AsControl().AddThemeStyleboxOverride("panel", titlePill().AsStyleBox())
+	pill.AsControl().SetSizeFlagsVertical(Control.SizeShrinkCenter)
+	pill.AsControl().SetMouseFilter(Control.MouseFilterPass)
 
 	pillRow := HBoxContainer.New()
 	pillRow.AsControl().AddThemeConstantOverride("separation", 6)
-	pillRow.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	pillRow.AsControl().SetMouseFilter(Control.MouseFilterPass)
+
+	dbIcon := TextureRect.New()
+	dbIcon.SetTexture(loadSVGTexture(svgDatabase))
+	dbIcon.SetStretchMode(TextureRect.StretchKeepAspectCentered)
+	dbIcon.AsControl().SetCustomMinimumSize(Vector2.New(scaled(14), scaled(14)))
+	dbIcon.AsControl().SetSizeFlagsVertical(Control.SizeShrinkCenter)
+	dbIcon.AsControl().SetMouseFilter(Control.MouseFilterPass)
 
 	t.infoLabel = Label.New()
-	t.infoLabel.SetText("DuckDB  ·  In-Memory  ·  No file loaded")
-	t.infoLabel.AsControl().AddThemeColorOverride("font_color", colorText)
-	t.infoLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(13))
-	t.infoLabel.SetHorizontalAlignment(1) // center
-	t.infoLabel.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	t.infoLabel.SetText("DuckDB  ›  In-Memory  ›  No file loaded")
+	t.infoLabel.AsControl().AddThemeColorOverride("font_color", colorTextMuted)
+	t.infoLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
+	t.infoLabel.AsControl().AddThemeFontOverride("font", monoFont())
+	t.infoLabel.AsControl().SetMouseFilter(Control.MouseFilterPass)
 
 	t.copyBtn = Button.New()
 	t.copyBtn.SetText("AI ⎘")
 	t.copyBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(10))
-	applySecondaryButtonTheme(t.copyBtn.AsControl())
-	t.copyBtn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(40), 0))
+	applyFooterGhostButton(t.copyBtn.AsControl())
+	t.copyBtn.AsControl().SetTooltipText("Copy an AI prompt describing this connection")
 	t.copyBtn.AsCanvasItem().SetVisible(false)
 	t.copyBtn.AsBaseButton().OnPressed(func() {
 		if t.aiPrompt != "" {
@@ -161,7 +183,7 @@ func (t *TitleBar) Ready() {
 	t.refreshBtn = Button.New()
 	t.refreshBtn.SetText("↻")
 	t.refreshBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(12))
-	applySecondaryButtonTheme(t.refreshBtn.AsControl())
+	applyFooterGhostButton(t.refreshBtn.AsControl())
 	t.refreshBtn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(28), 0))
 	t.refreshBtn.AsCanvasItem().SetVisible(false)
 	t.refreshBtn.AsControl().SetTooltipText("Reconnect (rebuild tunnel + connection)")
@@ -171,30 +193,35 @@ func (t *TitleBar) Ready() {
 		}
 	})
 
+	pillRow.AsNode().AddChild(dbIcon.AsNode())
 	pillRow.AsNode().AddChild(t.infoLabel.AsNode())
-	pillRow.AsNode().AddChild(t.refreshBtn.AsNode())
-	pillRow.AsNode().AddChild(t.copyBtn.AsNode())
 	pill.AsNode().AddChild(pillRow.AsNode())
 
-	// Right spacer (25%)
-	rightSpacer := Control.New()
-	rightSpacer.SetSizeFlagsHorizontal(Control.SizeExpandFill)
-	rightSpacer.AsControl().SetSizeFlagsStretchRatio(1)
+	// Prominent Run button (indigo CTA)
+	t.runBtn = Button.New()
+	t.runBtn.SetText("▶ Run")
+	applyButtonTheme(t.runBtn.AsControl())
+	t.runBtn.AsControl().SetTooltipText("Run query")
+	t.runBtn.AsControl().SetMouseFilter(Control.MouseFilterStop)
+	t.runBtn.AsBaseButton().OnPressed(func() {
+		if t.OnRun != nil {
+			t.OnRun()
+		}
+	})
 
-	// Let all children pass mouse events through to the title bar for dragging
+	// Let container children pass mouse events through for window dragging.
 	margin.AsControl().SetMouseFilter(Control.MouseFilterPass)
 	row.AsControl().SetMouseFilter(Control.MouseFilterPass)
-	leftSpacer.SetMouseFilter(Control.MouseFilterPass)
-	pill.AsControl().SetMouseFilter(Control.MouseFilterPass)
-	pillRow.AsControl().SetMouseFilter(Control.MouseFilterPass)
-	t.infoLabel.AsControl().SetMouseFilter(Control.MouseFilterPass)
-	rightSpacer.SetMouseFilter(Control.MouseFilterPass)
 
+	row.AsNode().AddChild(brand.AsNode())
+	row.AsNode().AddChild(brandDiv.AsNode())
 	row.AsNode().AddChild(t.NavBackBtn.AsNode())
 	row.AsNode().AddChild(t.NavFwdBtn.AsNode())
-	row.AsNode().AddChild(leftSpacer.AsNode())
+	row.AsNode().AddChild(spacer.AsNode())
 	row.AsNode().AddChild(pill.AsNode())
-	row.AsNode().AddChild(rightSpacer.AsNode())
+	row.AsNode().AddChild(t.refreshBtn.AsNode())
+	row.AsNode().AddChild(t.copyBtn.AsNode())
+	row.AsNode().AddChild(t.runBtn.AsNode())
 
 	margin.AsNode().AddChild(row.AsNode())
 	t.AsNode().AddChild(margin.AsNode())
@@ -208,7 +235,7 @@ func (t *TitleBar) Process(delta Float.X) {
 }
 
 func (t *TitleBar) SetConnectionInfo(driver, name, dbName string) {
-	t.infoLabel.SetText(driver + "  ·  " + name + "  ·  " + dbName)
+	t.infoLabel.SetText(driver + "  ›  " + name + "  ›  " + dbName)
 }
 
 func (t *TitleBar) SetAIPrompt(prompt string) {
@@ -220,7 +247,7 @@ func (t *TitleBar) SetAIPrompt(prompt string) {
 
 func (t *TitleBar) SetFileInfo(path string) {
 	if path == "" {
-		t.infoLabel.SetText("DuckDB  ·  In-Memory")
+		t.infoLabel.SetText("DuckDB  ›  In-Memory")
 		return
 	}
 	// Extract filename
@@ -238,17 +265,17 @@ func (t *TitleBar) SetFileInfo(path string) {
 	}
 	switch ext {
 	case ".duckdb", ".db", ".ddb":
-		t.infoLabel.SetText("DuckDB  ·  " + name)
+		t.infoLabel.SetText("DuckDB  ›  " + name)
 	case ".parquet":
-		t.infoLabel.SetText("DuckDB  ·  In-Memory  ·  " + name)
+		t.infoLabel.SetText("DuckDB  ›  In-Memory  ›  " + name)
 	case ".csv":
-		t.infoLabel.SetText("DuckDB  ·  CSV  ·  " + name)
+		t.infoLabel.SetText("DuckDB  ›  CSV  ›  " + name)
 	case ".json":
-		t.infoLabel.SetText("DuckDB  ·  JSON  ·  " + name)
+		t.infoLabel.SetText("DuckDB  ›  JSON  ›  " + name)
 	case ".tsv":
-		t.infoLabel.SetText("DuckDB  ·  TSV  ·  " + name)
+		t.infoLabel.SetText("DuckDB  ›  TSV  ›  " + name)
 	default:
-		t.infoLabel.SetText("DuckDB  ·  " + name)
+		t.infoLabel.SetText("DuckDB  ›  " + name)
 	}
 }
 
@@ -396,7 +423,7 @@ func (s *SchemaPanel) SetSchema(cols []db.Column) {
 
 	s.selectAllCb = CheckBox.New()
 	s.selectAllCb.AsBaseButton().SetButtonPressed(true)
-	s.selectAllCb.AsControl().AddThemeFontSizeOverride("font_size", fontSize(13))
+	applyCheckboxTheme(s.selectAllCb.AsControl())
 	s.selectAllCb.AsBaseButton().OnToggled(func(pressed bool) {
 		for _, cb := range s.checkBoxes {
 			cb.AsBaseButton().SetPressedNoSignal(pressed)
@@ -478,10 +505,6 @@ func (s *SchemaPanel) filterCols(query string) {
 		if q != "" && !strings.Contains(strings.ToLower(col.Name), q) {
 			continue
 		}
-		typeSuffix := col.DataType
-		if col.Nullable {
-			typeSuffix += "?"
-		}
 		row := HBoxContainer.New()
 		row.AsControl().AddThemeConstantOverride("separation", 4)
 		row.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
@@ -489,7 +512,7 @@ func (s *SchemaPanel) filterCols(query string) {
 
 		cb := CheckBox.New()
 		cb.AsBaseButton().SetButtonPressed(true)
-		cb.AsControl().AddThemeFontSizeOverride("font_size", fontSize(13))
+		applyCheckboxTheme(cb.AsControl())
 		cb.AsControl().SetTooltipText(col.Name)
 		// CheckBox keeps default MouseFilterStop for click handling
 		cb.AsBaseButton().OnToggled(func(pressed bool) {
@@ -504,11 +527,14 @@ func (s *SchemaPanel) filterCols(query string) {
 		nameLabel.AsControl().AddThemeColorOverride("font_color", colorText)
 		nameLabel.AsControl().SetMouseFilter(Control.MouseFilterPass)
 
-		typeLabel := Label.New()
-		typeLabel.SetText(typeSuffix)
-		typeLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
-		typeLabel.AsControl().AddThemeColorOverride("font_color", colorTextDim)
-		typeLabel.AsControl().SetMouseFilter(Control.MouseFilterPass)
+		// Color-coded data-type chip (blue ints, green floats, amber time, …)
+		typeChip := makeTypeChip(col.DataType)
+		typeChip.AsControl().SetMouseFilter(Control.MouseFilterPass)
+
+		// Spacer pushes the type chip to the right edge of the row.
+		typeSpacer := Control.New()
+		typeSpacer.SetSizeFlagsHorizontal(Control.SizeExpandFill)
+		typeSpacer.SetMouseFilter(Control.MouseFilterPass)
 
 		// "only" link — hidden until hover
 		onlyLabel := Label.New()
@@ -546,8 +572,9 @@ func (s *SchemaPanel) filterCols(query string) {
 
 		row.AsNode().AddChild(cb.AsNode())
 		row.AsNode().AddChild(nameLabel.AsNode())
-		row.AsNode().AddChild(typeLabel.AsNode())
+		row.AsNode().AddChild(typeSpacer.AsNode())
 		row.AsNode().AddChild(onlyLabel.AsNode())
+		row.AsNode().AddChild(typeChip.AsNode())
 		s.colsList.AsNode().AddChild(row.AsNode())
 		s.checkBoxes = append(s.checkBoxes, cb)
 		s.checkRows = append(s.checkRows, row)
@@ -650,52 +677,156 @@ func (s *SchemaPanel) addTableItem(parent TreeItem.Instance, t db.TableInfo) {
 type HistoryPanel struct {
 	VBoxContainer.Extension[HistoryPanel] `gd:"HistoryPanel"`
 
-	tree      Tree.Instance
-	OnReplay  func(sql string) // callback when user clicks a history entry
+	searchBox LineEdit.Instance
+	scrollBox ScrollContainer.Instance
+	rowsList  VBoxContainer.Instance
+	entries   []models.HistoryEntry
+	OnReplay  func(sql string) // callback when user replays a history entry
 }
 
 func (h *HistoryPanel) Ready() {
+	h.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
+	h.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	h.AsControl().AddThemeConstantOverride("separation", 4)
 
-	header := Label.New()
-	header.SetText("Query History")
-	applyLabelTheme(header.AsControl(), true)
+	h.searchBox = LineEdit.New()
+	h.searchBox.SetPlaceholderText("Filter history…")
+	h.searchBox.AsControl().AddThemeFontSizeOverride("font_size", fontSize(13))
+	applyInputTheme(h.searchBox.AsControl())
+	h.searchBox.OnTextChanged(func(text string) { h.rebuild(text) })
 
-	h.tree = Tree.New()
-	h.tree.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
-	h.tree.SetHideRoot(true)
-	h.tree.SetColumns(1)
-	applySidebarTreeTheme(h.tree.AsControl())
+	h.scrollBox = ScrollContainer.New()
+	h.scrollBox.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
+	h.scrollBox.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	h.scrollBox.SetHorizontalScrollMode(ScrollContainer.ScrollModeDisabled)
 
-	h.tree.OnItemActivated(func() {
-		selected := h.tree.GetSelected()
-		if selected == (TreeItem.Instance{}) || h.OnReplay == nil {
-			return
+	h.rowsList = VBoxContainer.New()
+	h.rowsList.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	h.rowsList.AsControl().AddThemeConstantOverride("separation", 4)
+	h.scrollBox.AsNode().AddChild(h.rowsList.AsNode())
+
+	h.AsNode().AddChild(h.searchBox.AsNode())
+	h.AsNode().AddChild(h.scrollBox.AsNode())
+}
+
+func (h *HistoryPanel) SetHistory(entries []models.HistoryEntry) {
+	h.entries = entries
+	h.searchBox.SetText("")
+	h.rebuild("")
+}
+
+func (h *HistoryPanel) rebuild(query string) {
+	for h.rowsList.AsNode().GetChildCount() > 0 {
+		child := h.rowsList.AsNode().GetChild(0)
+		h.rowsList.AsNode().RemoveChild(child)
+		child.QueueFree()
+	}
+	q := strings.ToLower(query)
+	now := time.Now()
+	const maxRows = 100 // entries are newest-first; cap for performance
+	shown := 0
+	for _, e := range h.entries {
+		if q != "" && !strings.Contains(strings.ToLower(e.SQL), q) {
+			continue
 		}
-		sql := selected.GetTooltipText(0)
-		if sql != "" {
+		h.rowsList.AsNode().AddChild(h.makeRow(e, now))
+		if shown++; shown >= maxRows {
+			break
+		}
+	}
+}
+
+// flattenSQL collapses whitespace/newlines so a query fits on one line.
+func flattenSQL(sql string) string {
+	return strings.Join(strings.Fields(sql), " ")
+}
+
+// makeRow builds one history card: SQL text + status chip, a metadata line
+// (relative time · duration · rows), and a re-run button revealed on hover.
+func (h *HistoryPanel) makeRow(e models.HistoryEntry, now time.Time) Node.Instance {
+	card := PanelContainer.New()
+	card.AsNode().SetName("HistoryRow")
+	card.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	cardBg := makeStyleBoxPadded(colorBgPanel, 4, 1, colorBorderDim, 6)
+	card.AsControl().AddThemeStyleboxOverride("panel", cardBg.AsStyleBox())
+	card.AsControl().SetTooltipText(e.SQL)
+
+	box := VBoxContainer.New()
+	box.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	box.AsControl().AddThemeConstantOverride("separation", 3)
+
+	// Top line: SQL (monospace, truncated) + status chip
+	topRow := HBoxContainer.New()
+	topRow.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	topRow.AsControl().AddThemeConstantOverride("separation", 6)
+
+	sqlLbl := Label.New()
+	sqlLbl.SetText(flattenSQL(e.SQL))
+	sqlLbl.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
+	sqlLbl.AsControl().AddThemeColorOverride("font_color", colorText)
+	sqlLbl.SetTextOverrunBehavior(TextServer.OverrunTrimEllipsis)
+	sqlLbl.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	sqlLbl.SetClipText(true)
+	sqlLbl.AsControl().AddThemeFontOverride("font", monoFont())
+
+	statusText, statusColor := "SUCCESS", colorStatusGreen
+	if e.Failed() {
+		statusText, statusColor = "ERROR", colorStatusRed
+	}
+	statusChip := makeAccentChip(statusText, statusColor, "HistoryStatus")
+
+	topRow.AsNode().AddChild(sqlLbl.AsNode())
+	topRow.AsNode().AddChild(statusChip.AsNode())
+
+	// Meta line: relative time · duration · rows + re-run (on hover)
+	metaRow := HBoxContainer.New()
+	metaRow.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	metaRow.AsControl().AddThemeConstantOverride("separation", 6)
+
+	meta := models.RelativeTime(e.Timestamp, now) + "  ·  " + fmt.Sprintf("%dms", e.DurationMs)
+	if !e.Failed() {
+		meta += "  ·  " + fmt.Sprintf("%d rows", e.RowCount)
+	}
+	metaLbl := Label.New()
+	metaLbl.SetText(meta)
+	metaLbl.AsControl().AddThemeFontSizeOverride("font_size", fontSize(10))
+	metaLbl.AsControl().AddThemeColorOverride("font_color", colorTextDim)
+	metaLbl.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+
+	rerunBtn := Button.New()
+	rerunBtn.SetText("↻")
+	rerunBtn.AsControl().SetTooltipText("Re-run query")
+	rerunBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(12))
+	applyNavButtonTheme(rerunBtn.AsControl())
+	rerunBtn.AsCanvasItem().SetVisible(false)
+	sql := e.SQL
+	rerunBtn.AsBaseButton().OnPressed(func() {
+		if h.OnReplay != nil {
 			h.OnReplay(sql)
 		}
 	})
 
-	h.AsNode().AddChild(header.AsNode())
-	h.AsNode().AddChild(h.tree.AsNode())
-}
+	metaRow.AsNode().AddChild(metaLbl.AsNode())
+	metaRow.AsNode().AddChild(rerunBtn.AsNode())
 
-func (h *HistoryPanel) SetHistory(entries []models.HistoryEntry) {
-	h.tree.Clear()
-	root := h.tree.CreateItem()
-	for _, e := range entries {
-		item := h.tree.MoreArgs().CreateItem(root, -1)
-		// Show truncated SQL + timestamp
-		display := e.SQL
-		if len(display) > 60 {
-			display = display[:57] + "..."
+	box.AsNode().AddChild(topRow.AsNode())
+	box.AsNode().AddChild(metaRow.AsNode())
+	card.AsNode().AddChild(box.AsNode())
+
+	// Reveal re-run on hover; click anywhere on the card replays the query.
+	card.AsControl().OnMouseEntered(func() { rerunBtn.AsCanvasItem().SetVisible(true) })
+	card.AsControl().OnMouseExited(func() { rerunBtn.AsCanvasItem().SetVisible(false) })
+	card.AsControl().OnGuiInput(func(event InputEvent.Instance) {
+		if mb, ok := Object.As[InputEventMouseButton.Instance](event); ok {
+			if mb.AsInputEvent().IsPressed() && mb.ButtonIndex() == Input.MouseButtonLeft {
+				if h.OnReplay != nil {
+					h.OnReplay(sql)
+				}
+			}
 		}
-		ts := e.Timestamp.Local().Format("15:04:05")
-		item.SetText(0, ts+"  "+display)
-		item.SetTooltipText(0, e.SQL) // full SQL in tooltip for replay
-	}
+	})
+
+	return card.AsNode()
 }
 
 // ── SQL editor ─────────────────────────────────────────────────────────────
@@ -726,17 +857,14 @@ func (s *SQLPanel) Ready() {
 	applyLabelTheme(label.AsControl(), true)
 	label.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 
-	runBtn := Button.New()
-	runBtn.SetText("▶ Run")
-	applyButtonTheme(runBtn.AsControl())
-	runBtn.AsBaseButton().OnPressed(func() {
-		if s.OnRunQuery != nil {
-			s.OnRunQuery(s.editor.AsTextEdit().Text())
-		}
-	})
+	// Run lives in the title bar; a "⌘↵ / Ctrl+↵" hint keeps the shortcut discoverable.
+	hint := Label.New()
+	hint.SetText("⌘↵ to run")
+	hint.AsControl().AddThemeColorOverride("font_color", colorTextDim)
+	hint.AsControl().AddThemeFontSizeOverride("font_size", fontSize(10))
 
 	row.AsNode().AddChild(label.AsNode())
-	row.AsNode().AddChild(runBtn.AsNode())
+	row.AsNode().AddChild(hint.AsNode())
 
 	s.editor = CodeEdit.New()
 	s.editor.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
@@ -764,8 +892,27 @@ func (s *SQLPanel) Ready() {
 		}
 	})
 
+	// ⌘↵ / Ctrl+↵ runs the query (Run itself lives in the title bar).
+	s.editor.AsControl().OnGuiInput(func(event InputEvent.Instance) {
+		ke, ok := Object.As[InputEventKey.Instance](event)
+		if !ok || !ke.AsInputEvent().IsPressed() {
+			return
+		}
+		if ke.Keycode() == Input.KeyEnter && ke.AsInputEventWithModifiers().IsCommandOrControlPressed() {
+			s.editor.AsControl().AcceptEvent() // don't insert a newline
+			s.Run()
+		}
+	})
+
 	s.AsNode().AddChild(row.AsNode())
 	s.AsNode().AddChild(s.editor.AsNode())
+}
+
+// Run executes the current editor contents via OnRunQuery.
+func (s *SQLPanel) Run() {
+	if s.OnRunQuery != nil {
+		s.OnRunQuery(s.editor.AsTextEdit().Text())
+	}
 }
 
 func (s *SQLPanel) SetSQL(sql string) {
@@ -1492,6 +1639,7 @@ type RowDetailPanel struct {
 	fieldsList   VBoxContainer.Instance
 	placeholder  VBoxContainer.Instance
 	columns      []string
+	colTypes     []string   // parallel to columns; drives the type chips
 	values       []string
 	multiRows    [][]string // all selected rows for multi-select display
 }
@@ -1570,8 +1718,9 @@ func (p *RowDetailPanel) Ready() {
 	p.AsNode().AddChild(p.scrollBox.AsNode())
 }
 
-func (p *RowDetailPanel) SetRow(columns []string, values []string) {
+func (p *RowDetailPanel) SetRow(columns, colTypes, values []string) {
 	p.columns = columns
+	p.colTypes = colTypes
 	p.values = values
 	p.multiRows = nil
 	p.searchBox.SetText("")
@@ -1582,12 +1731,13 @@ func (p *RowDetailPanel) SetRow(columns []string, values []string) {
 
 // SetRows displays detail for multiple selected rows. If all rows share
 // the same value for a column, that value is shown; otherwise "—" is displayed.
-func (p *RowDetailPanel) SetRows(columns []string, rows [][]string) {
+func (p *RowDetailPanel) SetRows(columns, colTypes []string, rows [][]string) {
 	if len(rows) == 1 {
-		p.SetRow(columns, rows[0])
+		p.SetRow(columns, colTypes, rows[0])
 		return
 	}
 	p.columns = columns
+	p.colTypes = colTypes
 	p.values = nil
 	p.multiRows = rows
 	p.searchBox.SetText("")
@@ -1627,11 +1777,24 @@ func (p *RowDetailPanel) filterFields(query string) {
 		group.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 		group.AsControl().AddThemeConstantOverride("separation", 2)
 
-		// Label (field name + type dim)
+		// Label row: field name + right-aligned color-coded type chip
+		lblRow := HBoxContainer.New()
+		lblRow.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+		lblRow.AsControl().AddThemeConstantOverride("separation", 4)
+
 		lbl := Label.New()
 		lbl.SetText(col)
 		lbl.AsControl().AddThemeFontSizeOverride("font_size", fontSize(13))
 		lbl.AsControl().AddThemeColorOverride("font_color", colorTextDim)
+
+		lblSpacer := Control.New()
+		lblSpacer.SetSizeFlagsHorizontal(Control.SizeExpandFill)
+
+		lblRow.AsNode().AddChild(lbl.AsNode())
+		lblRow.AsNode().AddChild(lblSpacer.AsNode())
+		if i < len(p.colTypes) && p.colTypes[i] != "" {
+			lblRow.AsNode().AddChild(makeTypeChip(p.colTypes[i]).AsNode())
+		}
 
 		// Value (read-only input for copyable text)
 		valInput := LineEdit.New()
@@ -1641,7 +1804,7 @@ func (p *RowDetailPanel) filterFields(query string) {
 		valInput.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 		applyInputTheme(valInput.AsControl())
 
-		group.AsNode().AddChild(lbl.AsNode())
+		group.AsNode().AddChild(lblRow.AsNode())
 		group.AsNode().AddChild(valInput.AsNode())
 		p.fieldsList.AsNode().AddChild(group.AsNode())
 	}
@@ -1662,107 +1825,171 @@ func (p *RowDetailPanel) resolveValue(i int) string {
 type StatusBar struct {
 	HBoxContainer.Extension[StatusBar] `gd:"StatusBar"`
 
-	rowCount  Label.Instance
-	pageLabel Label.Instance
-	leftBtn   Button.Instance
-	rightBtn  Button.Instance
+	statusLabel Label.Instance
+	pageLabel   Label.Instance
+	connDot     Label.Instance
+	connLabel   Label.Instance
+	memPill     Label.Instance
+	leftBtn     Button.Instance
+	rightBtn    Button.Instance
 
 	OnPrevPage        func()
 	OnNextPage        func()
+	OnFirstPage       func()
+	OnLastPage        func()
 	OnToggleLeftPane  func()
 	OnToggleRightPane func()
 
 	leftPaneVisible  bool
 	rightPaneVisible bool
+	memFrame         int
+}
+
+// footerDivider returns a thin vertical rule separating status-bar segments.
+func footerDivider() PanelContainer.Instance {
+	d := PanelContainer.New()
+	d.AsControl().SetCustomMinimumSize(Vector2.New(scaled(1), scaled(12)))
+	d.AsControl().SetSizeFlagsVertical(Control.SizeShrinkCenter)
+	applyPanelBg(d.AsControl(), colorBorder)
+	return d
+}
+
+func (s *StatusBar) footerIconButton(glyph, tooltip string, onPress func()) Button.Instance {
+	b := Button.New()
+	b.SetText(glyph)
+	b.AsControl().SetTooltipText(tooltip)
+	b.AsControl().SetCustomMinimumSize(Vector2.New(scaled(22), scaled(20)))
+	applyFooterGhostButton(b.AsControl())
+	if onPress != nil {
+		b.AsBaseButton().OnPressed(onPress)
+	}
+	return b
+}
+
+func (s *StatusBar) footerText(text string, c Color.RGBA) Label.Instance {
+	l := Label.New()
+	l.SetText(text)
+	l.AsControl().AddThemeColorOverride("font_color", c)
+	l.AsControl().AddThemeFontSizeOverride("font_size", fontSize(navFontBase))
+	l.AsControl().AddThemeFontOverride("font", monoFont())
+	l.AsControl().SetSizeFlagsVertical(Control.SizeShrinkCenter)
+	return l
 }
 
 func (s *StatusBar) Ready() {
 	s.AsControl().AddThemeConstantOverride("separation", 8)
-
-	// Left: pane toggle buttons with SVG icons
 	s.leftPaneVisible = true
 	s.rightPaneVisible = false
 
-	s.leftBtn = Button.New()
-	s.leftBtn.AsControl().SetTooltipText("Toggle Left Pane")
-	s.leftBtn.SetText("◧")
-	s.leftBtn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(28), scaled(22)))
-	applyToggleButtonTheme(s.leftBtn.AsControl(), true)
-	s.leftBtn.AsBaseButton().OnPressed(func() {
+	// ── Left: pane toggles ──────────────────────────────────────────────
+	s.leftBtn = s.footerIconButton("◧", "Toggle Left Pane", func() {
 		s.leftPaneVisible = !s.leftPaneVisible
-		applyToggleButtonTheme(s.leftBtn.AsControl(), s.leftPaneVisible)
 		if s.OnToggleLeftPane != nil {
 			s.OnToggleLeftPane()
 		}
 	})
-
-	s.rightBtn = Button.New()
-	s.rightBtn.AsControl().SetTooltipText("Toggle Right Pane")
-	s.rightBtn.SetText("◨")
-	s.rightBtn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(28), scaled(22)))
-	applyToggleButtonTheme(s.rightBtn.AsControl(), false)
-
-	// Spacer
-	spacer := Control.New()
-	spacer.SetSizeFlagsHorizontal(Control.SizeExpandFill)
-
-	// Pagination controls
-	prevBtn := Button.New()
-	prevBtn.SetText("◀")
-	applySecondaryButtonTheme(prevBtn.AsControl())
-	prevBtn.AsBaseButton().OnPressed(func() {
-		if s.OnPrevPage != nil {
-			s.OnPrevPage()
-		}
-	})
-
-	s.pageLabel = Label.New()
-	s.pageLabel.SetText("Page 1")
-	applyStatusBarTheme(s.pageLabel.AsControl())
-
-	nextBtn := Button.New()
-	nextBtn.SetText("▶")
-	applySecondaryButtonTheme(nextBtn.AsControl())
-	nextBtn.AsBaseButton().OnPressed(func() {
-		if s.OnNextPage != nil {
-			s.OnNextPage()
-		}
-	})
-
-	sep := Label.New()
-	sep.SetText("·")
-	applyStatusBarTheme(sep.AsControl())
-
-	// Right: row count
-	s.rowCount = Label.New()
-	s.rowCount.SetText("Ready")
-	applyStatusBarTheme(s.rowCount.AsControl())
-
-	s.rightBtn.AsBaseButton().OnPressed(func() {
+	s.rightBtn = s.footerIconButton("◨", "Toggle Right Pane", func() {
 		s.rightPaneVisible = !s.rightPaneVisible
-		applyToggleButtonTheme(s.rightBtn.AsControl(), s.rightPaneVisible)
 		if s.OnToggleRightPane != nil {
 			s.OnToggleRightPane()
 		}
 	})
 
+	// ── Connection status: green dot + name ─────────────────────────────
+	s.connDot = Label.New()
+	s.connDot.SetText("●")
+	s.connDot.AsControl().AddThemeColorOverride("font_color", colorStatusGreen)
+	s.connDot.AsControl().AddThemeFontSizeOverride("font_size", fontSize(8))
+	s.connDot.AsControl().SetSizeFlagsVertical(Control.SizeShrinkCenter)
+	s.connLabel = s.footerText("in-memory", colorTypeInt) // #89CEFF blue
+
+	// ── Query metrics / transient status ────────────────────────────────
+	s.statusLabel = s.footerText("Ready", colorTextMuted)
+
+	// Spacer pushes pagination + mem pill to the right.
+	spacer := Control.New()
+	spacer.SetSizeFlagsHorizontal(Control.SizeExpandFill)
+
+	// ── Right: pagination ───────────────────────────────────────────────
+	firstBtn := s.footerIconButton("«", "First Page", func() {
+		if s.OnFirstPage != nil {
+			s.OnFirstPage()
+		}
+	})
+	prevBtn := s.footerIconButton("‹", "Previous Page", func() {
+		if s.OnPrevPage != nil {
+			s.OnPrevPage()
+		}
+	})
+	s.pageLabel = s.footerText("Page 1 / 1", colorTextMuted)
+	nextBtn := s.footerIconButton("›", "Next Page", func() {
+		if s.OnNextPage != nil {
+			s.OnNextPage()
+		}
+	})
+	lastBtn := s.footerIconButton("»", "Last Page", func() {
+		if s.OnLastPage != nil {
+			s.OnLastPage()
+		}
+	})
+
+	// ── Memory pill ─────────────────────────────────────────────────────
+	pill := PanelContainer.New()
+	pill.AsControl().AddThemeStyleboxOverride("panel", footerPill().AsStyleBox())
+	pill.AsControl().SetSizeFlagsVertical(Control.SizeShrinkCenter)
+	s.memPill = s.footerText("MEM —", colorTextMuted)
+	pill.AsNode().AddChild(s.memPill.AsNode())
+
+	// ── Assemble ────────────────────────────────────────────────────────
 	s.AsNode().AddChild(s.leftBtn.AsNode())
 	s.AsNode().AddChild(s.rightBtn.AsNode())
+	s.AsNode().AddChild(footerDivider().AsNode())
+	s.AsNode().AddChild(s.connDot.AsNode())
+	s.AsNode().AddChild(s.connLabel.AsNode())
+	s.AsNode().AddChild(footerDivider().AsNode())
+	s.AsNode().AddChild(s.statusLabel.AsNode())
 	s.AsNode().AddChild(spacer.AsNode())
+	s.AsNode().AddChild(firstBtn.AsNode())
 	s.AsNode().AddChild(prevBtn.AsNode())
 	s.AsNode().AddChild(s.pageLabel.AsNode())
 	s.AsNode().AddChild(nextBtn.AsNode())
-	s.AsNode().AddChild(sep.AsNode())
-	s.AsNode().AddChild(s.rowCount.AsNode())
+	s.AsNode().AddChild(lastBtn.AsNode())
+	s.AsNode().AddChild(footerDivider().AsNode())
+	s.AsNode().AddChild(pill.AsNode())
+}
+
+// Process refreshes the memory pill roughly once per second.
+func (s *StatusBar) Process(delta Float.X) {
+	s.memFrame++
+	if s.memFrame < 60 {
+		return
+	}
+	s.memFrame = 0
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	s.memPill.SetText(fmt.Sprintf("MEM %dMB", m.HeapAlloc/(1024*1024)))
 }
 
 func (s *StatusBar) SetRightPaneActive(active bool) {
 	s.rightPaneVisible = active
-	applyToggleButtonTheme(s.rightBtn.AsControl(), active)
+}
+
+// SetConnection sets the footer's connection name (green-dot segment).
+func (s *StatusBar) SetConnection(name string) {
+	if name == "" {
+		name = "in-memory"
+	}
+	s.connLabel.SetText(name)
+}
+
+// SetConnectionDot sets the color of the footer's connection status dot
+// (green = connected, amber = reconnecting, red = error).
+func (s *StatusBar) SetConnectionDot(c Color.RGBA) {
+	s.connDot.AsControl().AddThemeColorOverride("font_color", c)
 }
 
 func (s *StatusBar) SetStatus(msg string) {
-	s.rowCount.SetText(msg)
+	s.statusLabel.SetText(msg)
 }
 
 func (s *StatusBar) SetPage(page, totalPages int) {
@@ -1775,6 +2002,10 @@ type tabState struct {
 	State        *models.AppState
 	schema       *SchemaPanel
 	historyPanel *HistoryPanel
+	extPanel     *ExtensionsPanel
+	schemaBtn    Button.Instance // "Schema" sidebar tab
+	historyBtn   Button.Instance // "History" sidebar tab
+	extBtn       Button.Instance // "Extensions" sidebar tab
 	sqlPanel     *SQLPanel
 	dataGrid     *DataGrid
 	detailPanel  *RowDetailPanel
@@ -1832,6 +2063,7 @@ func (a *App) initMainWindow() {
 		rootWin := tree.Root().AsWindow()
 		a.mainWin = createMainWindowFromRoot(rootWin, a.Duck, a.history, func() { a.newWindow() })
 		a.mainWin.onReLogin = func() { a.openGatewayScreen() }
+		a.mainWin.onNewConnection = func() { a.openGatewayScreen() }
 		if a.ControlServer != nil {
 			a.mainWin.controlAddr = a.ControlServer.Addr()
 		}
@@ -2101,13 +2333,21 @@ func (a *App) showGatewayLoading(name string) {
 	titleLabel.AsControl().AddThemeColorOverride("font_color", colorText)
 	titleLabel.SetHorizontalAlignment(1)
 
+	// Connection-status step tracker. Auth + tunnel are already established by
+	// the time we reach the loading screen, so seed the active stage at
+	// "Connect to database"; the Process loop advances it from progress messages.
+	w.gatewayTracker = newStepTracker(control.ConnectStageLabels)
+	w.gatewayTracker.setActive(int(control.StageConnectDB), false)
+	w.gatewayTracker.root.AsControl().SetSizeFlagsHorizontal(Control.SizeShrinkCenter)
+
 	statusLabel := Label.New()
-	statusLabel.SetText("Loading schema...")
+	statusLabel.SetText("Connecting to database…")
 	statusLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(12))
 	statusLabel.AsControl().AddThemeColorOverride("font_color", colorTextDim)
 	statusLabel.SetHorizontalAlignment(1)
 
 	loadingBox.AsNode().AddChild(titleLabel.AsNode())
+	loadingBox.AsNode().AddChild(w.gatewayTracker.root.AsNode())
 	loadingBox.AsNode().AddChild(statusLabel.AsNode())
 	w.emptyView.AsNode().AddChild(loadingBox.AsNode())
 	w.gatewayLoadingLabel = statusLabel
@@ -2237,6 +2477,8 @@ func (a *App) updateCachedState() {
 
 func (a *App) newWindow() {
 	aw := createSecondaryWindow(a.Duck, a.history, func() { a.newWindow() })
+	aw.onReLogin = func() { a.openGatewayScreen() }
+	aw.onNewConnection = func() { a.openGatewayScreen() }
 	if a.ControlServer != nil {
 		aw.controlAddr = a.ControlServer.Addr()
 	}
@@ -2427,9 +2669,26 @@ func (a *App) pollResults() {
 			}
 		}
 	nextWindow:
-		// Update gateway loading label if background status changed
+		// Apply a completed extension install/load (ran on a background goroutine).
+		if w.extActionMsg != nil {
+			res := w.extActionMsg
+			w.extActionMsg = nil
+			if res.err != nil {
+				w.statusBar.SetStatus("Extension " + res.name + " failed: " + res.err.Error())
+			} else {
+				w.statusBar.SetStatus("Extension " + res.name + " ready")
+			}
+			if w.extActionTab != nil {
+				w.loadExtensions(w.extActionTab)
+			}
+		}
+
+		// Update gateway loading label + step tracker if background status changed
 		if w.gatewayLoadingMsg != "" && w.pendingGateway != nil {
 			w.gatewayLoadingLabel.SetText(w.gatewayLoadingMsg)
+			if w.gatewayTracker != nil {
+				w.gatewayTracker.setActive(int(control.ConnectStageFromMessage(w.gatewayLoadingMsg)), false)
+			}
 			w.gatewayLoadingMsg = ""
 		}
 
@@ -2439,10 +2698,14 @@ func (a *App) pollResults() {
 				continue
 			}
 			tunnel := conn.Gateway.Tunnel
+			isActive := w.activeConnIdx < len(w.connections) && w.connections[w.activeConnIdx] == conn
 			var msg string
 			switch tunnel.Status() {
 			case bfaws.TunnelConnecting:
 				msg = conn.Name + ": " + tunnel.StatusMsg()
+				if isActive {
+					w.statusBar.SetConnectionDot(colorStatusYellow)
+				}
 			case bfaws.TunnelError:
 				if tunnel.IsAuthError() {
 					msg = conn.Name + ": login expired — log in again to reconnect"
@@ -2454,7 +2717,10 @@ func (a *App) pollResults() {
 				} else {
 					msg = conn.Name + ": Tunnel error — " + tunnel.LastError()
 				}
-				applyErrorButtonTheme(conn.button.AsControl())
+				applyConnTileErrorTheme(conn.button.AsControl())
+				if isActive {
+					w.statusBar.SetConnectionDot(colorStatusRed)
+				}
 			case bfaws.TunnelConnected:
 				// Clear any previous reconnect message
 				if conn.Gateway.LastTunnelMsg != "" {
@@ -2465,11 +2731,10 @@ func (a *App) pollResults() {
 					if pgConn, ok := conn.DB.(*db.PostgresDB); ok {
 						pgConn.ResetPool()
 					}
-					// Restore normal button theme
-					if w.activeConnIdx < len(w.connections) && w.connections[w.activeConnIdx] == conn {
-						applyActiveButtonTheme(conn.button.AsControl())
-					} else {
-						applySecondaryButtonTheme(conn.button.AsControl())
+					// Restore the rounded tile + green dot.
+					applyConnTileTheme(conn.button.AsControl(), isActive)
+					if isActive {
+						w.statusBar.SetConnectionDot(colorStatusGreen)
 					}
 				}
 				continue
@@ -2663,7 +2928,7 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 			ts.dataGrid.lastSelectedRow = indices[len(indices)-1]
 		}
 		ts.dataGrid.applyRowHighlights()
-		ts.detailPanel.SetRows(ts.dataGrid.columns, rows)
+		ts.detailPanel.SetRows(ts.dataGrid.columns, ts.dataGrid.colTypes, rows)
 		if !ts.detailWrap.AsCanvasItem().Visible() {
 			totalWidth := ts.outerWrap.AsControl().Size().X
 			ts.outerWrap.AsSplitContainer().SetSplitOffset(int(totalWidth * 0.75))
@@ -2703,6 +2968,37 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 
 	case "new_window":
 		a.newWindow()
+		cmd.Respond(control.Result{OK: true})
+
+	case "open_gateway":
+		a.openGatewayScreen()
+		cmd.Respond(control.Result{OK: true})
+
+	case "preview_connecting":
+		// Test/preview hook: render the connecting screen (with its step
+		// tracker) without a live AWS gateway. The tracker is seeded at the
+		// "Connect to database" stage, matching a real connection in progress.
+		a.showGatewayLoading("Preview")
+		a.mainWin.emptyView.AsCanvasItem().SetVisible(true)
+		a.mainWin.split.AsCanvasItem().SetVisible(false)
+		cmd.Respond(control.Result{OK: true})
+
+	case "show_history":
+		ts := w.currentTab()
+		if ts == nil || ts.historyPanel == nil {
+			cmd.Respond(control.Result{Error: "no active tab"})
+			return
+		}
+		w.showHistorySidebar(ts)
+		cmd.Respond(control.Result{OK: true})
+
+	case "show_extensions":
+		ts := w.currentTab()
+		if ts == nil || ts.extPanel == nil {
+			cmd.Respond(control.Result{Error: "no active tab"})
+			return
+		}
+		w.showExtensionsSidebar(ts)
 		cmd.Respond(control.Result{OK: true})
 
 	case "nav_back":
@@ -2805,6 +3101,7 @@ func RegisterAll() {
 	classdb.Register[SQLPanel]()
 	classdb.Register[DataGrid]()
 	classdb.Register[HistoryPanel]()
+	classdb.Register[ExtensionsPanel]()
 	classdb.Register[RowDetailPanel]()
 	classdb.Register[StatusBar]()
 	classdb.Register[GatewayScreen]()

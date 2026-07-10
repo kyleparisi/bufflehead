@@ -318,13 +318,10 @@ func (w *AppWindow) handleReconnectResult(res DBResult) {
 			if idx == w.activeConnIdx && conn.Gateway != nil {
 				w.titleBar.SetAIPrompt(buildAIPrompt(conn.Gateway.Config, conn.Tables, w.controlAddr))
 			}
-			applySecondaryButtonTheme(conn.button.AsControl())
-			if idx == w.activeConnIdx {
-				applyActiveButtonTheme(conn.button.AsControl())
-			}
+			applyConnTileTheme(conn.button.AsControl(), idx == w.activeConnIdx)
 			w.statusBar.SetStatus(fmt.Sprintf("Reconnected: %s (%d tables/views)", conn.Name, len(conn.Tables)))
 		} else {
-			applyErrorButtonTheme(conn.button.AsControl())
+			applyConnTileErrorTheme(conn.button.AsControl())
 			w.statusBar.SetStatus("Reconnect failed: " + conn.Name)
 		}
 

@@ -25,10 +25,10 @@ import (
 
 // Gateway status indicator colors.
 var (
-	colorStatusGreen  = Color.RGBA{R: 0.30, G: 0.80, B: 0.40, A: 1}
-	colorStatusYellow = Color.RGBA{R: 0.90, G: 0.75, B: 0.20, A: 1}
-	colorStatusRed    = Color.RGBA{R: 0.85, G: 0.30, B: 0.30, A: 1}
-	colorStatusGray   = Color.RGBA{R: 0.50, G: 0.50, B: 0.50, A: 1}
+	colorStatusGreen  = Color.RGBA{R: 0.3059, G: 0.8706, B: 0.6392, A: 1} // #4EDEA3 — tertiary
+	colorStatusYellow = Color.RGBA{R: 0.90, G: 0.75, B: 0.20, A: 1}       // amber warning
+	colorStatusRed    = Color.RGBA{R: 1.0, G: 0.7059, B: 0.6706, A: 1}    // #FFB4AB — error
+	colorStatusGray   = Color.RGBA{R: 0.5686, G: 0.5608, B: 0.6314, A: 1} // #918FA1 — outline
 )
 
 // GatewayScreen is the connection screen for remote databases.
