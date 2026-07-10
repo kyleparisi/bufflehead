@@ -42,7 +42,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: C:\gcc142
-          key: windows-gcc142-14.2.0-3
+          # Keyed on the toolchain script so any change to it rebuilds the prefix.
+          key: windows-gcc142-${{ hashFiles('bin/setup-gcc142') }}
 
       - name: Run unit tests (Windows, cgo/duckdb)
         shell: msys2 {0}

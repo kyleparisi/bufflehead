@@ -18,8 +18,12 @@ GCCDIR="${GCCDIR:-/c/gcc142}"
 
 if [ ! -x "$GCCDIR/bin/gcc.exe" ]; then
   echo "installing pinned gcc 14.2 -> $GCCDIR"
+  # crt + headers provide the mingw C runtime objects (e.g. default-manifest.o
+  # that Go needs when linking Windows .exe test binaries — build-windows only
+  # links a DLL so it never needed them).
   pacman -S --needed --noconfirm \
     base-devel \
+    mingw-w64-ucrt-x86_64-crt mingw-w64-ucrt-x86_64-headers \
     mingw-w64-ucrt-x86_64-binutils mingw-w64-ucrt-x86_64-winpthreads \
     mingw-w64-ucrt-x86_64-gmp mingw-w64-ucrt-x86_64-mpfr \
     mingw-w64-ucrt-x86_64-mpc mingw-w64-ucrt-x86_64-isl
