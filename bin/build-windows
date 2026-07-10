@@ -66,9 +66,12 @@ go install "graphics.gd/cmd/gd@$GD_VERSION"
 export PATH="$GCCDIR/bin:$(go env GOPATH)/bin:$PATH"
 
 # --- build the GDExtension DLL + exe via gd -----------------------------------
-# gd defaults CC to "zig cc" only when CC is unset in the process env, and zig
-# can't statically link libduckdb.a into the shared DLL. Setting CC makes gd use
-# our gcc 14.2 instead.
+# gd defaults CC to "zig cc" only when CC is unset in the process env; setting CC
+# makes gd use our pinned gcc 14.2 instead. We can't use zig here: on Windows,
+# `zig cc` in -buildmode=c-shared emitted an ar archive rather than a real PE DLL
+# (no MZ header), so the GDExtension never linked into a loadable .dll (see the
+# PR #4 history). gcc 14.2 both links go-duckdb's emutls-era libduckdb.a and
+# emits a valid PE DLL, so it's what we pin.
 #
 # gd refuses to auto-download Godot ("automatic-downloads are disabled") when it
 # sees GOTOOLCHAIN=local, GDTOOLCHAIN=local, or an empty GDPATH (toolchain.go).
