@@ -2947,6 +2947,29 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 		w.selectTab(id)
 		cmd.Respond(control.Result{OK: true})
 
+	case "replay_history":
+		// Replay a history entry by index (0 = most recent), mirroring clicking
+		// it in the History panel.
+		var d control.CloseConnectionData // reuse {index}
+		if err := json.Unmarshal(cmd.Data, &d); err != nil {
+			cmd.Respond(control.Result{Error: err.Error()})
+			return
+		}
+		ts := w.currentTab()
+		if ts == nil || ts.historyPanel == nil || w.history == nil {
+			cmd.Respond(control.Result{Error: "no active tab/history"})
+			return
+		}
+		entries := w.history.All()
+		if d.Index < 0 || d.Index >= len(entries) {
+			cmd.Respond(control.Result{Error: "invalid history index"})
+			return
+		}
+		if ts.historyPanel.OnReplay != nil {
+			ts.historyPanel.OnReplay(entries[d.Index].SQL)
+		}
+		cmd.Respond(control.Result{OK: true})
+
 	case "select_columns":
 		// Mirror clicking column checkboxes in the schema panel: set the visible
 		// column set and re-run the query (projection applied via VirtualSQL).

@@ -509,6 +509,9 @@ func (w *AppWindow) addNewTab() {
 		ts.State.PageOffset = 0
 		ts.State.SortColumn = ""
 		ts.State.SortDir = models.SortNone
+		// A replayed query defines its own columns; drop any stale column
+		// selection so VirtualSQL doesn't re-project (and double-wrap) it.
+		ts.State.SelectedCols = nil
 		ts.sqlPanel.SetSQL(sql)
 		w.runCurrentQuery(nil)
 	}
@@ -546,6 +549,10 @@ func (w *AppWindow) addNewTab() {
 		ts.State.PageOffset = 0
 		ts.State.SortColumn = ""
 		ts.State.SortDir = models.SortNone
+		// The user's edited query defines its own columns; drop any stale
+		// column selection so VirtualSQL doesn't re-project columns that may not
+		// exist in the new query.
+		ts.State.SelectedCols = nil
 		w.runCurrentQuery(nil)
 	}
 	sqlWrap := MarginContainer.New()
@@ -1828,7 +1835,10 @@ func (w *AppWindow) handleQueryResult(res DBResult) {
 
 	if res.Err != nil {
 		if !res.Navigating && w.history != nil {
-			if sql := res.VirtualSQL; sql != "" {
+			// Store the user's query, not the internal VirtualSQL wrapper, so
+			// replaying it reproduces exactly what the user ran (and doesn't get
+			// re-wrapped/double-projected on replay).
+			if sql := res.UserSQL; sql != "" {
 				w.history.Add(models.HistoryEntry{
 					SQL:        sql,
 					FilePath:   ts.State.FilePath,
@@ -1851,8 +1861,9 @@ func (w *AppWindow) handleQueryResult(res DBResult) {
 
 	if !res.Navigating {
 		if w.history != nil {
+			// Store the user's query, not the internal VirtualSQL wrapper.
 			w.history.Add(models.HistoryEntry{
-				SQL:        res.VirtualSQL,
+				SQL:        res.UserSQL,
 				FilePath:   ts.State.FilePath,
 				Timestamp:  time.Now(),
 				RowCount:   result.Total,
@@ -1946,7 +1957,11 @@ func (w *AppWindow) navBackWithCmd(cmd *control.Command) {
 	ts.State.SortColumn = entry.SortColumn
 	ts.State.SortDir = entry.SortDir
 	ts.State.PageOffset = entry.PageOffset
+	ts.State.SelectedCols = entry.SelectedCols
 	ts.sqlPanel.SetSQL(entry.SQL)
+	if ts.schema != nil {
+		ts.schema.SetCheckedColumns(entry.SelectedCols)
+	}
 	w.runCurrentQuery(cmd)
 	w.updateNavButtons()
 }
@@ -1975,7 +1990,11 @@ func (w *AppWindow) navForwardWithCmd(cmd *control.Command) {
 	ts.State.SortColumn = entry.SortColumn
 	ts.State.SortDir = entry.SortDir
 	ts.State.PageOffset = entry.PageOffset
+	ts.State.SelectedCols = entry.SelectedCols
 	ts.sqlPanel.SetSQL(entry.SQL)
+	if ts.schema != nil {
+		ts.schema.SetCheckedColumns(entry.SelectedCols)
+	}
 	w.runCurrentQuery(cmd)
 	w.updateNavButtons()
 }

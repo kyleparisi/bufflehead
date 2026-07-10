@@ -301,6 +301,10 @@ func buildMux(s *Server) *http.ServeMux {
 		s.handleCommand(w, r, "select_columns")
 	})
 
+	mux.HandleFunc("POST /replay-history", func(w http.ResponseWriter, r *http.Request) {
+		s.handleCommand(w, r, "replay_history")
+	})
+
 	mux.HandleFunc("POST /reconnect", func(w http.ResponseWriter, r *http.Request) {
 		s.handleCommand(w, r, "reconnect")
 	})

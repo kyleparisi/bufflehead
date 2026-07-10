@@ -44,10 +44,11 @@ type AppState struct {
 
 // NavEntry stores a snapshot for back/forward navigation.
 type NavEntry struct {
-	SQL        string
-	SortColumn string
-	SortDir    SortDirection
-	PageOffset int
+	SQL          string
+	SortColumn   string
+	SortDir      SortDirection
+	PageOffset   int
+	SelectedCols []string
 }
 
 // NewAppState returns defaults.
@@ -65,10 +66,11 @@ func (s *AppState) NavPush(sql string) {
 		return
 	}
 	entry := NavEntry{
-		SQL:        sql,
-		SortColumn: s.SortColumn,
-		SortDir:    s.SortDir,
-		PageOffset: s.PageOffset,
+		SQL:          sql,
+		SortColumn:   s.SortColumn,
+		SortDir:      s.SortDir,
+		PageOffset:   s.PageOffset,
+		SelectedCols: append([]string(nil), s.SelectedCols...),
 	}
 	// Truncate forward history
 	if s.navPos < len(s.navStack)-1 {

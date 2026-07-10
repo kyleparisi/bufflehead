@@ -431,6 +431,63 @@ class TestColumnSelection:
         assert state()["columns"] == ["id", "score"]
 
 
+class TestHistoryReplay:
+    """History stores the user's query (not the internal VirtualSQL wrapper), and
+    replaying it clears any stale column selection so it doesn't double-wrap and
+    error with a Binder Error."""
+
+    def setup_method(self):
+        close_all_connections()
+        close_all_tabs()
+        post("new-tab")
+        time.sleep(0.3)
+
+    def test_replay_after_column_selection_does_not_double_wrap(self):
+        open_file(SAMPLE)
+        s = state()
+        all_cols = s["columns"]
+
+        # Create two history entries via distinct column selections, so the
+        # current tab has a stale SelectedCols=["id"] afterwards.
+        post("select-columns", {"columns": ["name"]})
+        wait()
+        post("select-columns", {"columns": ["id"]})
+        wait()
+        assert state()["columns"] == ["id"]
+
+        # Replaying the most-recent history entry must run cleanly (no error) and
+        # NOT be re-projected by the stale selection. It should reproduce the
+        # user's raw query.
+        result = post("replay-history", {"index": 0})
+        assert result["ok"] is True
+        wait()
+        s = state()
+        assert not s["userSQL"].strip().lower().startswith("select \"") and "_q" not in s["userSQL"], (
+            f"replayed SQL should be the user's query, not the wrapper: {s['userSQL']!r}"
+        )
+        # No Binder Error → a real result with columns is shown.
+        assert s["rowCount"] >= 0
+        assert s["columns"], "replay should produce a result, not an error"
+
+    def test_history_stores_user_sql_not_wrapper(self):
+        open_file(SAMPLE)
+        wait()
+        # Select a subset to produce a projected (wrapped) query internally.
+        post("select-columns", {"columns": ["id", "name"]})
+        wait()
+        assert state()["columns"] == ["id", "name"]
+
+        # Replaying that entry reproduces the user's query and (because replay
+        # clears the selection) shows all columns without error.
+        result = post("replay-history", {"index": 0})
+        assert result["ok"] is True
+        wait()
+        s = state()
+        assert "_q" not in s["userSQL"], (
+            f"history must store the user's SQL, not VirtualSQL: {s['userSQL']!r}"
+        )
+
+
 class TestNavigation:
     def test_back_forward(self):
         close_all_tabs()
