@@ -163,6 +163,20 @@ func (a *AuthManager) SSOLogin() <-chan SSOLoginResult {
 	return runOIDCDeviceAuth(startURL, ssoRegion, sessionName)
 }
 
+// normalizeStartURL strips a trailing SSO portal fragment (".../start/#/") and
+// any trailing slashes, yielding the canonical portal URL AWS SSO OIDC expects
+// (e.g. https://org.awsapps.com/start). We persist this clean form because '#'
+// is an INI comment character — a fragment written to ~/.aws/config can be
+// truncated when re-read — and because a malformed start URL makes
+// StartDeviceAuthorization fail with a 400.
+func normalizeStartURL(u string) string {
+	u = strings.TrimSpace(u)
+	if i := strings.Index(u, "#"); i != -1 {
+		u = u[:i]
+	}
+	return strings.TrimRight(u, "/")
+}
+
 // parseConfigValue extracts a value for a key from an INI section string.
 func parseConfigValue(section, key string) string {
 	for _, line := range strings.Split(section, "\n") {
@@ -181,6 +195,8 @@ func parseConfigValue(section, key string) string {
 // ~/.aws/config for the given start URL. If not, it appends one.
 // Returns the sso-session name.
 func EnsureSSOSession(startURL, ssoRegion string) (string, error) {
+	startURL = normalizeStartURL(startURL)
+
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("home dir: %w", err)
@@ -192,25 +208,44 @@ func EnsureSSOSession(startURL, ssoRegion string) (string, error) {
 	data, _ := os.ReadFile(configPath)
 	content := string(data)
 
-	// Check if sso-session block already exists for this URL
 	sessionHeader := "[sso-session " + ssoSessionName + "]"
-	if strings.Contains(content, sessionHeader) {
-		// Already configured
+	block := fmt.Sprintf("%s\nsso_start_url = %s\nsso_region = %s\nsso_registration_scopes = sso:account:access\n",
+		sessionHeader, startURL, ssoRegion)
+
+	// If a block already exists, it is a projection of the connect form: reuse it
+	// only while it still matches the requested URL + region, otherwise rewrite it
+	// in place. Blindly reusing a stale block is what stranded a truncated
+	// sso_start_url in the config, causing StartDeviceAuthorization to keep
+	// returning 400 with no way to correct it from the UI.
+	if idx := strings.Index(content, sessionHeader); idx != -1 {
+		section := content[idx:]
+		if next := strings.Index(section[1:], "\n["); next != -1 {
+			section = section[:next+1]
+		}
+		if normalizeStartURL(parseConfigValue(section, "sso_start_url")) == startURL &&
+			parseConfigValue(section, "sso_region") == ssoRegion {
+			return ssoSessionName, nil
+		}
+		end := idx + len(section)
+		rebuilt := content[:idx] + strings.TrimRight(block, "\n") + content[end:]
+		if !strings.HasSuffix(rebuilt, "\n") {
+			rebuilt += "\n"
+		}
+		if err := os.WriteFile(configPath, []byte(rebuilt), 0600); err != nil {
+			return "", fmt.Errorf("update aws config: %w", err)
+		}
 		return ssoSessionName, nil
 	}
 
-	// Append the sso-session block
+	// Append a fresh sso-session block.
 	os.MkdirAll(awsDir, 0700)
-	block := fmt.Sprintf("\n%s\nsso_start_url = %s\nsso_region = %s\nsso_registration_scopes = sso:account:access\n",
-		sessionHeader, startURL, ssoRegion)
-
 	f, err := os.OpenFile(configPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
 		return "", fmt.Errorf("open aws config: %w", err)
 	}
 	defer f.Close()
 
-	if _, err := f.WriteString(block); err != nil {
+	if _, err := f.WriteString("\n" + block); err != nil {
 		return "", fmt.Errorf("write aws config: %w", err)
 	}
 
@@ -442,15 +477,8 @@ func ReadCachedAccessToken(startURL string) (string, string, error) {
 		return "", "", fmt.Errorf("read sso cache: %w", err)
 	}
 
-	// Normalize: strip trailing hash fragments and slashes for comparison
-	normalizeURL := func(u string) string {
-		u = strings.TrimRight(u, "/")
-		if idx := strings.Index(u, "#"); idx != -1 {
-			u = u[:idx]
-		}
-		return strings.TrimRight(u, "/")
-	}
-	wantURL := normalizeURL(startURL)
+	// Normalize both sides so a cached clean URL matches a fragment-y input.
+	wantURL := normalizeStartURL(startURL)
 
 	for _, e := range entries {
 		if !strings.HasSuffix(e.Name(), ".json") {
@@ -469,7 +497,7 @@ func ReadCachedAccessToken(startURL string) (string, string, error) {
 		if err := json.Unmarshal(data, &cached); err != nil {
 			continue
 		}
-		if normalizeURL(cached.StartUrl) != wantURL {
+		if normalizeStartURL(cached.StartUrl) != wantURL {
 			continue
 		}
 		if cached.AccessToken == "" {
