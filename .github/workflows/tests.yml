@@ -10,9 +10,9 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
 
@@ -26,9 +26,9 @@ jobs:
   test-windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
 
@@ -39,7 +39,7 @@ jobs:
 
       # Cache the pinned gcc 14.2 side prefix so we don't reinstall it each run.
       - name: Cache gcc 14.2 prefix
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: C:\gcc142
           # Keyed on the toolchain script so any change to it rebuilds the prefix.
