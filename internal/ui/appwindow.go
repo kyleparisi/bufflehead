@@ -37,13 +37,17 @@ import (
 
 // Connection represents an open database connection.
 type Connection struct {
-	Name    string
-	Path    string
-	DB      db.Querier
-	Tables  []db.TableInfo
-	button  Button.Instance
-	worker  *ConnWorker
-	Gateway *GatewayConnection // nil for local connections
+	Name   string
+	Path   string
+	DB     db.Querier
+	Tables []db.TableInfo
+	button Button.Instance
+	worker *ConnWorker
+	// activeTabID is the tabID of the tab last viewed for this connection, so
+	// switching connections restores the right tab. 0 means "none / first".
+	// This is authoritative model state, not inferred from node selection.
+	activeTabID uint64
+	Gateway     *GatewayConnection // nil for local connections
 }
 
 // GatewayConnection holds the gateway-specific state for a remote connection.
@@ -75,28 +79,44 @@ type AppWindow struct {
 
 	// Connection rail
 	connRail      VBoxContainer.Instance
+	connList      VBoxContainer.Instance // holds the connection buttons (mem + added)
 	connRailWrap  PanelContainer.Instance
 	connections   []*Connection
 	activeConnIdx int
 
+	// tabs is the authoritative global tab list. The visible TabBar is a
+	// projection: only tabs whose connIdx == activeConnIdx are shown. activeTab
+	// is a cache of the active w.tabs index, written ONLY by render().
 	tabs      []*tabState
 	activeTab int
-	results   chan DBResult
-	skipPoll  bool // skip one frame of result polling so "Running…" renders
+	// suppressTabSignals is raised ONLY inside render() while it mutates the
+	// Godot TabBar (ClearTabs/AddTab/SetCurrentTab each emit tab_changed /
+	// tab_close_pressed). Signals are events; render must not re-enter itself.
+	suppressTabSignals bool
+	results            chan DBResult
+	skipPoll           bool // skip one frame of result polling so "Running…" renders
 
 	navWired bool
 
 	// Gateway
+	gatewayScreenOpen   bool // the connection screen is showing (Esc closes it)
 	pendingGateway      *GatewayConnection
 	gatewayLoadingLabel Label.Instance
-	gatewayLoadingMsg   string // set by background goroutine, read by Process
+	gatewayTracker      *stepTracker // connection-status step tracker on the loading screen
+	gatewayLoadingMsg   string       // set by background goroutine, read by Process
+
+	// Extension install/load result, set by a background goroutine and applied
+	// on the main thread in Process (mirrors the gatewayLoadingMsg pattern).
+	extActionMsg *extActionResult
+	extActionTab *tabState
 
 	// Control server address for AI prompt
 	controlAddr string
 
 	// Callbacks
-	onNewWindow func()
-	onReLogin   func() // opens the gateway/SSO screen to re-authenticate
+	onNewWindow     func()
+	onReLogin       func() // opens the gateway/SSO screen to re-authenticate
+	onNewConnection func() // opens the gateway screen to add a new connection
 
 	reLoginDialogOpen bool // guards against stacking re-login dialogs
 }
@@ -139,9 +159,62 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 	w.tabBar.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	applyTabBarTheme(w.tabBar.AsControl())
 
-	w.tabBar.OnTabChanged(func(tab int) { w.switchTab(tab) })
-	w.tabBar.OnTabClosePressed(func(tab int) { w.closeTab(tab) })
-	w.tabBarWrap.AsNode().AddChild(w.tabBar.AsNode())
+	// TabBar signals are events. The visible bar is a filtered subset of w.tabs,
+	// so a bar index is NOT a w.tabs index — resolve it to a stable tabID stored
+	// in the bar tab's metadata, then dispatch an event. Signals emitted by
+	// render() itself are ignored.
+	w.tabBar.OnTabChanged(func(barIdx int) {
+		if w.suppressTabSignals {
+			return
+		}
+		if id, ok := w.tabIDAtBar(barIdx); ok {
+			w.selectTab(id)
+		}
+	})
+	w.tabBar.OnTabClosePressed(func(barIdx int) {
+		if w.suppressTabSignals {
+			return
+		}
+		if id, ok := w.tabIDAtBar(barIdx); ok {
+			w.closeTabByID(id)
+		}
+	})
+
+	// Tab row: [tabs ............] [+ new tab] [⧉ new window]
+	// The +/⧉ buttons are visible, cross-platform replacements for the
+	// macOS-only "New Tab" / "New Window" menu items.
+	tabRow := HBoxContainer.New()
+	tabRow.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	tabRow.AsControl().AddThemeConstantOverride("separation", 4)
+	tabRow.AsNode().AddChild(w.tabBar.AsNode())
+
+	newTabBtn := Button.New()
+	newTabBtn.AsNode().SetName("NewTabButton")
+	newTabBtn.SetText("+")
+	newTabBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(16))
+	newTabBtn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(26), 0))
+	newTabBtn.AsControl().SetSizeFlagsVertical(Control.SizeShrinkCenter)
+	newTabBtn.AsControl().SetTooltipText("New Tab")
+	applySecondaryButtonTheme(newTabBtn.AsControl())
+	newTabBtn.AsBaseButton().OnPressed(func() { w.addNewTab() })
+	tabRow.AsNode().AddChild(newTabBtn.AsNode())
+
+	newWindowBtn := Button.New()
+	newWindowBtn.AsNode().SetName("NewWindowButton")
+	newWindowBtn.SetText("⧉")
+	newWindowBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(14))
+	newWindowBtn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(26), 0))
+	newWindowBtn.AsControl().SetSizeFlagsVertical(Control.SizeShrinkCenter)
+	newWindowBtn.AsControl().SetTooltipText("New Window")
+	applySecondaryButtonTheme(newWindowBtn.AsControl())
+	newWindowBtn.AsBaseButton().OnPressed(func() {
+		if w.onNewWindow != nil {
+			w.onNewWindow()
+		}
+	})
+	tabRow.AsNode().AddChild(newWindowBtn.AsNode())
+
+	w.tabBarWrap.AsNode().AddChild(tabRow.AsNode())
 
 	// Split
 	w.split = HSplitContainer.New()
@@ -171,12 +244,16 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 
 	// Status bar - more padding for breathing room
 	statusWrap := PanelContainer.New()
-	applyPanelBg(statusWrap.AsControl(), colorBgSidebar)
+	// Darker footer surface with a thin top border (surface-container-lowest).
+	statusSB := makeStyleBox(colorBgDarker, 0, 0, colorBgDarker)
+	statusSB.SetBorderWidthTop(1)
+	statusSB.SetBorderColor(colorBorder)
+	statusWrap.AsControl().AddThemeStyleboxOverride("panel", statusSB.AsStyleBox())
 	statusMargin := MarginContainer.New()
-	statusMargin.AsControl().AddThemeConstantOverride("margin_top", 6)
-	statusMargin.AsControl().AddThemeConstantOverride("margin_left", 12)
-	statusMargin.AsControl().AddThemeConstantOverride("margin_right", 12)
-	statusMargin.AsControl().AddThemeConstantOverride("margin_bottom", 6)
+	statusMargin.AsControl().AddThemeConstantOverride("margin_top", 4)
+	statusMargin.AsControl().AddThemeConstantOverride("margin_left", 10)
+	statusMargin.AsControl().AddThemeConstantOverride("margin_right", 10)
+	statusMargin.AsControl().AddThemeConstantOverride("margin_bottom", 4)
 
 	w.statusBar = new(StatusBar)
 	w.statusBar.OnPrevPage = func() {
@@ -191,6 +268,26 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 		if ts != nil && ts.State.Result != nil && ts.State.PageOffset+ts.State.PageSize < int(ts.State.Result.Total) {
 			ts.State.PageOffset += ts.State.PageSize
 			w.runCurrentQuery(nil)
+		}
+	}
+	w.statusBar.OnFirstPage = func() {
+		ts := w.currentTab()
+		if ts != nil && ts.State.PageOffset > 0 {
+			ts.State.PageOffset = 0
+			w.runCurrentQuery(nil)
+		}
+	}
+	w.statusBar.OnLastPage = func() {
+		ts := w.currentTab()
+		if ts != nil && ts.State.Result != nil && ts.State.PageSize > 0 {
+			last := ((int(ts.State.Result.Total) - 1) / ts.State.PageSize) * ts.State.PageSize
+			if last < 0 {
+				last = 0
+			}
+			if last != ts.State.PageOffset {
+				ts.State.PageOffset = last
+				w.runCurrentQuery(nil)
+			}
 		}
 	}
 	w.statusBar.OnToggleLeftPane = func() {
@@ -221,40 +318,12 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 	w.emptyView.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	w.emptyView.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
 	w.emptyView.AsBoxContainer().SetAlignment(BoxContainer.AlignmentCenter)
-
-	emptyCenter := VBoxContainer.New()
-	emptyCenter.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
-	emptyCenter.AsControl().SetSizeFlagsVertical(Control.SizeShrinkCenter)
-	emptyCenter.AsControl().AddThemeConstantOverride("separation", 16)
-	emptyCenter.AsBoxContainer().SetAlignment(BoxContainer.AlignmentCenter)
-
-	emptyIcon := Label.New()
-	emptyIcon.SetText("⬡")
-	emptyIcon.AsControl().AddThemeFontSizeOverride("font_size", fontSize(48))
-	emptyIcon.AsControl().AddThemeColorOverride("font_color", colorTextDim)
-	emptyIcon.SetHorizontalAlignment(1)
-
-	emptyTitle := Label.New()
-	emptyTitle.SetText("Bufflehead")
-	emptyTitle.AsControl().AddThemeFontSizeOverride("font_size", fontSize(18))
-	emptyTitle.AsControl().AddThemeColorOverride("font_color", colorText)
-	emptyTitle.SetHorizontalAlignment(1)
-
-	emptyHint := Label.New()
-	emptyHint.SetText("⌘T  New Tab   ·   ⌘O  Open File   ·   Drop .parquet here")
-	emptyHint.AsControl().AddThemeFontSizeOverride("font_size", fontSize(13))
-	emptyHint.AsControl().AddThemeColorOverride("font_color", colorTextDim)
-	emptyHint.SetHorizontalAlignment(1)
-
-	emptyCenter.AsNode().AddChild(emptyIcon.AsNode())
-	emptyCenter.AsNode().AddChild(emptyTitle.AsNode())
-	emptyCenter.AsNode().AddChild(emptyHint.AsNode())
-	w.emptyView.AsNode().AddChild(emptyCenter.AsNode())
+	w.buildEmptyPlaceholder()
 
 	// Connection rail (far-left column)
 	w.connRailWrap = PanelContainer.New()
 	w.connRailWrap.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
-	w.connRailWrap.AsControl().SetCustomMinimumSize(Vector2.New(scaled(36), 0))
+	w.connRailWrap.AsControl().SetCustomMinimumSize(Vector2.New(scaled(48), 0))
 	applyPanelBg(w.connRailWrap.AsControl(), colorBgDarker)
 
 	railMargin := MarginContainer.New()
@@ -270,16 +339,21 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 	w.connRail.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
 	w.connRail.AsControl().AddThemeConstantOverride("separation", 4)
 
+	// connList holds the connection buttons; a bottom-pinned "+" adds new ones.
+	w.connList = VBoxContainer.New()
+	w.connList.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	w.connList.AsControl().AddThemeConstantOverride("separation", 4)
+
 	railMargin.AsNode().AddChild(w.connRail.AsNode())
 	w.connRailWrap.AsNode().AddChild(railMargin.AsNode())
+	w.connRail.AsNode().AddChild(w.connList.AsNode())
 
 	// Memory connection is always index 0
 	memBtn := Button.New()
-	memBtn.SetText("mem")
-	memBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(10))
-	memBtn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(36), scaled(36)))
+	memBtn.SetText(models.ConnBadge("Memory"))
+	memBtn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(40), scaled(40)))
 	memBtn.SetClipText(true)
-	applyActiveButtonTheme(memBtn.AsControl()) // active by default
+	applyConnTileTheme(memBtn.AsControl(), true) // active by default
 	memWorker := NewConnWorker(w.duck, w.results)
 	memWorker.Start()
 	memConn := &Connection{
@@ -291,9 +365,28 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 		worker: memWorker,
 	}
 	w.connections = append(w.connections, memConn)
-	w.connRail.AsNode().AddChild(memBtn.AsNode())
+	w.connList.AsNode().AddChild(memBtn.AsNode())
 	w.activeConnIdx = 0
 	w.wireConnButton(memBtn, 0)
+
+	// Spacer pushes the "New Connection" button to the bottom of the rail.
+	railSpacer := Control.New()
+	railSpacer.SetSizeFlagsVertical(Control.SizeExpandFill)
+	w.connRail.AsNode().AddChild(railSpacer.AsNode())
+
+	// New Connection ("+") — visible, cross-platform replacement for the
+	// macOS-only "Connect to Gateway…" / "Open…" menu items.
+	newConnBtn := Button.New()
+	newConnBtn.AsNode().SetName("NewConnectionButton")
+	newConnBtn.SetText("+")
+	newConnBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(18))
+	newConnBtn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(36), scaled(36)))
+	newConnBtn.AsControl().SetTooltipText("New Connection")
+	applySecondaryButtonTheme(newConnBtn.AsControl())
+	newConnBtn.AsBaseButton().OnPressed(func() {
+		w.showNewConnectionMenu(newConnBtn)
+	})
+	w.connRail.AsNode().AddChild(newConnBtn.AsNode())
 
 	// Content area (rail | main)
 	contentHBox := HBoxContainer.New()
@@ -343,6 +436,11 @@ func (w *AppWindow) addNewTab() {
 		w.titleBar.OnRefresh = func() {
 			w.refreshConnection(w.activeConnIdx)
 		}
+		w.titleBar.OnRun = func() {
+			if ts := w.currentTab(); ts != nil && ts.sqlPanel != nil {
+				ts.sqlPanel.Run()
+			}
+		}
 		w.navWired = true
 	}
 
@@ -375,19 +473,29 @@ func (w *AppWindow) addNewTab() {
 	selectorRow.AsControl().AddThemeConstantOverride("separation", 0)
 
 	schemaBtn := Button.New()
-	schemaBtn.SetText("Items")
+	schemaBtn.SetText("Schema")
 	schemaBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(13))
 	schemaBtn.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	applySidebarTabTheme(schemaBtn.AsControl(), true)
+	ts.schemaBtn = schemaBtn
 
 	historyBtn := Button.New()
 	historyBtn.SetText("History")
 	historyBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(13))
 	historyBtn.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	applySidebarTabTheme(historyBtn.AsControl(), false)
+	ts.historyBtn = historyBtn
+
+	extBtn := Button.New()
+	extBtn.SetText("Extensions")
+	extBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(12))
+	extBtn.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	applySidebarTabTheme(extBtn.AsControl(), false)
+	ts.extBtn = extBtn
 
 	selectorRow.AsNode().AddChild(schemaBtn.AsNode())
 	selectorRow.AsNode().AddChild(historyBtn.AsNode())
+	selectorRow.AsNode().AddChild(extBtn.AsNode())
 
 	ts.schema = new(SchemaPanel)
 	ts.schema.OnColumnsChanged = func(selected []string) {
@@ -401,32 +509,29 @@ func (w *AppWindow) addNewTab() {
 		ts.State.PageOffset = 0
 		ts.State.SortColumn = ""
 		ts.State.SortDir = models.SortNone
+		// A replayed query defines its own columns; drop any stale column
+		// selection so VirtualSQL doesn't re-project (and double-wrap) it.
+		ts.State.SelectedCols = nil
 		ts.sqlPanel.SetSQL(sql)
 		w.runCurrentQuery(nil)
 	}
+	ts.extPanel = new(ExtensionsPanel)
+	ts.extPanel.OnAction = func(name string, install bool) {
+		w.handleExtAction(ts, name, install)
+	}
 
-	// Start showing schema, hide history
+	// Start showing schema, hide the others
 	ts.historyPanel.AsCanvasItem().SetVisible(false)
+	ts.extPanel.AsCanvasItem().SetVisible(false)
 
-	schemaBtn.AsBaseButton().OnPressed(func() {
-		ts.schema.AsCanvasItem().SetVisible(true)
-		ts.historyPanel.AsCanvasItem().SetVisible(false)
-		applySidebarTabTheme(schemaBtn.AsControl(), true)
-		applySidebarTabTheme(historyBtn.AsControl(), false)
-	})
-	historyBtn.AsBaseButton().OnPressed(func() {
-		ts.schema.AsCanvasItem().SetVisible(false)
-		ts.historyPanel.AsCanvasItem().SetVisible(true)
-		applySidebarTabTheme(schemaBtn.AsControl(), false)
-		applySidebarTabTheme(historyBtn.AsControl(), true)
-		if w.history != nil {
-			ts.historyPanel.SetHistory(w.history.All())
-		}
-	})
+	schemaBtn.AsBaseButton().OnPressed(func() { w.showSchemaSidebar(ts) })
+	historyBtn.AsBaseButton().OnPressed(func() { w.showHistorySidebar(ts) })
+	extBtn.AsBaseButton().OnPressed(func() { w.showExtensionsSidebar(ts) })
 
 	sidebarVBox.AsNode().AddChild(selectorRow.AsNode())
 	sidebarVBox.AsNode().AddChild(ts.schema.AsNode())
 	sidebarVBox.AsNode().AddChild(ts.historyPanel.AsNode())
+	sidebarVBox.AsNode().AddChild(ts.extPanel.AsNode())
 	sidebarMargin.AsNode().AddChild(sidebarVBox.AsNode())
 	ts.sidebarWrap.AsNode().AddChild(sidebarMargin.AsNode())
 
@@ -444,6 +549,10 @@ func (w *AppWindow) addNewTab() {
 		ts.State.PageOffset = 0
 		ts.State.SortColumn = ""
 		ts.State.SortDir = models.SortNone
+		// The user's edited query defines its own columns; drop any stale
+		// column selection so VirtualSQL doesn't re-project columns that may not
+		// exist in the new query.
+		ts.State.SelectedCols = nil
 		w.runCurrentQuery(nil)
 	}
 	sqlWrap := MarginContainer.New()
@@ -492,7 +601,7 @@ func (w *AppWindow) addNewTab() {
 		if len(rows) == 0 {
 			return
 		}
-		ts.detailPanel.SetRows(ts.dataGrid.columns, rows)
+		ts.detailPanel.SetRows(ts.dataGrid.columns, ts.dataGrid.colTypes, rows)
 		if !ts.detailWrap.AsCanvasItem().Visible() {
 			// Open at 25% width
 			totalWidth := ts.outerWrap.AsControl().Size().X
@@ -541,57 +650,314 @@ func (w *AppWindow) addNewTab() {
 	w.sidebarCol.AsNode().AddChild(ts.sidebarWrap.AsNode())
 	w.contentCol.AsNode().AddChild(ts.outerWrap.AsNode())
 
-	w.showTabView()
-
-	idx := len(w.tabs)
+	// New tabs belong to the active connection so they appear in the current
+	// (filtered) tab bar. Schema is connection state, so bind the tab to the
+	// active connection now — this populates its schema sidebar + SQL completion
+	// from the connection's retained Tables. Without this, extra tabs under a DB
+	// connection would render with an empty schema panel.
 	w.tabs = append(w.tabs, ts)
-	w.tabBar.AddTab()
-	w.tabBar.SetTabTitle(idx, "Untitled")
-	w.tabBar.SetCurrentTab(idx)
-	w.switchTab(idx)
+	if w.activeConnIdx > 0 && w.activeConnIdx < len(w.connections) {
+		w.bindTabToConnection(ts, w.activeConnIdx)
+	} else if w.activeConnIdx >= 0 && w.activeConnIdx < len(w.connections) {
+		ts.connIdx = w.activeConnIdx
+	}
+	w.setActiveTabID(ts.connIdx, ts.tabID) // make the new tab active for its conn
+	w.render()
 }
 
+// ───────────────────────── State-machine core ─────────────────────────
+//
+// The UI is a projection of state. Events (below) mutate only the state fields
+// (w.tabs, w.activeConnIdx, Connection.activeTabID) and then call render().
+// render() is the single, idempotent function that updates Godot nodes; it never
+// mutates state other than the w.activeTab cache it derives.
+
+// setActiveTabID records which tab is active for a connection (model state).
+func (w *AppWindow) setActiveTabID(connIdx int, tabID uint64) {
+	if connIdx >= 0 && connIdx < len(w.connections) {
+		w.connections[connIdx].activeTabID = tabID
+	}
+}
+
+// visibleTabs returns the tabs belonging to the active connection, in order.
+func (w *AppWindow) visibleTabs() []*tabState {
+	var out []*tabState
+	for _, ts := range w.tabs {
+		if ts.connIdx == w.activeConnIdx {
+			out = append(out, ts)
+		}
+	}
+	return out
+}
+
+// activeTabState resolves the active tab for the active connection from state:
+// the connection's recorded activeTabID if it still exists, else its first tab.
+func (w *AppWindow) activeTabState() *tabState {
+	vis := w.visibleTabs()
+	if len(vis) == 0 {
+		return nil
+	}
+	if w.activeConnIdx >= 0 && w.activeConnIdx < len(w.connections) {
+		if id := w.connections[w.activeConnIdx].activeTabID; id != 0 {
+			for _, ts := range vis {
+				if ts.tabID == id {
+					return ts
+				}
+			}
+		}
+	}
+	return vis[0]
+}
+
+// tabIDAtBar resolves a visible tab-bar index to the stable tabID stored in its
+// metadata.
+func (w *AppWindow) tabIDAtBar(barIdx int) (uint64, bool) {
+	if barIdx < 0 || barIdx >= w.tabBar.TabCount() {
+		return 0, false
+	}
+	switch v := w.tabBar.GetTabMetadata(barIdx).(type) {
+	case uint64:
+		return v, true
+	case int64:
+		return uint64(v), true
+	case int:
+		return uint64(v), true
+	case float64:
+		return uint64(v), true
+	default:
+		return 0, false
+	}
+}
+
+// ── Events (mutate state only, then render) ──
+
+// selectTab makes tabID the active tab of its connection. It does NOT change the
+// active connection (all visible tabs share it anyway).
+//
+// Idempotency matters: Godot emits tab_changed deferred (not synchronously
+// inside SetCurrentTab), so render()'s SetCurrentTab call fires this handler a
+// frame later. If the tab is already the active one, do nothing — otherwise
+// render→SetCurrentTab→tab_changed→selectTab→render would recurse forever.
+func (w *AppWindow) selectTab(tabID uint64) {
+	ts := w.findTab(tabID)
+	if ts == nil {
+		return
+	}
+	if w.activeTabState() == ts {
+		return // already active; nothing to change
+	}
+	w.setActiveTabID(ts.connIdx, tabID)
+	w.render()
+}
+
+// switchTab is a thin compatibility shim for callers holding a w.tabs index.
 func (w *AppWindow) switchTab(idx int) {
 	if idx < 0 || idx >= len(w.tabs) {
 		return
 	}
-	for _, ts := range w.tabs {
-		ts.sidebarWrap.AsCanvasItem().SetVisible(false)
-		ts.outerWrap.AsCanvasItem().SetVisible(false)
-	}
-	w.activeTab = idx
-	ts := w.tabs[idx]
-	ts.sidebarWrap.AsCanvasItem().SetVisible(true)
-	ts.outerWrap.AsCanvasItem().SetVisible(true)
+	w.selectTab(w.tabs[idx].tabID)
+}
 
-	// Update connection rail highlight
-	if ts.connIdx >= 0 && ts.connIdx < len(w.connections) {
-		w.activeConnIdx = ts.connIdx
-		for i, c := range w.connections {
-			if i == ts.connIdx {
-				applyActiveButtonTheme(c.button.AsControl())
-			} else {
-				applySecondaryButtonTheme(c.button.AsControl())
+// closeTabByID removes a tab, frees its nodes, updates the owning connection's
+// active tab, and renders.
+func (w *AppWindow) closeTabByID(tabID uint64) {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Println("closeTab recovered:", r)
+		}
+	}()
+
+	idx := -1
+	for i, ts := range w.tabs {
+		if ts.tabID == tabID {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return
+	}
+	ts := w.tabs[idx]
+	connIdx := ts.connIdx
+
+	// Free this tab's nodes.
+	w.sidebarCol.AsNode().RemoveChild(ts.sidebarWrap.AsNode())
+	w.contentCol.AsNode().RemoveChild(ts.outerWrap.AsNode())
+	ts.sidebarWrap.AsNode().QueueFree()
+	ts.outerWrap.AsNode().QueueFree()
+
+	// If it was its connection's active tab, activate the NEIGHBORING tab of the
+	// same connection so selection stays put visually (prefer the tab to the
+	// right — which slides into this slot — else the tab to the left). Picking
+	// the first sibling would make the active tab appear to jump to position 0.
+	wasActive := connIdx >= 0 && connIdx < len(w.connections) && w.connections[connIdx].activeTabID == tabID
+	var neighbor uint64
+	if wasActive {
+		var prev uint64  // last same-conn tab seen before idx
+		var next uint64  // first same-conn tab seen after idx
+		for i, t := range w.tabs {
+			if t.connIdx != connIdx || i == idx {
+				continue
+			}
+			if i < idx {
+				prev = t.tabID
+			} else if next == 0 {
+				next = t.tabID
 			}
 		}
-		w.titleBar.SetFileInfo(w.connections[ts.connIdx].Path)
+		if next != 0 {
+			neighbor = next
+		} else {
+			neighbor = prev
+		}
 	}
 
-	if ts.State.FilePath != "" {
-		w.titleBar.SetFileInfo(ts.State.FilePath)
-	} else if ts.connIdx == 0 {
+	// Mutate state: drop the tab.
+	w.tabs = append(w.tabs[:idx], w.tabs[idx+1:]...)
+
+	if wasActive {
+		w.connections[connIdx].activeTabID = neighbor // 0 if none left
+	}
+
+	// Invariant: the active connection always has a visible tab as long as ANY
+	// tab exists. If we just emptied the active connection but tabs remain on
+	// other connections, switch to a connection that still has one.
+	if len(w.tabs) > 0 && !w.connHasTab(w.activeConnIdx) {
+		if ci := w.firstConnWithTab(); ci >= 0 {
+			w.activeConnIdx = ci
+		}
+	}
+
+	w.render()
+}
+
+// connHasTab reports whether the connection at idx has any open tab.
+func (w *AppWindow) connHasTab(idx int) bool {
+	for _, ts := range w.tabs {
+		if ts.connIdx == idx {
+			return true
+		}
+	}
+	return false
+}
+
+// firstConnWithTab returns the connIdx of the first tab in w.tabs, or -1 if no
+// tabs exist.
+func (w *AppWindow) firstConnWithTab() int {
+	if len(w.tabs) == 0 {
+		return -1
+	}
+	return w.tabs[0].connIdx
+}
+
+// closeTab is a compatibility shim for callers holding a w.tabs index.
+func (w *AppWindow) closeTab(idx int) {
+	if idx < 0 || idx >= len(w.tabs) {
+		return
+	}
+	w.closeTabByID(w.tabs[idx].tabID)
+}
+
+// render is the single projection of state → Godot nodes. It is idempotent and
+// must not mutate state beyond the w.activeTab cache it derives. See CLAUDE.md
+// "UI Rendering: Treat It As A State Machine".
+func (w *AppWindow) render() {
+	// No tabs at all → empty view. Clear the bar so no stale tabs linger.
+	if len(w.tabs) == 0 {
+		w.activeTab = -1
+		w.suppressTabSignals = true
+		w.tabBar.ClearTabs()
+		w.suppressTabSignals = false
+		w.showEmptyView()
+		return
+	}
+
+	active := w.activeTabState()
+
+	// Rail highlight follows the active connection (state), not any tab.
+	for i, c := range w.connections {
+		applyConnTileTheme(c.button.AsControl(), i == w.activeConnIdx)
+	}
+
+	// Tab content/sidebar visibility: only the active tab is shown.
+	for _, ts := range w.tabs {
+		show := ts == active
+		ts.sidebarWrap.AsCanvasItem().SetVisible(show)
+		ts.outerWrap.AsCanvasItem().SetVisible(show)
+	}
+
+	// Rebuild the visible TabBar from state (filtered to the active connection),
+	// keying each bar tab to its tabID. Suppress the signals this emits.
+	w.suppressTabSignals = true
+	w.tabBar.ClearTabs()
+	activeBarIdx := -1
+	for _, ts := range w.visibleTabs() {
+		barIdx := w.tabBar.TabCount()
+		w.tabBar.AddTab()
+		w.tabBar.SetTabTitle(barIdx, w.tabTitle(ts))
+		// Store as a signed int so graphics.gd encodes it as a Godot INT variant.
+		// (A raw uint64 is coerced into an RID variant and can't be read back.)
+		w.tabBar.SetTabMetadata(barIdx, int64(ts.tabID))
+		if ts == active {
+			activeBarIdx = barIdx
+		}
+	}
+	if activeBarIdx >= 0 {
+		w.tabBar.SetCurrentTab(activeBarIdx)
+	}
+	w.suppressTabSignals = false
+
+	// The active connection has no tabs to show. Events guarantee this doesn't
+	// happen (they create a tab), but stay safe: fall back to the empty view.
+	if active == nil {
+		w.activeTab = -1
+		w.showEmptyView()
+		return
+	}
+
+	// Cache the active w.tabs index for currentTab()/currentState().
+	for i, ts := range w.tabs {
+		if ts == active {
+			w.activeTab = i
+			break
+		}
+	}
+
+	w.showTabView()
+
+	// Title bar reflects the active tab's file or its connection.
+	if active.State.FilePath != "" {
+		w.titleBar.SetFileInfo(active.State.FilePath)
+	} else if active.connIdx > 0 && active.connIdx < len(w.connections) {
+		w.titleBar.SetFileInfo(w.connections[active.connIdx].Path)
+	} else {
 		w.titleBar.SetFileInfo("")
 	}
 
-	// Sync right pane toggle with the active tab's detail panel visibility
-	w.statusBar.SetRightPaneActive(ts.detailWrap.AsCanvasItem().Visible())
+	// AI prompt + footer connection info reflect the active connection.
+	if w.activeConnIdx >= 0 && w.activeConnIdx < len(w.connections) {
+		conn := w.connections[w.activeConnIdx]
+		if conn.Gateway != nil {
+			w.titleBar.SetAIPrompt(buildAIPrompt(conn.Gateway.Config, conn.Tables, w.controlAddr))
+		} else {
+			w.titleBar.SetAIPrompt("")
+		}
+		connName := conn.Name
+		if conn.Path == ":memory:" {
+			connName = "in-memory"
+		}
+		w.statusBar.SetConnection(connName)
+		w.statusBar.SetConnectionDot(connHealthColor(conn))
+	}
 
-	if ts.State.Result != nil {
-		start := ts.State.PageOffset + 1
-		end := ts.State.PageOffset + len(ts.State.Result.Rows)
-		w.statusBar.SetStatus(fmt.Sprintf("%d–%d of %d rows", start, end, ts.State.Result.Total))
-		page := (ts.State.PageOffset / ts.State.PageSize) + 1
-		totalPages := (int(ts.State.Result.Total) + ts.State.PageSize - 1) / ts.State.PageSize
+	// Detail pane toggle + paging reflect the active tab.
+	w.statusBar.SetRightPaneActive(active.detailWrap.AsCanvasItem().Visible())
+	if active.State.Result != nil {
+		start := active.State.PageOffset + 1
+		end := active.State.PageOffset + len(active.State.Result.Rows)
+		w.statusBar.SetStatus(fmt.Sprintf("%d–%d of %d rows", start, end, active.State.Result.Total))
+		page := (active.State.PageOffset / active.State.PageSize) + 1
+		totalPages := (int(active.State.Result.Total) + active.State.PageSize - 1) / active.State.PageSize
 		w.statusBar.SetPage(page, totalPages)
 	} else {
 		w.statusBar.SetStatus("Ready")
@@ -599,60 +965,42 @@ func (w *AppWindow) switchTab(idx int) {
 	}
 }
 
-func (w *AppWindow) closeTab(idx int) {
-	defer func() {
-		if r := recover(); r != nil {
-			fmt.Println("closeTab recovered:", r)
-		}
-	}()
-
-	if idx < 0 || idx >= len(w.tabs) {
-		return
+// tabTitle returns the display title for a tab: its file name, else the
+// table/file referenced in the query's FROM clause (parsed from the DuckDB AST),
+// else its connection name, else "Untitled".
+func (w *AppWindow) tabTitle(ts *tabState) string {
+	if ts.State.FilePath != "" {
+		return baseName(ts.State.FilePath)
 	}
-
-	ts := w.tabs[idx]
-	ts.sidebarWrap.AsCanvasItem().SetVisible(false)
-	ts.outerWrap.AsCanvasItem().SetVisible(false)
-	w.sidebarCol.AsNode().RemoveChild(ts.sidebarWrap.AsNode())
-	w.contentCol.AsNode().RemoveChild(ts.outerWrap.AsNode())
-	ts.sidebarWrap.AsNode().QueueFree()
-	ts.outerWrap.AsNode().QueueFree()
-
-	w.tabs = append(w.tabs[:idx], w.tabs[idx+1:]...)
-	w.tabBar.RemoveTab(idx)
-
-	if len(w.tabs) == 0 {
-		w.activeTab = -1
-		w.showEmptyView()
-		return
+	// For DB-connection tabs, prefer the table named in the FROM clause so tabs
+	// are easy to tell apart when clicking around. Parsed via DuckDB's AST
+	// (json_serialize_sql); returns "" for anything without a plain base table.
+	if from := db.FromTableName(w.duck, ts.State.UserSQL); from != "" {
+		return baseName(from)
 	}
-
-	if w.activeTab >= len(w.tabs) {
-		w.activeTab = len(w.tabs) - 1
+	if ts.connIdx > 0 && ts.connIdx < len(w.connections) {
+		return w.connections[ts.connIdx].Name
 	}
-	w.tabBar.SetCurrentTab(w.activeTab)
-	w.switchTab(w.activeTab)
+	return "Untitled"
 }
 
+// baseName returns the final path segment of a file path (for FROM 'a/b.parquet').
+func baseName(path string) string {
+	for i := len(path) - 1; i >= 0; i-- {
+		if path[i] == '/' {
+			return path[i+1:]
+		}
+	}
+	return path
+}
+
+// updateTabTitle re-renders after a tab's title-affecting state changed
+// (e.g. a file was loaded). Titles are computed in render() via tabTitle.
 func (w *AppWindow) updateTabTitle(idx int) {
 	if idx < 0 || idx >= len(w.tabs) {
 		return
 	}
-	ts := w.tabs[idx]
-	if ts.State.FilePath != "" {
-		name := ts.State.FilePath
-		for i := len(name) - 1; i >= 0; i-- {
-			if name[i] == '/' {
-				name = name[i+1:]
-				break
-			}
-		}
-		w.tabBar.SetTabTitle(idx, name)
-	} else if ts.connIdx > 0 && ts.connIdx < len(w.connections) {
-		w.tabBar.SetTabTitle(idx, w.connections[ts.connIdx].Name)
-	} else {
-		w.tabBar.SetTabTitle(idx, "Untitled")
-	}
+	w.render()
 }
 
 func (w *AppWindow) showEmptyView() {
@@ -662,6 +1010,57 @@ func (w *AppWindow) showEmptyView() {
 	w.titleBar.SetFileInfo("")
 	w.statusBar.SetStatus("No tabs open")
 	w.statusBar.SetPage(0, 0)
+}
+
+// buildEmptyPlaceholder (re)builds the centered "Bufflehead" placeholder in the
+// empty view, replacing whatever it currently holds (e.g. a gateway screen).
+func (w *AppWindow) buildEmptyPlaceholder() {
+	for w.emptyView.AsNode().GetChildCount() > 0 {
+		c := w.emptyView.AsNode().GetChild(0)
+		w.emptyView.AsNode().RemoveChild(c)
+		c.QueueFree()
+	}
+
+	emptyCenter := VBoxContainer.New()
+	emptyCenter.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	emptyCenter.AsControl().SetSizeFlagsVertical(Control.SizeShrinkCenter)
+	emptyCenter.AsControl().AddThemeConstantOverride("separation", 16)
+	emptyCenter.AsBoxContainer().SetAlignment(BoxContainer.AlignmentCenter)
+
+	emptyIcon := Label.New()
+	emptyIcon.SetText("⬡")
+	emptyIcon.AsControl().AddThemeFontSizeOverride("font_size", fontSize(48))
+	emptyIcon.AsControl().AddThemeColorOverride("font_color", colorTextDim)
+	emptyIcon.SetHorizontalAlignment(1)
+
+	emptyTitle := Label.New()
+	emptyTitle.SetText("Bufflehead")
+	emptyTitle.AsControl().AddThemeFontSizeOverride("font_size", fontSize(18))
+	emptyTitle.AsControl().AddThemeColorOverride("font_color", colorText)
+	emptyTitle.SetHorizontalAlignment(1)
+
+	emptyHint := Label.New()
+	emptyHint.SetText("＋  New Connection (left rail)   ·   Open a file   ·   Drop .parquet here")
+	emptyHint.AsControl().AddThemeFontSizeOverride("font_size", fontSize(13))
+	emptyHint.AsControl().AddThemeColorOverride("font_color", colorTextDim)
+	emptyHint.SetHorizontalAlignment(1)
+
+	emptyCenter.AsNode().AddChild(emptyIcon.AsNode())
+	emptyCenter.AsNode().AddChild(emptyTitle.AsNode())
+	emptyCenter.AsNode().AddChild(emptyHint.AsNode())
+	w.emptyView.AsNode().AddChild(emptyCenter.AsNode())
+}
+
+// exitGatewayScreen restores the normal view after cancelling the connection
+// screen: the data view if any tabs are open, else the empty placeholder.
+func (w *AppWindow) exitGatewayScreen() {
+	w.gatewayScreenOpen = false
+	w.buildEmptyPlaceholder()
+	if len(w.tabs) > 0 {
+		w.showTabView()
+	} else {
+		w.showEmptyView()
+	}
 }
 
 func (w *AppWindow) showTabView() {
@@ -740,6 +1139,9 @@ func (w *AppWindow) runCurrentQuery(cmd *control.Command) {
 		return
 	}
 	ts.generation++
+	// Refresh the tab title from the (just-updated) query's FROM clause first;
+	// render() also resets the status line, so set "Running…" afterwards.
+	w.render()
 	w.statusBar.SetStatus("Running…")
 	ts.dataGrid.AsCanvasItem().SetModulate(Color.RGBA{R: 1, G: 1, B: 1, A: 0.3})
 	w.skipPoll = true
@@ -822,41 +1224,24 @@ func (w *AppWindow) handleOpenDBResult(res DBResult) {
 
 	// Add button to rail
 	btn := Button.New()
-	btn.SetText(name)
-	btn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(10))
-	btn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(36), scaled(36)))
+	btn.SetText(models.ConnBadge(name))
+	btn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(40), scaled(40)))
 	btn.SetClipText(true)
-	applySecondaryButtonTheme(btn.AsControl())
+	applyConnTileTheme(btn.AsControl(), false)
 	conn.button = btn
 
 	dbIdx := len(w.connections)
 	w.connections = append(w.connections, conn)
-	w.connRail.AsNode().AddChild(btn.AsNode())
+	w.connList.AsNode().AddChild(btn.AsNode())
 	w.connRailWrap.AsCanvasItem().SetVisible(true)
 
 	w.wireConnButton(btn, dbIdx)
 
-	// Create a new tab bound to this connection
-	w.addNewTab()
-	ts := w.currentTab()
-	if ts != nil {
-		ts.State.IsDatabase = true
-		ts.connIdx = dbIdx
-		ts.schema.SetTables(conn.Tables)
-		ts.sqlPanel.SetCompletionTables(conn.Tables)
-		ts.schema.OnTableClicked = func(tableName string) {
-			ts.State.ActiveTable = tableName
-			ts.State.UserSQL = fmt.Sprintf("SELECT * FROM \"%s\"", tableName)
-			ts.State.PageOffset = 0
-			ts.State.SortColumn = ""
-			ts.State.SortDir = models.SortNone
-			ts.sqlPanel.SetSQL(ts.State.UserSQL)
-			w.runCurrentQuery(nil)
-		}
-	}
-
-	// Highlight this connection in the rail
-	w.selectConnection(dbIdx)
+	// Make this the active connection, then create+bind its first tab. render()
+	// (called by newTabForConnection) projects the rail highlight and filtered
+	// tab bar for the new connection.
+	w.activeConnIdx = dbIdx
+	w.newTabForConnection(dbIdx)
 
 	w.statusBar.SetStatus(fmt.Sprintf("Connected: %s (%d tables/views)", name, len(tables)))
 	if res.ControlCmd != nil {
@@ -864,40 +1249,179 @@ func (w *AppWindow) handleOpenDBResult(res DBResult) {
 	}
 }
 
+// bindTabToConnection wires an existing tab to the connection at idx: sets its
+// connIdx, populates the schema sidebar and SQL completion from the connection's
+// retained Tables, and installs the table-click handler. This is the single
+// place that binds a connection's schema into a tab, used both when a connection
+// is first opened and when re-opening a tab for a still-open connection whose
+// tabs were all closed. It mutates the tab's model; the title bar / AI prompt are
+// projected by render(). Callers render() afterwards.
+func (w *AppWindow) bindTabToConnection(ts *tabState, idx int) {
+	if ts == nil || idx < 0 || idx >= len(w.connections) {
+		return
+	}
+	conn := w.connections[idx]
+	ts.State.IsDatabase = true
+	ts.connIdx = idx
+	ts.schema.SetTables(conn.Tables)
+	ts.sqlPanel.SetCompletionTables(conn.Tables)
+	ts.schema.OnTableClicked = func(tableName string) {
+		ts.State.ActiveTable = tableName
+		// Quote each dotted segment separately so schema-qualified names become
+		// "schema"."table", not the invalid "schema.table".
+		ts.State.UserSQL = "SELECT * FROM " + db.QuoteQualifiedName(tableName)
+		ts.State.PageOffset = 0
+		ts.State.SortColumn = ""
+		ts.State.SortDir = models.SortNone
+		ts.sqlPanel.SetSQL(ts.State.UserSQL)
+		w.runCurrentQuery(nil)
+	}
+	if conn.Gateway != nil {
+		w.titleBar.SetConnectionInfo("PostgreSQL", conn.Name, conn.Gateway.Config.DBName)
+	}
+}
+
+// selectConnection is an event: it makes idx the active connection. If that
+// connection has no open tabs (all were closed while it stayed open), a fresh
+// tab is created and bound to it so its schema reappears. State only; render()
+// projects the rail highlight, filtered tab bar, sidebar, and title/status.
 func (w *AppWindow) selectConnection(idx int) {
 	if idx < 0 || idx >= len(w.connections) {
 		return
 	}
 	w.activeConnIdx = idx
 
-	// Highlight active button
-	for i, c := range w.connections {
-		if i == idx {
-			applyActiveButtonTheme(c.button.AsControl())
-		} else {
-			applySecondaryButtonTheme(c.button.AsControl())
-		}
-	}
-
-	// Show/hide AI prompt copy button based on connection type
-	conn := w.connections[idx]
-	if conn.Gateway != nil {
-		w.titleBar.SetAIPrompt(buildAIPrompt(conn.Gateway.Config, conn.Tables, w.controlAddr))
-	} else {
-		w.titleBar.SetAIPrompt("")
-	}
-
-	// Find the first tab bound to this connection and switch to it
-	for i, ts := range w.tabs {
+	// Ensure the connection has at least one tab to show.
+	hasTab := false
+	for _, ts := range w.tabs {
 		if ts.connIdx == idx {
-			w.tabBar.SetCurrentTab(i)
-			return
+			hasTab = true
+			break
 		}
+	}
+	if !hasTab {
+		// addNewTab appends a tab bound to the active connection (idx) and marks
+		// it active for that connection, then renders. Bind schema first render
+		// happens inside addNewTab, so bind before it isn't possible; instead
+		// create then bind then render.
+		w.newTabForConnection(idx)
+		return
+	}
+
+	w.render()
+}
+
+// newTabForConnection creates a tab, binds it to the connection at idx, and
+// renders. Used when selecting a connection that has no open tabs.
+func (w *AppWindow) newTabForConnection(idx int) {
+	w.addNewTab() // appends bound to activeConnIdx (== idx) and renders
+	if ts := w.activeTabState(); ts != nil {
+		w.bindTabToConnection(ts, idx)
+		w.render()
 	}
 }
 
+type sidebarView int
+
+const (
+	viewSchema sidebarView = iota
+	viewHistory
+	viewExtensions
+)
+
+// setSidebarView shows exactly one of the sidebar panels and highlights its tab.
+func (w *AppWindow) setSidebarView(ts *tabState, v sidebarView) {
+	ts.schema.AsCanvasItem().SetVisible(v == viewSchema)
+	ts.historyPanel.AsCanvasItem().SetVisible(v == viewHistory)
+	ts.extPanel.AsCanvasItem().SetVisible(v == viewExtensions)
+	applySidebarTabTheme(ts.schemaBtn.AsControl(), v == viewSchema)
+	applySidebarTabTheme(ts.historyBtn.AsControl(), v == viewHistory)
+	applySidebarTabTheme(ts.extBtn.AsControl(), v == viewExtensions)
+
+	switch v {
+	case viewHistory:
+		if w.history != nil {
+			ts.historyPanel.SetHistory(w.history.All())
+		}
+	case viewExtensions:
+		w.loadExtensions(ts)
+	}
+}
+
+func (w *AppWindow) showSchemaSidebar(ts *tabState)     { w.setSidebarView(ts, viewSchema) }
+func (w *AppWindow) showHistorySidebar(ts *tabState)    { w.setSidebarView(ts, viewHistory) }
+func (w *AppWindow) showExtensionsSidebar(ts *tabState) { w.setSidebarView(ts, viewExtensions) }
+
+// loadExtensions queries the DuckDB extension list and populates the panel.
+func (w *AppWindow) loadExtensions(ts *tabState) {
+	if w.duck == nil {
+		return
+	}
+	exts, err := w.duck.Extensions()
+	if err != nil {
+		w.statusBar.SetStatus("Extensions error: " + err.Error())
+		return
+	}
+	ts.extPanel.SetExtensions(exts)
+}
+
+// extActionResult carries the outcome of a background install/load back to the
+// main thread.
+type extActionResult struct {
+	name string
+	err  error
+}
+
+// handleExtAction installs (and loads) or loads an extension in the background,
+// then refreshes the panel. INSTALL may hit the network, so it must not run on
+// the main thread.
+func (w *AppWindow) handleExtAction(ts *tabState, name string, install bool) {
+	if w.duck == nil {
+		return
+	}
+	verb := "Loading"
+	if install {
+		verb = "Installing"
+	}
+	w.statusBar.SetStatus(verb + " " + name + "…")
+	go func() {
+		var err error
+		if install {
+			err = w.duck.InstallExtension(name)
+		}
+		if err == nil {
+			err = w.duck.LoadExtension(name)
+		}
+		w.extActionTab = ts
+		w.extActionMsg = &extActionResult{name: name, err: err}
+	}()
+}
+
 // wireConnButton sets up left-click (select) and right-click (context menu) on a rail button.
+// connHealthColor returns the footer status-dot color for a connection: green
+// when connected (all local connections, or a gateway with a live tunnel),
+// amber while a gateway tunnel is reconnecting, red on tunnel error.
+func connHealthColor(conn *Connection) Color.RGBA {
+	if conn == nil {
+		return colorStatusGray
+	}
+	if conn.Gateway == nil || conn.Gateway.Tunnel == nil {
+		return colorStatusGreen
+	}
+	switch conn.Gateway.Tunnel.Status() {
+	case bfaws.TunnelError:
+		return colorStatusRed
+	case bfaws.TunnelConnecting:
+		return colorStatusYellow
+	default:
+		return colorStatusGreen
+	}
+}
+
 func (w *AppWindow) wireConnButton(btn Button.Instance, idx int) {
+	if idx >= 0 && idx < len(w.connections) {
+		btn.AsControl().SetTooltipText(w.connections[idx].Name)
+	}
 	btn.AsBaseButton().OnPressed(func() {
 		w.selectConnection(idx)
 	})
@@ -940,6 +1464,53 @@ func (w *AppWindow) showConnContextMenu(idx int) {
 	popup.AsWindow().Popup()
 }
 
+// showNewConnectionMenu opens the "+" rail menu offering the two ways to create
+// a connection. This is the cross-platform (Windows/Linux) entry point for
+// actions that previously lived only in the macOS native menu bar.
+func (w *AppWindow) showNewConnectionMenu(anchor Button.Instance) {
+	popup := PopupMenu.New()
+	popup.AddItem("Open File…")
+	popup.AddItem("Connect to Gateway…")
+
+	popup.OnIdPressed(func(id int) {
+		switch id {
+		case 0:
+			w.showOpenFileDialog()
+		case 1:
+			if w.onNewConnection != nil {
+				w.onNewConnection()
+			}
+		}
+		popup.AsNode().QueueFree()
+	})
+	popup.AsWindow().OnCloseRequested(func() {
+		popup.AsNode().QueueFree()
+	})
+
+	w.connRail.AsNode().AddChild(popup.AsNode())
+	popup.AsWindow().SetPosition(DisplayServer.MouseGetPosition())
+	popup.AsWindow().Popup()
+}
+
+// showOpenFileDialog presents the native file picker for the file types
+// Bufflehead can open and loads the selection into the active tab.
+func (w *AppWindow) showOpenFileDialog() {
+	DisplayServer.FileDialogShow(
+		"Open Data File",
+		"",
+		"",
+		false,
+		DisplayServer.FileDialogModeOpenFile,
+		[]string{"*.parquet,*.duckdb,*.db,*.ddb,*.csv,*.json,*.tsv ; Data Files"},
+		func(status bool, selectedPaths []string, selectedFilterIndex int) {
+			if status && len(selectedPaths) > 0 {
+				w.onFileSelected(selectedPaths[0])
+			}
+		},
+		0,
+	)
+}
+
 // refreshConnection refreshes a connection. For remote gateway connections it
 // performs a full teardown/reconnect (cancel queries, rebuild tunnel + DB) so a
 // broken tunnel or expired credentials are recovered, and it reports each step
@@ -976,59 +1547,62 @@ func (w *AppWindow) closeConnection(idx int) {
 	}
 	conn := w.connections[idx]
 
-	// Close tabs bound to this connection (iterate backwards to avoid index shifts)
-	for i := len(w.tabs) - 1; i >= 0; i-- {
-		if w.tabs[i].connIdx == idx {
-			w.closeTab(i)
+	// Mutate state: drop the connection's tabs (free their nodes) in place.
+	kept := w.tabs[:0]
+	for _, ts := range w.tabs {
+		if ts.connIdx == idx {
+			w.sidebarCol.AsNode().RemoveChild(ts.sidebarWrap.AsNode())
+			w.contentCol.AsNode().RemoveChild(ts.outerWrap.AsNode())
+			ts.sidebarWrap.AsNode().QueueFree()
+			ts.outerWrap.AsNode().QueueFree()
+			continue
 		}
+		kept = append(kept, ts)
 	}
+	w.tabs = kept
 
-	// Stop worker
+	// Tear down connection resources.
 	if conn.worker != nil {
 		conn.worker.Stop()
 	}
-
-	// Stop tunnel
 	if conn.Gateway != nil && conn.Gateway.Tunnel != nil {
 		conn.Gateway.Tunnel.Stop()
 	}
-
-	// Close DB connection
 	if conn.DB != nil {
 		conn.DB.Close()
 	}
-
-	// Remove button from rail
 	w.connRail.AsNode().RemoveChild(conn.button.AsNode())
 	conn.button.AsNode().QueueFree()
 
-	// Remove from connections slice
+	// Remove from connections slice and shift connIdx on remaining tabs.
 	w.connections = append(w.connections[:idx], w.connections[idx+1:]...)
-
-	// Fix connIdx on remaining tabs (any pointing above idx need to shift down)
 	for _, ts := range w.tabs {
 		if ts.connIdx > idx {
 			ts.connIdx--
 		}
 	}
 
-	// Ensure at least one tab exists so the app stays usable
-	if len(w.tabs) == 0 {
-		w.addNewTab()
-	}
-
-	// Fix activeConnIdx
+	// Fix the active connection selection (state).
 	if w.activeConnIdx == idx {
 		w.activeConnIdx = 0
-		w.selectConnection(0)
 	} else if w.activeConnIdx > idx {
 		w.activeConnIdx--
 	}
 
-	// Reset title bar to memory connection
-	w.titleBar.SetFileInfo("")
-	w.titleBar.SetAIPrompt("")
+	// Ensure the (now active) connection has a tab so the app stays usable.
+	hasTab := false
+	for _, ts := range w.tabs {
+		if ts.connIdx == w.activeConnIdx {
+			hasTab = true
+			break
+		}
+	}
+	if !hasTab {
+		w.newTabForConnection(w.activeConnIdx)
+		return
+	}
 
+	w.render()
 }
 
 // findTab returns the tabState with the given tabID, or nil if not found.
@@ -1062,12 +1636,24 @@ func (w *AppWindow) handleDBResult(res DBResult) {
 // handleOpenGatewayResult processes the result of an async gateway (Postgres) open.
 func (w *AppWindow) handleOpenGatewayResult(res DBResult) {
 	if res.Err != nil {
+		// Mark the in-progress step's dot red to indicate where the connection
+		// failed, and drop the "Connecting to database…" status line since it's
+		// no longer connecting.
+		if w.gatewayTracker != nil {
+			w.gatewayTracker.markFailed()
+		}
+		if w.gatewayLoadingLabel != (Label.Instance{}) {
+			w.gatewayLoadingLabel.AsCanvasItem().SetVisible(false)
+		}
+		w.pendingGateway = nil
+		w.gatewayTracker = nil
 		w.showConnError(w.currentTab(), res.Err, "Gateway error: ")
 		return
 	}
 
 	gw := w.pendingGateway
 	w.pendingGateway = nil
+	w.gatewayTracker = nil
 	if gw == nil {
 		return
 	}
@@ -1091,46 +1677,22 @@ func (w *AppWindow) handleOpenGatewayResult(res DBResult) {
 
 	// Add button to rail
 	btn := Button.New()
-	btn.SetText(name)
-	btn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(10))
-	btn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(36), scaled(36)))
+	btn.SetText(models.ConnBadge(name))
+	btn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(40), scaled(40)))
 	btn.SetClipText(true)
-	applySecondaryButtonTheme(btn.AsControl())
+	applyConnTileTheme(btn.AsControl(), false)
 	conn.button = btn
 
 	gwIdx := len(w.connections)
 	w.connections = append(w.connections, conn)
-	w.connRail.AsNode().AddChild(btn.AsNode())
+	w.connList.AsNode().AddChild(btn.AsNode())
 	w.connRailWrap.AsCanvasItem().SetVisible(true)
 
 	w.wireConnButton(btn, gwIdx)
 
-	// Create a new tab bound to this connection
-	w.addNewTab()
-	ts := w.currentTab()
-	if ts != nil {
-		ts.State.IsDatabase = true
-		ts.connIdx = gwIdx
-		ts.schema.SetTables(conn.Tables)
-		ts.sqlPanel.SetCompletionTables(conn.Tables)
-		ts.schema.OnTableClicked = func(tableName string) {
-			ts.State.ActiveTable = tableName
-			ts.State.UserSQL = fmt.Sprintf("SELECT * FROM %s", tableName)
-			ts.State.PageOffset = 0
-			ts.State.SortColumn = ""
-			ts.State.SortDir = models.SortNone
-			ts.sqlPanel.SetSQL(ts.State.UserSQL)
-			w.runCurrentQuery(nil)
-		}
-
-		// Update title bar for Postgres
-		w.titleBar.SetConnectionInfo("PostgreSQL", name, gw.Config.DBName)
-
-		// Build AI prompt with schema for the copy button
-		w.titleBar.SetAIPrompt(buildAIPrompt(gw.Config, tables, w.controlAddr))
-	}
-
-	w.selectConnection(gwIdx)
+	// Make this the active connection, then create+bind its first tab.
+	w.activeConnIdx = gwIdx
+	w.newTabForConnection(gwIdx)
 	w.statusBar.SetStatus(fmt.Sprintf("Connected: %s (%d tables/views)", name, len(tables)))
 }
 
@@ -1272,6 +1834,20 @@ func (w *AppWindow) handleQueryResult(res DBResult) {
 	ts.dataGrid.AsCanvasItem().SetModulate(Color.RGBA{R: 1, G: 1, B: 1, A: 1})
 
 	if res.Err != nil {
+		if !res.Navigating && w.history != nil {
+			// Store the user's query, not the internal VirtualSQL wrapper, so
+			// replaying it reproduces exactly what the user ran (and doesn't get
+			// re-wrapped/double-projected on replay).
+			if sql := res.UserSQL; sql != "" {
+				w.history.Add(models.HistoryEntry{
+					SQL:        sql,
+					FilePath:   ts.State.FilePath,
+					Timestamp:  time.Now(),
+					DurationMs: res.Elapsed.Milliseconds(),
+					Error:      res.Err.Error(),
+				})
+			}
+		}
 		w.showConnError(ts, res.Err, "Error: ")
 		ts.navigating = false
 		if res.ControlCmd != nil {
@@ -1285,8 +1861,9 @@ func (w *AppWindow) handleQueryResult(res DBResult) {
 
 	if !res.Navigating {
 		if w.history != nil {
+			// Store the user's query, not the internal VirtualSQL wrapper.
 			w.history.Add(models.HistoryEntry{
-				SQL:        res.VirtualSQL,
+				SQL:        res.UserSQL,
 				FilePath:   ts.State.FilePath,
 				Timestamp:  time.Now(),
 				RowCount:   result.Total,
@@ -1380,7 +1957,11 @@ func (w *AppWindow) navBackWithCmd(cmd *control.Command) {
 	ts.State.SortColumn = entry.SortColumn
 	ts.State.SortDir = entry.SortDir
 	ts.State.PageOffset = entry.PageOffset
+	ts.State.SelectedCols = entry.SelectedCols
 	ts.sqlPanel.SetSQL(entry.SQL)
+	if ts.schema != nil {
+		ts.schema.SetCheckedColumns(entry.SelectedCols)
+	}
 	w.runCurrentQuery(cmd)
 	w.updateNavButtons()
 }
@@ -1409,7 +1990,11 @@ func (w *AppWindow) navForwardWithCmd(cmd *control.Command) {
 	ts.State.SortColumn = entry.SortColumn
 	ts.State.SortDir = entry.SortDir
 	ts.State.PageOffset = entry.PageOffset
+	ts.State.SelectedCols = entry.SelectedCols
 	ts.sqlPanel.SetSQL(entry.SQL)
+	if ts.schema != nil {
+		ts.schema.SetCheckedColumns(entry.SelectedCols)
+	}
 	w.runCurrentQuery(cmd)
 	w.updateNavButtons()
 }

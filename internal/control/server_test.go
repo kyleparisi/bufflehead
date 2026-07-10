@@ -305,3 +305,54 @@ func TestS3GetObject_RegionPassthrough(t *testing.T) {
 		t.Errorf("expected connection prod, got %q", capturedReq.Connection)
 	}
 }
+
+// TestOpenGatewayEndpoint_DispatchesCommand verifies the /open-gateway route
+// enqueues an "open_gateway" command. This is the code path the connection
+// rail's "+" → "Connect to Gateway…" button triggers, replacing the macOS-only
+// native menu item so it works on Windows/Linux.
+func TestOpenGatewayEndpoint_DispatchesCommand(t *testing.T) {
+	s := New(0)
+	handler := buildMux(s)
+
+	getLast := drainCommands(s, Result{OK: true})
+
+	req := httptest.NewRequest("POST", "/open-gateway", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	cmd := getLast()
+	if cmd == nil {
+		t.Fatal("expected a command to be dispatched")
+	}
+	if cmd.Action != "open_gateway" {
+		t.Errorf("expected action 'open_gateway', got %q", cmd.Action)
+	}
+}
+
+// TestNewWindowEndpoint_DispatchesCommand verifies the /new-window route
+// enqueues a "new_window" command — the action behind the tab row's "New
+// Window" button.
+func TestNewWindowEndpoint_DispatchesCommand(t *testing.T) {
+	s := New(0)
+	handler := buildMux(s)
+
+	getLast := drainCommands(s, Result{OK: true})
+
+	req := httptest.NewRequest("POST", "/new-window", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	cmd := getLast()
+	if cmd == nil {
+		t.Fatal("expected a command to be dispatched")
+	}
+	if cmd.Action != "new_window" {
+		t.Errorf("expected action 'new_window', got %q", cmd.Action)
+	}
+}

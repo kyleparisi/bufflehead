@@ -44,10 +44,11 @@ type AppState struct {
 
 // NavEntry stores a snapshot for back/forward navigation.
 type NavEntry struct {
-	SQL        string
-	SortColumn string
-	SortDir    SortDirection
-	PageOffset int
+	SQL          string
+	SortColumn   string
+	SortDir      SortDirection
+	PageOffset   int
+	SelectedCols []string
 }
 
 // NewAppState returns defaults.
@@ -65,10 +66,11 @@ func (s *AppState) NavPush(sql string) {
 		return
 	}
 	entry := NavEntry{
-		SQL:        sql,
-		SortColumn: s.SortColumn,
-		SortDir:    s.SortDir,
-		PageOffset: s.PageOffset,
+		SQL:          sql,
+		SortColumn:   s.SortColumn,
+		SortDir:      s.SortDir,
+		PageOffset:   s.PageOffset,
+		SelectedCols: append([]string(nil), s.SelectedCols...),
 	}
 	// Truncate forward history
 	if s.navPos < len(s.navStack)-1 {
@@ -156,7 +158,9 @@ func ResolveDetailValue(col int, singleRow []string, multiRows [][]string) strin
 // VirtualSQL wraps the user's query with sorting and pagination.
 func (s *AppState) VirtualSQL() string {
 	cols := "*"
-	if len(s.SelectedCols) > 0 && len(s.SelectedCols) < len(s.Schema) {
+	// Project selected columns when a non-empty selection is a strict subset of
+	// the schema. When Schema is unknown (0), still honor a non-empty selection.
+	if len(s.SelectedCols) > 0 && (len(s.Schema) == 0 || len(s.SelectedCols) < len(s.Schema)) {
 		quoted := make([]string, len(s.SelectedCols))
 		for i, c := range s.SelectedCols {
 			quoted[i] = "\"" + c + "\""

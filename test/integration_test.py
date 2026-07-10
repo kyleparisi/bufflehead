@@ -102,6 +102,17 @@ def find_node(tscn_text, cls, ancestor=None):
     return None
 
 
+def has_node_named(tscn_text, name):
+    """True if any node in the scene tree has the given node name."""
+    return any(n["path"].split("/")[-1] == name for n in parse_tscn(tscn_text))
+
+
+def count_nodes_named(tscn_text, name):
+    """Count nodes whose leaf name equals `name` (siblings get unique names,
+    so each type chip keeps its own parent and stays 'TypeChip')."""
+    return sum(1 for n in parse_tscn(tscn_text) if n["path"].split("/")[-1] == name)
+
+
 def ui_tree(width=None, height=None, scale=None):
     params = {}
     if width:
@@ -330,6 +341,153 @@ class TestDuckDB:
         assert "amount" in s["columns"]
 
 
+class TestTabTitleFromQuery:
+    """Tabs on a DB connection are titled by the table in the query's FROM
+    clause (parsed via the DuckDB AST), so they're easy to tell apart."""
+
+    def setup_method(self):
+        close_all_connections()
+        close_all_tabs()
+        post("new-tab")
+        time.sleep(0.3)
+
+    def test_tab_title_reflects_from_table(self):
+        open_file(DUCKDB)
+        time.sleep(0.2)
+
+        # A plain table query titles the tab after the table.
+        post("query", {"sql": "SELECT * FROM users"})
+        wait()
+        assert state()["activeTabTitle"] == "users"
+
+        # Switching the query updates the title.
+        post("query", {"sql": "SELECT * FROM orders WHERE id > 0"})
+        wait()
+        assert state()["activeTabTitle"] == "orders"
+
+        # A join titles after the first (left-most) table.
+        post("query", {"sql": "SELECT * FROM users u JOIN orders o ON u.id = o.user_id"})
+        wait()
+        assert state()["activeTabTitle"] == "users"
+
+    def test_tab_title_falls_back_without_base_table(self):
+        open_file(DUCKDB)
+        time.sleep(0.2)
+        conn_name = state()["activeTabTitle"]  # default DB query titles by table
+
+        # A query with no plain base table (constant select) falls back to the
+        # connection name rather than showing a confusing title.
+        post("query", {"sql": "SELECT 1 AS n"})
+        wait()
+        title = state()["activeTabTitle"]
+        # test.duckdb connection is named after the file (without extension logic
+        # aside, it's the file's base name). Just assert it's NOT a bogus title.
+        assert title not in ("1", "n", ""), f"unexpected fallback title: {title!r}"
+
+
+class TestColumnSelection:
+    """The schema sidebar for file-based tabs shows a checkbox per column; the
+    checked set drives which columns the query projects (via SelectedCols →
+    VirtualSQL). /select-columns mirrors clicking those checkboxes."""
+
+    def setup_method(self):
+        close_all_connections()
+        close_all_tabs()
+        post("new-tab")
+        time.sleep(0.3)
+
+    def test_selecting_subset_projects_only_those_columns(self):
+        open_file(SAMPLE)
+        s = state()
+        all_cols = s["columns"]
+        assert len(all_cols) > 2, "sample should have several columns"
+
+        # Select a subset → only those columns show, in the given order.
+        post("select-columns", {"columns": ["name", "role"]})
+        wait()
+        assert state()["columns"] == ["name", "role"]
+
+        # A different subset updates the projection.
+        post("select-columns", {"columns": ["id", "score"]})
+        wait()
+        assert state()["columns"] == ["id", "score"]
+
+        # Empty selection restores all columns.
+        post("select-columns", {"columns": []})
+        wait()
+        assert state()["columns"] == all_cols
+
+    def test_column_selection_applies_over_custom_query(self):
+        open_file(SAMPLE)
+        s = state()
+        assert "id" in s["columns"] and "score" in s["columns"]
+
+        # Run a custom query, then restrict columns — projection must still apply
+        # (wrapping the user's SQL), not silently show everything.
+        post("query", {"sql": f"SELECT * FROM '{SAMPLE}' WHERE score > 0"})
+        wait()
+        post("select-columns", {"columns": ["id", "score"]})
+        wait()
+        assert state()["columns"] == ["id", "score"]
+
+
+class TestHistoryReplay:
+    """History stores the user's query (not the internal VirtualSQL wrapper), and
+    replaying it clears any stale column selection so it doesn't double-wrap and
+    error with a Binder Error."""
+
+    def setup_method(self):
+        close_all_connections()
+        close_all_tabs()
+        post("new-tab")
+        time.sleep(0.3)
+
+    def test_replay_after_column_selection_does_not_double_wrap(self):
+        open_file(SAMPLE)
+        s = state()
+        all_cols = s["columns"]
+
+        # Create two history entries via distinct column selections, so the
+        # current tab has a stale SelectedCols=["id"] afterwards.
+        post("select-columns", {"columns": ["name"]})
+        wait()
+        post("select-columns", {"columns": ["id"]})
+        wait()
+        assert state()["columns"] == ["id"]
+
+        # Replaying the most-recent history entry must run cleanly (no error) and
+        # NOT be re-projected by the stale selection. It should reproduce the
+        # user's raw query.
+        result = post("replay-history", {"index": 0})
+        assert result["ok"] is True
+        wait()
+        s = state()
+        assert not s["userSQL"].strip().lower().startswith("select \"") and "_q" not in s["userSQL"], (
+            f"replayed SQL should be the user's query, not the wrapper: {s['userSQL']!r}"
+        )
+        # No Binder Error → a real result with columns is shown.
+        assert s["rowCount"] >= 0
+        assert s["columns"], "replay should produce a result, not an error"
+
+    def test_history_stores_user_sql_not_wrapper(self):
+        open_file(SAMPLE)
+        wait()
+        # Select a subset to produce a projected (wrapped) query internally.
+        post("select-columns", {"columns": ["id", "name"]})
+        wait()
+        assert state()["columns"] == ["id", "name"]
+
+        # Replaying that entry reproduces the user's query and (because replay
+        # clears the selection) shows all columns without error.
+        result = post("replay-history", {"index": 0})
+        assert result["ok"] is True
+        wait()
+        s = state()
+        assert "_q" not in s["userSQL"], (
+            f"history must store the user's SQL, not VirtualSQL: {s['userSQL']!r}"
+        )
+
+
 class TestNavigation:
     def test_back_forward(self):
         close_all_tabs()
@@ -534,6 +692,283 @@ class TestCloseConnection:
         assert result.get("ok") is not True
 
 
+class TestSchemaPersistsAcrossTabs:
+    """Schema is scoped to the connection, not the tab. Closing the last tab
+    bound to a still-open connection must not lose the schema — re-selecting the
+    connection tile re-opens a tab and re-renders the schema from the retained
+    connection tables."""
+
+    def setup_method(self):
+        close_all_connections()
+        close_all_tabs()
+        post("new-tab")
+        time.sleep(0.3)
+
+    def test_reselecting_connection_restores_schema_after_tab_close(self):
+        # Open test.duckdb → creates connection index 1 with a bound tab whose
+        # schema panel shows its tables/views.
+        result = open_file(DUCKDB)
+        assert result["ok"] is True
+        s = state()
+        assert s["connectionCount"] == 2
+        assert s["connIdx"] == 1, "opened tab should be bound to the new connection"
+        table_count = s["schemaTableCount"]
+        assert table_count > 0, "schema panel should list the duckdb tables/views"
+
+        # Close the active tab (the only one bound to connection 1).
+        post("close-tab")
+        time.sleep(0.3)
+
+        # Connection must still be open (tile remains).
+        s = state()
+        assert s["connectionCount"] == 2, "closing a tab must not close the connection"
+
+        # Re-select the connection tile → should open a fresh tab and restore
+        # the schema from the connection's retained tables.
+        result = post("select-connection", {"index": 1})
+        assert result["ok"] is True
+        time.sleep(0.3)
+
+        s = state()
+        assert s["connIdx"] == 1, "re-selecting the connection should bind a tab to it"
+        assert s["schemaTableCount"] == table_count, (
+            "schema should be restored from the still-open connection, not lost"
+        )
+
+    def test_closing_connection_removes_schema_and_tile(self):
+        # Opening + then closing the connection should drop it entirely.
+        open_file(DUCKDB)
+        s = state()
+        assert s["connectionCount"] == 2
+
+        result = post("close-connection", {"index": 1})
+        assert result["ok"] is True
+        time.sleep(0.3)
+
+        s = state()
+        assert s["connectionCount"] == 1, "closing the connection removes its tile"
+        # Falls back to the in-memory connection (index 0), which has no tables.
+        assert s.get("schemaTableCount", 0) == 0
+
+
+class TestConnectionScopedTabs:
+    """Tabs are scoped to connections. The visible tab bar shows ONLY the active
+    connection's tabs; selecting a tab must not jump to another connection; and
+    each connection remembers its own active tab."""
+
+    def setup_method(self):
+        close_all_connections()
+        close_all_tabs()
+        post("new-tab")
+        time.sleep(0.3)
+
+    def test_tab_bar_shows_only_active_connection_tabs(self):
+        # Start on Memory (conn 0). Add a couple of Memory tabs.
+        s = state()
+        assert s["activeConnIdx"] == 0
+        post("new-tab")
+        post("new-tab")
+        time.sleep(0.3)
+        s = state()
+        mem_visible = s["visibleTabCount"]
+        assert mem_visible >= 3, "Memory should show its own tabs"
+
+        # Open a duckdb connection (conn 1) → its own tab bar.
+        open_file(DUCKDB)
+        s = state()
+        assert s["activeConnIdx"] == 1
+        assert s["connIdx"] == 1
+        # The visible tab bar now reflects connection 1, not the Memory tabs.
+        assert s["visibleTabCount"] < s["tabCount"], (
+            "visible tab bar should be a subset of all tabs (scoped to conn 1)"
+        )
+        conn1_visible = s["visibleTabCount"]
+
+        # Switch back to Memory: its tab set (and count) returns.
+        post("select-connection", {"index": 0})
+        time.sleep(0.3)
+        s = state()
+        assert s["activeConnIdx"] == 0
+        assert s["connIdx"] == 0, "selecting Memory activates a Memory tab"
+        assert s["visibleTabCount"] == mem_visible, (
+            "switching back to Memory restores its own tab bar"
+        )
+
+        # And back to conn 1.
+        post("select-connection", {"index": 1})
+        time.sleep(0.3)
+        s = state()
+        assert s["activeConnIdx"] == 1
+        assert s["connIdx"] == 1
+        assert s["visibleTabCount"] == conn1_visible
+
+    def test_selecting_tab_does_not_change_connection(self):
+        # Two Memory tabs; open a duckdb connection; return to Memory.
+        post("new-tab")
+        time.sleep(0.2)
+        open_file(DUCKDB)
+        time.sleep(0.2)
+        post("select-connection", {"index": 0})
+        time.sleep(0.2)
+
+        s = state()
+        assert s["activeConnIdx"] == 0
+        before_conn = s["activeConnIdx"]
+
+        # Selecting a visible tab (index 0 in the Memory-scoped bar) must keep us
+        # on the same connection — no jump to conn 1.
+        post("select-tab", {"index": 0})
+        time.sleep(0.2)
+        s = state()
+        assert s["activeConnIdx"] == before_conn, (
+            "clicking a tab must not switch the active connection"
+        )
+        assert s["connIdx"] == 0
+
+    def test_connection_remembers_its_active_tab(self):
+        # Memory: create a second tab and make it active.
+        post("new-tab")
+        time.sleep(0.2)
+        s = state()
+        mem_active_tab = s["activeTabID"]
+
+        # Open duckdb connection (switches away from Memory).
+        open_file(DUCKDB)
+        time.sleep(0.2)
+        s = state()
+        assert s["activeConnIdx"] == 1
+        conn1_active_tab = s["activeTabID"]
+
+        # Back to Memory → the previously-active Memory tab is restored.
+        post("select-connection", {"index": 0})
+        time.sleep(0.2)
+        s = state()
+        assert s["activeConnIdx"] == 0
+        assert s["activeTabID"] == mem_active_tab, (
+            "connection should restore its own last-active tab"
+        )
+
+        # Back to conn 1 → its active tab is restored.
+        post("select-connection", {"index": 1})
+        time.sleep(0.2)
+        s = state()
+        assert s["activeConnIdx"] == 1
+        assert s["activeTabID"] == conn1_active_tab
+
+    def test_schema_stays_loaded_across_tabs_of_a_connection(self):
+        # Open a duckdb connection → tab 1 shows its schema.
+        open_file(DUCKDB)
+        time.sleep(0.2)
+        s = state()
+        assert s["activeConnIdx"] == 1
+        table_count = s["schemaTableCount"]
+        assert table_count > 0, "first tab of the connection should show schema"
+
+        # Add a second tab under the SAME connection via the "+" button.
+        post("new-tab")
+        time.sleep(0.2)
+        s = state()
+        assert s["connIdx"] == 1, "new tab should belong to the active connection"
+        assert s["schemaTableCount"] == table_count, (
+            "a new tab under a DB connection must also show the schema"
+        )
+        assert s["visibleTabCount"] >= 2
+
+        # Click through the connection's tabs — schema must NOT unload.
+        for barIdx in range(s["visibleTabCount"]):
+            post("select-tab", {"index": barIdx})
+            time.sleep(0.15)
+            cur = state()
+            assert cur["activeConnIdx"] == 1, "clicking tabs must not change connection"
+            assert cur["schemaTableCount"] == table_count, (
+                f"schema unloaded when selecting tab {barIdx}"
+            )
+
+    def test_close_tab_closes_the_active_tab_not_the_first(self):
+        """Cmd+W (/close-tab) must close the currently-selected tab, not tab 0."""
+        # Three Memory tabs. setup_method already created one, so add two more.
+        post("new-tab")
+        post("new-tab")
+        time.sleep(0.3)
+        s = state()
+        assert s["visibleTabCount"] >= 3
+        total_before = s["tabCount"]
+
+        # Select the FIRST visible tab, remember its id, then re-select a middle
+        # tab and make IT active.
+        post("select-tab", {"index": 0})
+        time.sleep(0.15)
+        first_id = state()["activeTabID"]
+
+        post("select-tab", {"index": 1})
+        time.sleep(0.15)
+        active_id = state()["activeTabID"]
+        assert active_id != first_id
+
+        # Close the active tab (mirrors Cmd+W). The first tab must survive; the
+        # active tab must be gone.
+        post("close-tab")
+        time.sleep(0.2)
+        s = state()
+        assert s["tabCount"] == total_before - 1, "exactly one tab should close"
+        assert s["activeTabID"] != active_id, "the closed tab must no longer be active"
+
+        # The first tab must still exist: selecting it should succeed and make it
+        # active.
+        post("select-tab", {"index": 0})
+        time.sleep(0.15)
+        # first_id is still present among tabs (it wasn't the one closed).
+        remaining_first = state()["activeTabID"]
+        assert remaining_first == first_id, (
+            "close-tab wrongly removed the first tab instead of the active one"
+        )
+
+    def test_closing_active_tab_keeps_order_and_activates_neighbor(self):
+        """Closing the active tab must NOT reorder tabs or jump the selection to
+        position 0 — it should activate the adjacent tab in place."""
+        post("new-tab")
+        post("new-tab")
+        time.sleep(0.3)
+        s = state()
+        ids = s["visibleTabIDs"]
+        assert len(ids) >= 3, "need at least 3 visible tabs"
+
+        # Activate the LAST (rightmost) tab, like the screenshot.
+        last_idx = len(ids) - 1
+        post("select-tab", {"index": last_idx})
+        time.sleep(0.15)
+        s = state()
+        assert s["activeTabID"] == ids[last_idx]
+        assert s["activeBarIndex"] == last_idx
+
+        # Close it. The remaining tabs keep their order (ids minus the last one),
+        # and the new active tab is the neighbor to the left — still the last
+        # position — NOT tab 0.
+        post("close-tab")
+        time.sleep(0.2)
+        s = state()
+        assert s["visibleTabIDs"] == ids[:-1], "tab order must be preserved"
+        assert s["activeTabID"] == ids[last_idx - 1], (
+            "closing the last tab should activate its left neighbor, not tab 0"
+        )
+        assert s["activeBarIndex"] == last_idx - 1, (
+            "active selection must stay in place (rightmost), not jump to 0"
+        )
+
+        # Now close a MIDDLE tab and confirm the right neighbor slides in.
+        ids2 = s["visibleTabIDs"]  # e.g. [a, b]
+        post("select-tab", {"index": 0})
+        time.sleep(0.15)
+        assert state()["activeTabID"] == ids2[0]
+        post("close-tab")
+        time.sleep(0.2)
+        s = state()
+        assert s["visibleTabIDs"] == ids2[1:], "order preserved after closing tab 0"
+        assert s["activeTabID"] == ids2[1], (
+            "closing tab 0 should activate the right neighbor"
+        )
+
+
 class TestReconnect:
     """Test the /reconnect endpoint's graceful error paths.
 
@@ -579,3 +1014,219 @@ class TestReconnect:
         # Clean up so the opened connection doesn't leak into later tests.
         post("close-connection", {"index": 1})
         time.sleep(0.2)
+
+
+class TestConnectionControls:
+    """The connection rail and tab row expose visible, cross-platform controls
+    for actions that previously lived only in the macOS native menu bar
+    (which does not render on Windows/Linux)."""
+
+    def test_new_connection_button_visible(self):
+        close_all_tabs()
+        open_file(SAMPLE)
+        tree = ui_tree()
+        assert has_node_named(tree, "NewConnectionButton"), (
+            "connection rail should have a visible '+' New Connection button"
+        )
+
+    def test_new_tab_button_visible(self):
+        tree = ui_tree()
+        assert has_node_named(tree, "NewTabButton"), (
+            "tab row should have a visible '+' New Tab button"
+        )
+
+    def test_new_window_button_visible(self):
+        tree = ui_tree()
+        assert has_node_named(tree, "NewWindowButton"), (
+            "tab row should have a visible New Window button"
+        )
+
+    def test_open_gateway_shows_gateway_screen(self):
+        """The 'Connect to Gateway…' action opens the gateway screen — the same
+        code path the connection rail '+' menu triggers."""
+        close_all_connections()
+        close_all_tabs()
+        post("new-tab")
+        time.sleep(0.3)
+
+        result = post("open-gateway")
+        assert result["ok"] is True
+        time.sleep(0.3)
+
+        tree = ui_tree()
+        assert find_node(tree, "GatewayScreen") is not None, (
+            "gateway screen should be shown after open-gateway"
+        )
+        assert has_node_named(tree, "GatewayCloseButton"), (
+            "gateway screen must have a visible Close button to exit"
+        )
+
+        # Closing the screen restores the normal view (bug fix: it used to have
+        # no exit). Data view returns because a tab is open.
+        result = post("close-gateway")
+        assert result["ok"] is True
+        time.sleep(0.3)
+        tree = ui_tree()
+        assert find_node(tree, "GatewayScreen") is None, (
+            "gateway screen should be gone after close"
+        )
+        assert find_node(tree, "SchemaPanel") is not None, (
+            "the normal data view should be restored after closing the gateway screen"
+        )
+
+        # Restore a normal data view for subsequent tests.
+        open_file(SAMPLE)
+
+
+class TestNewWindow:
+    def test_new_window_increments_count(self):
+        close_all_tabs()
+        open_file(SAMPLE)
+        before = state()["windowCount"]
+
+        result = post("new-window")
+        assert result["ok"] is True
+        time.sleep(0.3)
+
+        assert state()["windowCount"] == before + 1
+
+
+class TestTypeChips:
+    """Color-coded data-type chips appear in the schema panel and, when a row is
+    selected, in the row inspector (blue INT, green FLOAT, amber TIMESTAMP, …)."""
+
+    def test_schema_panel_has_type_chips(self):
+        close_all_tabs()
+        open_file(SAMPLE)  # 8 columns
+        tree = ui_tree()
+        assert count_nodes_named(tree, "TypeChip") >= 8, (
+            "schema panel should show a type chip per column"
+        )
+
+    def test_row_inspector_has_type_chips(self):
+        open_file(SAMPLE)
+        before = count_nodes_named(ui_tree(), "TypeChip")
+
+        post("select-row", {"row": 0})
+        time.sleep(0.3)
+        after = count_nodes_named(ui_tree(), "TypeChip")
+
+        assert after > before, (
+            "row inspector should add a type chip per field when a row is selected"
+        )
+
+
+class TestConnectingTracker:
+    """The connecting screen shows a step tracker (Authenticate → Establish
+    tunnel → Connect database → Load schema). Previewed without a live gateway
+    via the /preview-connecting hook."""
+
+    def test_preview_shows_step_tracker(self):
+        close_all_tabs()
+        result = post("preview-connecting")
+        assert result["ok"] is True
+        time.sleep(0.3)
+
+        tree = ui_tree()
+        assert has_node_named(tree, "StepTracker"), (
+            "connecting screen should render a StepTracker"
+        )
+
+        # Restore a normal data view for any later tests.
+        open_file(SAMPLE)
+
+    def test_preview_failed_marks_dot_red_and_hides_status(self):
+        """When the connection fails, the active step's dot turns red (filled)
+        and the "Connecting to database…" status line is hidden."""
+        close_all_tabs()
+        result = post("preview-connecting", {"failed": True})
+        assert result["ok"] is True
+        time.sleep(0.3)
+
+        tree = ui_tree()
+        nodes = parse_tscn(tree)
+
+        # Locate the StepTracker subtree.
+        tracker = next(
+            (n for n in nodes if n["path"].split("/")[-1] == "StepTracker"), None
+        )
+        assert tracker is not None, "connecting screen should render a StepTracker"
+
+        # Collect the Label nodes under the tracker (dots + step labels). Each
+        # step is an HBox row of [dot Label, text Label]; the dot glyph is a
+        # multi-byte char that gets escaped in the .tscn dump, so we identify
+        # dots as the labels whose text is not one of the step names.
+        step_names = {
+            '"Authenticate (SSO)"', '"Establish tunnel"',
+            '"Connect to database"', '"Load schema"',
+        }
+        under_tracker = [
+            n for n in nodes
+            if n["type"] == "Label" and n["path"].startswith(tracker["path"] + "/")
+        ]
+        dots = [n for n in under_tracker if n["props"].get("text") not in step_names]
+        # Error red is #FFB4AB → Color(1, 0.7059, 0.6706, 1).
+        red = "Color(1, 0.7059, 0.6706, 1)"
+        red_dots = [n for n in dots if n["props"].get("font_color") == red]
+        assert len(red_dots) == 1, (
+            "failed connection should render exactly one red dot on the active step; "
+            f"got dots: {[(n['props'].get('text'), n['props'].get('font_color')) for n in dots]}"
+        )
+        # No dot should still be showing the yellow in-progress color.
+        yellow = "Color(0.9, 0.75, 0.2, 1)"
+        assert not any(
+            n["props"].get("font_color") == yellow for n in dots
+        ), "failed connection should have no yellow in-progress dot"
+
+        # The "Connecting to database…" status line should be hidden.
+        status_lines = [
+            n for n in nodes
+            if n["type"] == "Label"
+            and "Connecting to database" in n["props"].get("text", "")
+        ]
+        for n in status_lines:
+            assert n["props"].get("visible") == "false", (
+                "status line should be hidden when the connection fails"
+            )
+
+        # Restore a normal data view for any later tests.
+        open_file(SAMPLE)
+
+
+class TestHistoryPanel:
+    """The history panel renders rich cards: SQL + SUCCESS/ERROR status chip,
+    relative time, duration, and row count. Shown via the /show-history hook."""
+
+    def test_history_shows_rows_and_status_chips(self):
+        close_all_tabs()
+        open_file(SAMPLE)
+        # A success and a failure so both chip states are recorded.
+        post("query", {"sql": f"SELECT id FROM '{SAMPLE}' LIMIT 5"})
+        time.sleep(0.3)
+        post("query", {"sql": "SELEKT bad syntax"})
+        time.sleep(0.3)
+
+        result = post("show-history")
+        assert result["ok"] is True
+        time.sleep(0.3)
+
+        tree = ui_tree()
+        assert has_node_named(tree, "HistoryRow"), "history should render entry cards"
+        assert has_node_named(tree, "HistoryStatus"), "history cards should show a status chip"
+
+
+class TestExtensionsPanel:
+    """The Extensions tab lists DuckDB extensions with status chips and
+    Install/Load actions. Shown via the /show-extensions hook."""
+
+    def test_extensions_panel_lists_extensions(self):
+        close_all_tabs()
+        open_file(SAMPLE)
+
+        result = post("show-extensions")
+        assert result["ok"] is True
+        time.sleep(0.3)
+
+        tree = ui_tree()
+        assert has_node_named(tree, "ExtensionRow"), "extensions panel should list extension cards"
+        assert has_node_named(tree, "ExtensionStatus"), "extension cards should show a status chip"

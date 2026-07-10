@@ -41,6 +41,10 @@ func New() (*DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open duckdb: %w", err)
 	}
+	// Pin to a single connection so in-memory data and LOADed extensions are
+	// consistent across queries (a pool would give each query a separate
+	// DuckDB session). Access is already serialized by the conn worker.
+	conn.SetMaxOpenConns(1)
 	return &DB{conn: conn}, nil
 }
 
@@ -50,6 +54,7 @@ func OpenDB(path string) (*DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open duckdb db: %w", err)
 	}
+	conn.SetMaxOpenConns(1)
 	return &DB{conn: conn}, nil
 }
 

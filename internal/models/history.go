@@ -10,12 +10,16 @@ import (
 )
 
 type HistoryEntry struct {
-	SQL       string    `json:"sql"`
-	FilePath  string    `json:"filePath,omitempty"`
-	Timestamp time.Time `json:"timestamp"`
-	RowCount  int64     `json:"rowCount,omitempty"`
-	DurationMs int64   `json:"durationMs,omitempty"`
+	SQL        string    `json:"sql"`
+	FilePath   string    `json:"filePath,omitempty"`
+	Timestamp  time.Time `json:"timestamp"`
+	RowCount   int64     `json:"rowCount,omitempty"`
+	DurationMs int64     `json:"durationMs,omitempty"`
+	Error      string    `json:"error,omitempty"` // set when the query failed
 }
+
+// Failed reports whether this entry recorded a failed query.
+func (e HistoryEntry) Failed() bool { return e.Error != "" }
 
 type QueryHistory struct {
 	mu      sync.Mutex

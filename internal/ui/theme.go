@@ -2,6 +2,7 @@ package ui
 
 import (
 	"graphics.gd/classdb/Control"
+	"graphics.gd/classdb/Font"
 	"graphics.gd/classdb/Image"
 	"graphics.gd/classdb/ImageTexture"
 	"graphics.gd/classdb/StyleBoxEmpty"
@@ -24,34 +25,35 @@ func scaled(base float32) float32 {
 	return base
 }
 
-// Studio Sonoma dark theme palette — near-black surfaces with blue-tinted accents.
+// Pro-Grade Data System — Modern IDE dark theme with an indigo/lavender primary,
+// green + blue semantic accents, and low-contrast tonal layering (Stitch design tokens).
 var (
-	colorBg         = Color.RGBA{R: 0.055, G: 0.055, B: 0.055, A: 1}  // #0E0E0E — surface
-	colorBgSidebar  = Color.RGBA{R: 0.098, G: 0.102, B: 0.102, A: 1}  // #191A1A — surface-container
-	colorBgDarker   = Color.RGBA{R: 0.0, G: 0.0, B: 0.0, A: 1}       // #000000 — surface-container-lowest
-	colorBgPanel    = Color.RGBA{R: 0.075, G: 0.075, B: 0.075, A: 1}  // #131313 — surface-container-low
-	colorBgInput    = Color.RGBA{R: 0.122, G: 0.125, B: 0.125, A: 1}  // #1F2020 — surface-container-high
-	colorBgHeader   = Color.RGBA{R: 0.122, G: 0.125, B: 0.125, A: 1}  // #1F2020 — surface-container-high
-	colorRowOdd     = Color.RGBA{R: 0.055, G: 0.055, B: 0.055, A: 1}  // #0E0E0E — surface
-	colorRowEven    = Color.RGBA{R: 0.075, G: 0.075, B: 0.075, A: 1}  // #131313 — surface-container-low
-	colorBorder     = Color.RGBA{R: 0.278, G: 0.282, B: 0.282, A: 0.4} // #474848 at 40% — outline-variant
-	colorBorderDim  = Color.RGBA{R: 0.278, G: 0.282, B: 0.282, A: 0.15} // #474848 at 15% — ghost border
-	colorText       = Color.RGBA{R: 0.902, G: 0.898, B: 0.898, A: 1}  // #E6E5E5 — on-surface
-	colorTextBright = Color.RGBA{R: 1.0, G: 1.0, B: 1.0, A: 1}       // #FFFFFF
-	colorTextDim    = Color.RGBA{R: 0.459, G: 0.459, B: 0.459, A: 1}  // #757575 — outline
-	colorTextMuted  = Color.RGBA{R: 0.671, G: 0.671, B: 0.671, A: 1}  // #ABABAB — on-surface-variant
-	colorAccent     = Color.RGBA{R: 0.678, G: 0.776, B: 1.0, A: 1}    // #ADC6FF — primary
-	colorSelected   = Color.RGBA{R: 0.0, G: 0.267, B: 0.576, A: 1}    // #004493 — primary-container
-	colorBtnNormal  = Color.RGBA{R: 0.122, G: 0.125, B: 0.125, A: 1}  // #1F2020 — surface-container-high
-	colorBtnHover   = Color.RGBA{R: 0.145, G: 0.149, B: 0.149, A: 1}  // #252626 — surface-container-highest
+	colorBg         = Color.RGBA{R: 0.0745, G: 0.0745, B: 0.0824, A: 1} // #131315 — surface / background
+	colorBgSidebar  = Color.RGBA{R: 0.1255, G: 0.1216, B: 0.1333, A: 1} // #201F22 — surface-container
+	colorBgDarker   = Color.RGBA{R: 0.0549, G: 0.0549, B: 0.0627, A: 1} // #0E0E10 — surface-container-lowest
+	colorBgPanel    = Color.RGBA{R: 0.1098, G: 0.1059, B: 0.1137, A: 1} // #1C1B1D — surface-container-low
+	colorBgInput    = Color.RGBA{R: 0.1647, G: 0.1647, B: 0.1725, A: 1} // #2A2A2C — surface-container-high
+	colorBgHeader   = Color.RGBA{R: 0.1647, G: 0.1647, B: 0.1725, A: 1} // #2A2A2C — surface-container-high
+	colorRowOdd     = Color.RGBA{R: 0.0745, G: 0.0745, B: 0.0824, A: 1} // #131315 — surface (zebra light)
+	colorRowEven    = Color.RGBA{R: 0.0549, G: 0.0549, B: 0.0627, A: 1} // #0E0E10 — surface-container-lowest (zebra dark)
+	colorBorder     = Color.RGBA{R: 0.2745, G: 0.2706, B: 0.3333, A: 0.5}  // #464555 at 50% — outline-variant
+	colorBorderDim  = Color.RGBA{R: 0.2745, G: 0.2706, B: 0.3333, A: 0.2}  // #464555 at 20% — ghost border
+	colorText       = Color.RGBA{R: 0.898, G: 0.8824, B: 0.8941, A: 1}  // #E5E1E4 — on-surface
+	colorTextBright = Color.RGBA{R: 1.0, G: 1.0, B: 1.0, A: 1}          // #FFFFFF
+	colorTextDim    = Color.RGBA{R: 0.5686, G: 0.5608, B: 0.6314, A: 1} // #918FA1 — outline
+	colorTextMuted  = Color.RGBA{R: 0.7804, G: 0.7686, B: 0.8471, A: 1} // #C7C4D8 — on-surface-variant
+	colorAccent     = Color.RGBA{R: 0.7647, G: 0.7529, B: 1.0, A: 1}    // #C3C0FF — primary
+	colorSelected   = Color.RGBA{R: 0.3098, G: 0.2745, B: 0.898, A: 1}  // #4F46E5 — primary-container (indigo)
+	colorBtnNormal  = Color.RGBA{R: 0.1647, G: 0.1647, B: 0.1725, A: 1} // #2A2A2C — surface-container-high
+	colorBtnHover   = Color.RGBA{R: 0.2078, G: 0.2039, B: 0.2157, A: 1} // #353437 — surface-container-highest
 
-	// SQL syntax highlighting — Studio Sonoma palette
-	colorSQLKeyword  = Color.RGBA{R: 0.678, G: 0.776, B: 1.0, A: 1}    // #ADC6FF — primary
-	colorSQLString   = Color.RGBA{R: 0.847, G: 0.827, B: 0.957, A: 1}  // #D8D3F4 — tertiary-container
-	colorSQLNumber   = Color.RGBA{R: 0.70, G: 0.85, B: 0.55, A: 1}    // #B3D98C — green (kept)
-	colorSQLComment  = Color.RGBA{R: 0.459, G: 0.459, B: 0.459, A: 1}  // #757575 — outline
-	colorSQLSymbol   = Color.RGBA{R: 0.671, G: 0.671, B: 0.671, A: 1}  // #ABABAB — on-surface-variant
-	colorSQLFunction = Color.RGBA{R: 0.792, G: 0.776, B: 0.902, A: 1}  // #CAC6E6 — tertiary-dim
+	// SQL syntax highlighting — green keywords, blue strings (matches the design's editor)
+	colorSQLKeyword  = Color.RGBA{R: 0.3059, G: 0.8706, B: 0.6392, A: 1} // #4EDEA3 — tertiary (green)
+	colorSQLString   = Color.RGBA{R: 0.5373, G: 0.8078, B: 1.0, A: 1}    // #89CEFF — secondary (blue)
+	colorSQLNumber   = Color.RGBA{R: 0.7647, G: 0.7529, B: 1.0, A: 1}    // #C3C0FF — primary (lavender)
+	colorSQLComment  = Color.RGBA{R: 0.5686, G: 0.5608, B: 0.6314, A: 1} // #918FA1 — outline
+	colorSQLSymbol   = Color.RGBA{R: 0.7804, G: 0.7686, B: 0.8471, A: 1} // #C7C4D8 — on-surface-variant
+	colorSQLFunction = Color.RGBA{R: 0.4039, G: 0.9569, B: 0.7176, A: 1} // #67F4B7 — on-tertiary-container
 )
 
 func makeStyleBox(bg Color.RGBA, radius int, border int, borderColor Color.RGBA) StyleBoxFlat.Instance {
@@ -72,20 +74,20 @@ func makeStyleBoxPadded(bg Color.RGBA, radius int, border int, borderColor Color
 }
 
 func applyButtonTheme(c Control.Instance) {
-	// CTA button — primary-container bg with light blue text
-	normal := makeStyleBox(colorSelected, 4, 0, colorBorder) // #004493
+	// CTA button — solid indigo primary-container with light lavender text
+	normal := makeStyleBox(colorSelected, 4, 0, colorBorder) // #4F46E5
 	normal.AsStyleBox().SetContentMarginLeft(8)
 	normal.AsStyleBox().SetContentMarginRight(8)
 	normal.AsStyleBox().SetContentMarginTop(2)
 	normal.AsStyleBox().SetContentMarginBottom(2)
 
-	hover := makeStyleBox(Color.RGBA{R: 0.0, G: 0.345, B: 0.733, A: 1}, 4, 0, colorBorder) // #0058BB
+	hover := makeStyleBox(Color.RGBA{R: 0.3569, G: 0.3216, B: 0.9373, A: 1}, 4, 0, colorBorder) // #5B52EF
 	hover.AsStyleBox().SetContentMarginLeft(8)
 	hover.AsStyleBox().SetContentMarginRight(8)
 	hover.AsStyleBox().SetContentMarginTop(2)
 	hover.AsStyleBox().SetContentMarginBottom(2)
 
-	pressed := makeStyleBox(Color.RGBA{R: 0.0, G: 0.239, B: 0.529, A: 1}, 4, 0, colorBorder) // #003D87
+	pressed := makeStyleBox(Color.RGBA{R: 0.251, G: 0.2196, B: 0.7882, A: 1}, 4, 0, colorBorder) // #4038C9
 	pressed.AsStyleBox().SetContentMarginLeft(8)
 	pressed.AsStyleBox().SetContentMarginRight(8)
 	pressed.AsStyleBox().SetContentMarginTop(2)
@@ -94,7 +96,7 @@ func applyButtonTheme(c Control.Instance) {
 	c.AddThemeStyleboxOverride("normal", normal.AsStyleBox())
 	c.AddThemeStyleboxOverride("hover", hover.AsStyleBox())
 	c.AddThemeStyleboxOverride("pressed", pressed.AsStyleBox())
-	c.AddThemeColorOverride("font_color", Color.RGBA{R: 0.737, G: 0.816, B: 1.0, A: 1}) // #BCD0FF — on-primary-container
+	c.AddThemeColorOverride("font_color", Color.RGBA{R: 0.8549, G: 0.8431, B: 1.0, A: 1}) // #DAD7FF — on-primary-container
 	c.AddThemeColorOverride("font_hover_color", colorTextBright)
 	c.AddThemeFontSizeOverride("font_size", fontSize(navFontBase))
 }
@@ -188,26 +190,40 @@ func applyToggleButtonTheme(c Control.Instance, active bool) {
 	}
 }
 
-func applyActiveButtonTheme(c Control.Instance) {
-	active := makeStyleBoxPadded(colorSelected, 3, 1, colorSelected, 2) // primary-container
-	c.AddThemeStyleboxOverride("normal", active.AsStyleBox())
-	c.AddThemeStyleboxOverride("hover", active.AsStyleBox())
-	c.AddThemeStyleboxOverride("pressed", active.AsStyleBox())
-	c.AddThemeColorOverride("font_color", colorTextBright)
-	c.AddThemeColorOverride("font_hover_color", colorTextBright)
+// applyConnTileTheme styles a connection-rail tile: a rounded 40px square that
+// is solid indigo when active, and a subtle surface that brightens on hover
+// when inactive.
+func applyConnTileTheme(c Control.Instance, active bool) {
+	if active {
+		sb := makeStyleBox(colorSelected, 8, 0, colorSelected) // indigo, rounded-lg
+		c.AddThemeStyleboxOverride("normal", sb.AsStyleBox())
+		c.AddThemeStyleboxOverride("hover", sb.AsStyleBox())
+		c.AddThemeStyleboxOverride("pressed", sb.AsStyleBox())
+		c.AddThemeColorOverride("font_color", colorTextBright)
+		c.AddThemeColorOverride("font_hover_color", colorTextBright)
+	} else {
+		normal := makeStyleBox(colorBg, 8, 0, colorBg) // subtle raised surface
+		hover := makeStyleBox(colorBgInput, 8, 1, colorBorder)
+		c.AddThemeStyleboxOverride("normal", normal.AsStyleBox())
+		c.AddThemeStyleboxOverride("hover", hover.AsStyleBox())
+		c.AddThemeStyleboxOverride("pressed", hover.AsStyleBox())
+		c.AddThemeColorOverride("font_color", colorTextMuted)
+		c.AddThemeColorOverride("font_hover_color", colorText)
+	}
+	c.AddThemeFontSizeOverride("font_size", fontSize(11))
 }
 
-func applyErrorButtonTheme(c Control.Instance) {
-	// Red background to signal tunnel/auth error
-	errorBg := Color.RGBA{R: 0.6, G: 0.1, B: 0.1, A: 1}   // dark red
-	errorHover := Color.RGBA{R: 0.7, G: 0.15, B: 0.15, A: 1}
-	normal := makeStyleBoxPadded(errorBg, 3, 1, errorBg, 2)
-	hover := makeStyleBoxPadded(errorHover, 3, 1, errorHover, 2)
-	c.AddThemeStyleboxOverride("normal", normal.AsStyleBox())
-	c.AddThemeStyleboxOverride("hover", hover.AsStyleBox())
-	c.AddThemeStyleboxOverride("pressed", hover.AsStyleBox())
+// applyConnTileErrorTheme styles a rail tile to signal a tunnel/connection
+// error (rounded red), keeping the rounded-tile shape.
+func applyConnTileErrorTheme(c Control.Instance) {
+	errorBg := Color.RGBA{R: 0.6, G: 0.1, B: 0.1, A: 1}
+	sb := makeStyleBox(errorBg, 8, 0, errorBg)
+	c.AddThemeStyleboxOverride("normal", sb.AsStyleBox())
+	c.AddThemeStyleboxOverride("hover", sb.AsStyleBox())
+	c.AddThemeStyleboxOverride("pressed", sb.AsStyleBox())
 	c.AddThemeColorOverride("font_color", colorTextBright)
 	c.AddThemeColorOverride("font_hover_color", colorTextBright)
+	c.AddThemeFontSizeOverride("font_size", fontSize(11))
 }
 
 func applyInputTheme(c Control.Instance) {
@@ -295,10 +311,32 @@ func applyStatusBarTheme(c Control.Instance) {
 	c.AddThemeFontSizeOverride("font_size", fontSize(navFontBase))
 }
 
-// Title bar colors — Studio Sonoma
+// applyFooterGhostButton styles a borderless icon button for the status bar:
+// no background, muted glyph that brightens on hover.
+func applyFooterGhostButton(c Control.Instance) {
+	transparent := Color.RGBA{}
+	normal := makeStyleBoxPadded(transparent, 3, 0, transparent, 3)
+	hover := makeStyleBoxPadded(colorBtnHover, 3, 0, colorBtnHover, 3)
+	c.AddThemeStyleboxOverride("normal", normal.AsStyleBox())
+	c.AddThemeStyleboxOverride("hover", hover.AsStyleBox())
+	c.AddThemeStyleboxOverride("pressed", hover.AsStyleBox())
+	c.AddThemeColorOverride("font_color", colorTextMuted)
+	c.AddThemeColorOverride("font_hover_color", colorText)
+	c.AddThemeFontSizeOverride("font_size", fontSize(navFontBase))
+}
+
+// footerPill styles a compact rounded "pill" panel (e.g. the memory indicator).
+func footerPill() StyleBoxFlat.Instance {
+	pill := makeStyleBoxPadded(colorBgInput, 8, 1, colorBorder, 2)
+	pill.AsStyleBox().SetContentMarginLeft(6)
+	pill.AsStyleBox().SetContentMarginRight(6)
+	return pill
+}
+
+// Title bar colors — Pro-Grade Data System
 var (
-	colorTitleBar  = Color.RGBA{R: 0.075, G: 0.075, B: 0.075, A: 1}  // #131313 — surface-container-low
-	colorTitlePill = Color.RGBA{R: 0.122, G: 0.125, B: 0.125, A: 1}  // #1F2020 — surface-container-high
+	colorTitleBar  = Color.RGBA{R: 0.1255, G: 0.1216, B: 0.1333, A: 1} // #201F22 — surface-container
+	colorTitlePill = Color.RGBA{R: 0.1098, G: 0.1059, B: 0.1137, A: 1} // #1C1B1D — surface-container-low
 )
 
 func applyTitleBarTheme(c Control.Instance) {
@@ -364,17 +402,59 @@ func applyTabBarTheme(c Control.Instance) {
 }
 
 // SVG icon strings (Lucide icons)
-const closeSVG = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#ababab" stroke-opacity="0.8" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>`
+const closeSVG = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#c7c4d8" stroke-opacity="0.8" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>`
 
 // Navigation chevrons (Lucide chevron-left / chevron-right) — solid white, 16px
 const svgChevronLeft = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>`
 const svgChevronRight = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>`
 
 // Sidebar left: panel-left icon
-const svgSidebarLeft = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ababab" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/></svg>`
+const svgSidebarLeft = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#c7c4d8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/></svg>`
 
 // Sidebar right: panel-right icon
-const svgSidebarRight = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ababab" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M15 3v18"/></svg>`
+const svgSidebarRight = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#c7c4d8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M15 3v18"/></svg>`
+
+// Database icon (Lucide "database") — secondary blue, for the title-bar breadcrumb pill.
+const svgDatabase = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#89ceff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/></svg>`
+
+// titlePill styles the title-bar breadcrumb pill (rounded, surface-container-high).
+func titlePill() StyleBoxFlat.Instance {
+	pill := makeStyleBoxPadded(colorBgInput, 8, 1, colorBorder, 2)
+	pill.AsStyleBox().SetContentMarginLeft(8)
+	pill.AsStyleBox().SetContentMarginRight(8)
+	return pill
+}
+
+// monoFont returns a monospaced system font for code/SQL text.
+func monoFont() Font.Instance {
+	f := SystemFont.New()
+	f.SetFontNames([]string{"SF Mono", "Menlo", "monospace"})
+	return f.AsFont()
+}
+
+// Themed checkbox icons — subtle outlined square when off, indigo fill + white
+// check when on (matches the design's custom checkbox, not Godot's default).
+const svgCheckboxOff = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><rect x="1" y="1" width="14" height="14" rx="3" fill="none" stroke="#5a5968" stroke-width="1.5"/></svg>`
+const svgCheckboxOn = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><rect x="1" y="1" width="14" height="14" rx="3" fill="#4f46e5"/><path d="M4.5 8.2 L6.8 10.5 L11.5 5.2" fill="none" stroke="#ffffff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`
+
+// applyCheckboxTheme replaces a CheckBox's default (bright) check glyphs with
+// theme-matched indigo icons and removes the bright hover/press backgrounds.
+func applyCheckboxTheme(c Control.Instance) {
+	on := loadSVGTexture(svgCheckboxOn)
+	off := loadSVGTexture(svgCheckboxOff)
+	c.AddThemeIconOverride("checked", on)
+	c.AddThemeIconOverride("unchecked", off)
+	c.AddThemeIconOverride("checked_disabled", on)
+	c.AddThemeIconOverride("unchecked_disabled", off)
+
+	empty := StyleBoxEmpty.New().AsStyleBox()
+	for _, state := range []string{"normal", "hover", "pressed", "focus", "hover_pressed", "disabled"} {
+		c.AddThemeStyleboxOverride(state, empty)
+	}
+	c.AddThemeColorOverride("font_color", colorText)
+	c.AddThemeFontSizeOverride("font_size", fontSize(13))
+	c.AddThemeConstantOverride("h_separation", 4)
+}
 
 func loadSVGTexture(svgStr string) Texture2D.Instance {
 	img := Image.New()
