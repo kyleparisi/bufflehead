@@ -1236,21 +1236,20 @@ func (g *GatewayScreen) buildCardPanel(entry models.GatewayEntry, idx int) Panel
 	row1.AsNode().AddChild(statusDot.AsNode())
 	row1.AsNode().AddChild(nameLabel.AsNode())
 
-	// RDS host
+	// RDS host — wrap so a long endpoint fits the card width instead of forcing
+	// the card wider than the column (which pushed the buttons off-screen).
 	hostLabel := Label.New()
-	host := entry.RDSHost
-	if len(host) > 48 {
-		host = host[:48] + "..."
-	}
-	hostLabel.SetText(host)
+	hostLabel.SetText(entry.RDSHost)
 	hostLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
 	hostLabel.AsControl().AddThemeColorOverride("font_color", colorTextDim)
+	hostLabel.SetAutowrapMode(3)
 
 	// AWS profile
 	profileLabel := Label.New()
 	profileLabel.SetText("AWS Profile: " + entry.AWSProfile)
 	profileLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
 	profileLabel.AsControl().AddThemeColorOverride("font_color", colorTextDim)
+	profileLabel.SetAutowrapMode(3)
 
 	// Status + action button row
 	row4 := HBoxContainer.New()
@@ -1356,20 +1355,19 @@ func (g *GatewayScreen) buildBookmarkCard(bm models.Bookmark) PanelContainer.Ins
 		row1.AsNode().AddChild(makeAccentChip(strings.ToUpper(bm.Env), envBadgeColor(bm.Env), "EnvBadge").AsNode())
 	}
 
-	// Detail rows
+	// Detail rows — wrap so a long endpoint fits the card width instead of
+	// forcing the card wider than the column (which pushed the buttons off-screen).
 	hostLabel := Label.New()
-	host := bm.RDSHost
-	if len(host) > 48 {
-		host = host[:48] + "..."
-	}
-	hostLabel.SetText(fmt.Sprintf("%s/%s @ %s", bm.DBName, bm.DBUser, host))
+	hostLabel.SetText(fmt.Sprintf("%s/%s @ %s", bm.DBName, bm.DBUser, bm.RDSHost))
 	hostLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
 	hostLabel.AsControl().AddThemeColorOverride("font_color", colorTextDim)
+	hostLabel.SetAutowrapMode(3)
 
 	profileLabel := Label.New()
 	profileLabel.SetText("AWS Profile: " + bm.AWSProfile)
 	profileLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
 	profileLabel.AsControl().AddThemeColorOverride("font_color", colorTextDim)
+	profileLabel.SetAutowrapMode(3)
 
 	// Status + action button row
 	row4 := HBoxContainer.New()
