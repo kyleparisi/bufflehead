@@ -20,29 +20,40 @@ func ValidateLabel(label string) error {
 	return nil
 }
 
-// Bookmark represents a saved gateway connection.
+// Bookmark represents a saved database connection. It covers both AWS-gateway
+// and direct Postgres connections; Kind discriminates (empty == AWS gateway).
+//
+// For AWS gateways, RDSHost/RDSPort are the real RDS endpoint reached through a
+// tunnel. For direct Postgres connections, RDSHost/RDSPort are the actual host
+// and port to dial. A raw password is never stored in this file; it lives in
+// the OS keychain (SecretKind=keychain) or a named env var (SecretKind=env).
 type Bookmark struct {
-	Label        string            `json:"label"`
-	Env          string            `json:"env,omitempty"`
-	AWSProfile   string            `json:"aws_profile"`
-	AWSRegion    string            `json:"aws_region"`
-	InstanceID   string            `json:"instance_id,omitempty"`
-	InstanceTags map[string]string `json:"instance_tags,omitempty"`
-	RDSHost      string            `json:"rds_host"`
-	RDSPort      int               `json:"rds_port"`
-	DBName       string            `json:"db_name"`
-	DBUser       string            `json:"db_user"`
-	DBPasswordEnv string           `json:"db_password_env,omitempty"`
-	AuthMode     string            `json:"auth_mode,omitempty"`
-	CreatedAt    time.Time         `json:"created_at"`
-	UpdatedAt    time.Time         `json:"updated_at"`
+	Label         string            `json:"label"`
+	Kind          ConnKind          `json:"kind,omitempty"`
+	Env           string            `json:"env,omitempty"`
+	AWSProfile    string            `json:"aws_profile,omitempty"`
+	AWSRegion     string            `json:"aws_region,omitempty"`
+	InstanceID    string            `json:"instance_id,omitempty"`
+	InstanceTags  map[string]string `json:"instance_tags,omitempty"`
+	RDSHost       string            `json:"rds_host"`
+	RDSPort       int               `json:"rds_port"`
+	DBName        string            `json:"db_name"`
+	DBUser        string            `json:"db_user"`
+	DBPasswordEnv string            `json:"db_password_env,omitempty"`
+	AuthMode      string            `json:"auth_mode,omitempty"`
+	SSLMode       string            `json:"ssl_mode,omitempty"`
+	SecretKind    SecretKind        `json:"secret_kind,omitempty"`
+	CreatedAt     time.Time         `json:"created_at"`
+	UpdatedAt     time.Time         `json:"updated_at"`
 }
 
 // ToGatewayEntry converts a bookmark to a GatewayEntry for the connection pipeline.
-// localPort is assigned at connection time via FindFreePort().
+// localPort is assigned at connection time via FindFreePort() for AWS gateways;
+// for direct Postgres it is unused (the entry dials RDSHost:RDSPort directly).
 func (b *Bookmark) ToGatewayEntry(localPort int) GatewayEntry {
 	return GatewayEntry{
 		Name:          b.Label,
+		Kind:          b.Kind,
 		AWSProfile:    b.AWSProfile,
 		AWSRegion:     b.AWSRegion,
 		InstanceID:    b.InstanceID,
@@ -54,6 +65,8 @@ func (b *Bookmark) ToGatewayEntry(localPort int) GatewayEntry {
 		DBUser:        b.DBUser,
 		DBPasswordEnv: b.DBPasswordEnv,
 		AuthMode:      b.AuthMode,
+		SSLMode:       b.SSLMode,
+		SecretKind:    b.SecretKind,
 	}
 }
 
@@ -106,6 +119,10 @@ func (bs *BookmarkStore) Remove(label string) error {
 
 	for i, b := range bs.Bookmarks {
 		if b.Label == label {
+			// Best-effort cleanup of any keychain secret for this bookmark.
+			if b.SecretKind == SecretKeychain {
+				_ = DeleteSecret(label)
+			}
 			bs.Bookmarks = append(bs.Bookmarks[:i], bs.Bookmarks[i+1:]...)
 			bs.save()
 			return nil

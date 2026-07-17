@@ -16,6 +16,7 @@ require (
 	github.com/kyleparisi/session-manager-plugin v0.0.0-20260430184122-898ee41db4b7
 	github.com/marcboeker/go-duckdb v1.8.5
 	github.com/twinj/uuid v1.0.0
+	github.com/zalando/go-keyring v0.2.8
 	gopkg.in/yaml.v3 v3.0.1
 	graphics.gd v0.0.0-20260301004336-07bec6a0140d
 )
@@ -37,10 +38,12 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sts v1.42.1 // indirect
 	github.com/aws/smithy-go v1.25.1 // indirect
 	github.com/cihub/seelog v0.0.0-20170130134532-f561c5e57575 // indirect
+	github.com/danieljoos/wincred v1.2.3 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/fsnotify/fsnotify v1.10.0 // indirect
 	github.com/go-viper/mapstructure/v2 v2.2.1 // indirect
 	github.com/goccy/go-json v0.10.5 // indirect
+	github.com/godbus/dbus/v5 v5.2.2 // indirect
 	github.com/google/flatbuffers v25.1.24+incompatible // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect

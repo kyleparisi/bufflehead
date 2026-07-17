@@ -28,24 +28,24 @@ func scaled(base float32) float32 {
 // Pro-Grade Data System — Modern IDE dark theme with an indigo/lavender primary,
 // green + blue semantic accents, and low-contrast tonal layering (Stitch design tokens).
 var (
-	colorBg         = Color.RGBA{R: 0.0745, G: 0.0745, B: 0.0824, A: 1} // #131315 — surface / background
-	colorBgSidebar  = Color.RGBA{R: 0.1255, G: 0.1216, B: 0.1333, A: 1} // #201F22 — surface-container
-	colorBgDarker   = Color.RGBA{R: 0.0549, G: 0.0549, B: 0.0627, A: 1} // #0E0E10 — surface-container-lowest
-	colorBgPanel    = Color.RGBA{R: 0.1098, G: 0.1059, B: 0.1137, A: 1} // #1C1B1D — surface-container-low
-	colorBgInput    = Color.RGBA{R: 0.1647, G: 0.1647, B: 0.1725, A: 1} // #2A2A2C — surface-container-high
-	colorBgHeader   = Color.RGBA{R: 0.1647, G: 0.1647, B: 0.1725, A: 1} // #2A2A2C — surface-container-high
-	colorRowOdd     = Color.RGBA{R: 0.0745, G: 0.0745, B: 0.0824, A: 1} // #131315 — surface (zebra light)
-	colorRowEven    = Color.RGBA{R: 0.0549, G: 0.0549, B: 0.0627, A: 1} // #0E0E10 — surface-container-lowest (zebra dark)
-	colorBorder     = Color.RGBA{R: 0.2745, G: 0.2706, B: 0.3333, A: 0.5}  // #464555 at 50% — outline-variant
-	colorBorderDim  = Color.RGBA{R: 0.2745, G: 0.2706, B: 0.3333, A: 0.2}  // #464555 at 20% — ghost border
-	colorText       = Color.RGBA{R: 0.898, G: 0.8824, B: 0.8941, A: 1}  // #E5E1E4 — on-surface
-	colorTextBright = Color.RGBA{R: 1.0, G: 1.0, B: 1.0, A: 1}          // #FFFFFF
-	colorTextDim    = Color.RGBA{R: 0.5686, G: 0.5608, B: 0.6314, A: 1} // #918FA1 — outline
-	colorTextMuted  = Color.RGBA{R: 0.7804, G: 0.7686, B: 0.8471, A: 1} // #C7C4D8 — on-surface-variant
-	colorAccent     = Color.RGBA{R: 0.7647, G: 0.7529, B: 1.0, A: 1}    // #C3C0FF — primary
-	colorSelected   = Color.RGBA{R: 0.3098, G: 0.2745, B: 0.898, A: 1}  // #4F46E5 — primary-container (indigo)
-	colorBtnNormal  = Color.RGBA{R: 0.1647, G: 0.1647, B: 0.1725, A: 1} // #2A2A2C — surface-container-high
-	colorBtnHover   = Color.RGBA{R: 0.2078, G: 0.2039, B: 0.2157, A: 1} // #353437 — surface-container-highest
+	colorBg         = Color.RGBA{R: 0.0745, G: 0.0745, B: 0.0824, A: 1}   // #131315 — surface / background
+	colorBgSidebar  = Color.RGBA{R: 0.1255, G: 0.1216, B: 0.1333, A: 1}   // #201F22 — surface-container
+	colorBgDarker   = Color.RGBA{R: 0.0549, G: 0.0549, B: 0.0627, A: 1}   // #0E0E10 — surface-container-lowest
+	colorBgPanel    = Color.RGBA{R: 0.1098, G: 0.1059, B: 0.1137, A: 1}   // #1C1B1D — surface-container-low
+	colorBgInput    = Color.RGBA{R: 0.1647, G: 0.1647, B: 0.1725, A: 1}   // #2A2A2C — surface-container-high
+	colorBgHeader   = Color.RGBA{R: 0.1647, G: 0.1647, B: 0.1725, A: 1}   // #2A2A2C — surface-container-high
+	colorRowOdd     = Color.RGBA{R: 0.0745, G: 0.0745, B: 0.0824, A: 1}   // #131315 — surface (zebra light)
+	colorRowEven    = Color.RGBA{R: 0.0549, G: 0.0549, B: 0.0627, A: 1}   // #0E0E10 — surface-container-lowest (zebra dark)
+	colorBorder     = Color.RGBA{R: 0.2745, G: 0.2706, B: 0.3333, A: 0.5} // #464555 at 50% — outline-variant
+	colorBorderDim  = Color.RGBA{R: 0.2745, G: 0.2706, B: 0.3333, A: 0.2} // #464555 at 20% — ghost border
+	colorText       = Color.RGBA{R: 0.898, G: 0.8824, B: 0.8941, A: 1}    // #E5E1E4 — on-surface
+	colorTextBright = Color.RGBA{R: 1.0, G: 1.0, B: 1.0, A: 1}            // #FFFFFF
+	colorTextDim    = Color.RGBA{R: 0.5686, G: 0.5608, B: 0.6314, A: 1}   // #918FA1 — outline
+	colorTextMuted  = Color.RGBA{R: 0.7804, G: 0.7686, B: 0.8471, A: 1}   // #C7C4D8 — on-surface-variant
+	colorAccent     = Color.RGBA{R: 0.7647, G: 0.7529, B: 1.0, A: 1}      // #C3C0FF — primary
+	colorSelected   = Color.RGBA{R: 0.3098, G: 0.2745, B: 0.898, A: 1}    // #4F46E5 — primary-container (indigo)
+	colorBtnNormal  = Color.RGBA{R: 0.1647, G: 0.1647, B: 0.1725, A: 1}   // #2A2A2C — surface-container-high
+	colorBtnHover   = Color.RGBA{R: 0.2078, G: 0.2039, B: 0.2157, A: 1}   // #353437 — surface-container-highest
 
 	// SQL syntax highlighting — green keywords, blue strings (matches the design's editor)
 	colorSQLKeyword  = Color.RGBA{R: 0.3059, G: 0.8706, B: 0.6392, A: 1} // #4EDEA3 — tertiary (green)
@@ -224,6 +224,29 @@ func applyConnTileErrorTheme(c Control.Instance) {
 	c.AddThemeColorOverride("font_color", colorTextBright)
 	c.AddThemeColorOverride("font_hover_color", colorTextBright)
 	c.AddThemeFontSizeOverride("font_size", fontSize(11))
+}
+
+// applyBreadcrumbSegmentTheme styles the clickable database segment in the
+// title-bar breadcrumb: mono text with a subtle indigo-tinted background that
+// brightens on hover, signaling it opens the database switcher.
+func applyBreadcrumbSegmentTheme(c Control.Instance) {
+	tint := Color.RGBA{R: 0.3098, G: 0.2745, B: 0.898, A: 0.14}  // indigo @ 14%
+	hover := Color.RGBA{R: 0.3098, G: 0.2745, B: 0.898, A: 0.28} // indigo @ 28%
+	normal := makeStyleBox(tint, 4, 0, tint)
+	normal.AsStyleBox().SetContentMarginLeft(6)
+	normal.AsStyleBox().SetContentMarginRight(6)
+	normal.AsStyleBox().SetContentMarginTop(1)
+	normal.AsStyleBox().SetContentMarginBottom(1)
+	hoverSB := makeStyleBox(hover, 4, 0, hover)
+	hoverSB.AsStyleBox().SetContentMarginLeft(6)
+	hoverSB.AsStyleBox().SetContentMarginRight(6)
+	hoverSB.AsStyleBox().SetContentMarginTop(1)
+	hoverSB.AsStyleBox().SetContentMarginBottom(1)
+	c.AddThemeStyleboxOverride("normal", normal.AsStyleBox())
+	c.AddThemeStyleboxOverride("hover", hoverSB.AsStyleBox())
+	c.AddThemeStyleboxOverride("pressed", hoverSB.AsStyleBox())
+	c.AddThemeColorOverride("font_color", colorText)
+	c.AddThemeColorOverride("font_hover_color", colorTextBright)
 }
 
 func applyInputTheme(c Control.Instance) {

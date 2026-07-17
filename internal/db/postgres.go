@@ -23,9 +23,22 @@ type PostgresDB struct {
 }
 
 // NewPostgres connects to a Postgres database via the pgx stdlib driver.
-// The session is set to read-only for safety.
+// The session is set to read-only for safety. SSL is disabled, which is
+// appropriate for connections tunneled over SSM (the tunnel provides transport
+// security). For direct connections use NewPostgresDirect to control sslmode.
 func NewPostgres(host string, port int, dbName, user, password string) (*PostgresDB, error) {
 	return newPostgres(host, port, dbName, user, password, "disable")
+}
+
+// NewPostgresDirect connects directly to a reachable Postgres host with an
+// explicit sslmode (e.g. "prefer", "require", "disable"). Used for the direct
+// Postgres connection type (local, VPN, or public endpoints). The session is
+// set to read-only for safety, matching all other Bufflehead connections.
+func NewPostgresDirect(host string, port int, dbName, user, password, sslMode string) (*PostgresDB, error) {
+	if sslMode == "" {
+		sslMode = "prefer"
+	}
+	return newPostgres(host, port, dbName, user, password, sslMode)
 }
 
 // NewPostgresIAM connects to a Postgres database using RDS IAM authentication.
@@ -203,6 +216,46 @@ func (p *PostgresDB) TableSchema(tableName string) ([]Column, error) {
 		cols = append(cols, c)
 	}
 	return cols, rows.Err()
+}
+
+// DBName returns the database this connection is bound to.
+func (p *PostgresDB) DBName() string {
+	return p.dbName
+}
+
+// DatabaseInfo describes a database on the server for the switcher UI.
+type DatabaseInfo struct {
+	Name     string
+	IsSystem bool // template0/template1/postgres maintenance DBs
+}
+
+// Databases lists databases on the server that accept connections, ordered by
+// name. pg_database is a cluster-wide catalog visible from any database, so this
+// works regardless of which database the connection is currently bound to.
+func (p *PostgresDB) Databases() ([]DatabaseInfo, error) {
+	rows, err := p.conn.Query(`
+		SELECT datname, datistemplate
+		FROM pg_database
+		WHERE datallowconn = true
+		ORDER BY datname`)
+	if err != nil {
+		return nil, fmt.Errorf("list databases: %w", err)
+	}
+	defer rows.Close()
+
+	var out []DatabaseInfo
+	for rows.Next() {
+		var name string
+		var isTemplate bool
+		if err := rows.Scan(&name, &isTemplate); err != nil {
+			return nil, err
+		}
+		out = append(out, DatabaseInfo{
+			Name:     name,
+			IsSystem: isTemplate || name == "postgres" || name == "template0" || name == "template1",
+		})
+	}
+	return out, rows.Err()
 }
 
 // SchemaNames returns available schema names (excluding system schemas).

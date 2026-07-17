@@ -68,17 +68,19 @@ import (
 type TitleBar struct {
 	PanelContainer.Extension[TitleBar] `gd:"TitleBar"`
 
-	infoLabel     Label.Instance
-	copyBtn       Button.Instance
-	refreshBtn    Button.Instance
-	runBtn        Button.Instance
-	aiPrompt      string
-	NavBackBtn    Button.Instance
-	NavFwdBtn     Button.Instance
-	OnRefresh     func() // called when refresh button is pressed
-	OnRun         func() // called when the Run button is pressed
-	WindowID      int
-	resetCopyText bool // set by goroutine, read by Process on main thread
+	infoLabel      Label.Instance
+	dbBtn          Button.Instance // clickable database segment (opens switcher)
+	copyBtn        Button.Instance
+	refreshBtn     Button.Instance
+	runBtn         Button.Instance
+	aiPrompt       string
+	NavBackBtn     Button.Instance
+	NavFwdBtn      Button.Instance
+	OnRefresh      func() // called when refresh button is pressed
+	OnRun          func() // called when the Run button is pressed
+	OnPickDatabase func() // called when the database breadcrumb segment is clicked
+	WindowID       int
+	resetCopyText  bool // set by goroutine, read by Process on main thread
 }
 
 func (t *TitleBar) GuiInput(event InputEvent.Instance) {
@@ -163,6 +165,21 @@ func (t *TitleBar) Ready() {
 	t.infoLabel.AsControl().AddThemeFontOverride("font", monoFont())
 	t.infoLabel.AsControl().SetMouseFilter(Control.MouseFilterPass)
 
+	// Clickable database segment — only shown for Postgres connections. Opens
+	// the database switcher popup.
+	t.dbBtn = Button.New()
+	t.dbBtn.SetText("")
+	t.dbBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
+	t.dbBtn.AsControl().AddThemeFontOverride("font", monoFont())
+	applyBreadcrumbSegmentTheme(t.dbBtn.AsControl())
+	t.dbBtn.AsControl().SetTooltipText("Switch database")
+	t.dbBtn.AsCanvasItem().SetVisible(false)
+	t.dbBtn.AsBaseButton().OnPressed(func() {
+		if t.OnPickDatabase != nil {
+			t.OnPickDatabase()
+		}
+	})
+
 	t.copyBtn = Button.New()
 	t.copyBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(10))
 	applyFooterGhostButton(t.copyBtn.AsControl())
@@ -196,6 +213,7 @@ func (t *TitleBar) Ready() {
 
 	pillRow.AsNode().AddChild(dbIcon.AsNode())
 	pillRow.AsNode().AddChild(t.infoLabel.AsNode())
+	pillRow.AsNode().AddChild(t.dbBtn.AsNode())
 	pill.AsNode().AddChild(pillRow.AsNode())
 
 	// Prominent Run button (indigo CTA)
@@ -249,7 +267,11 @@ func (t *TitleBar) Process(delta Float.X) {
 }
 
 func (t *TitleBar) SetConnectionInfo(driver, name, dbName string) {
-	t.infoLabel.SetText(driver + "  ›  " + name + "  ›  " + dbName)
+	// The database name is rendered as a separate clickable segment (the
+	// switcher), so the label carries only the driver › connection prefix.
+	t.infoLabel.SetText(driver + "  ›  " + name + "  ›  ")
+	t.dbBtn.SetText(dbName + "  ▾")
+	t.dbBtn.AsCanvasItem().SetVisible(true)
 }
 
 func (t *TitleBar) SetAIPrompt(prompt string) {
@@ -260,6 +282,8 @@ func (t *TitleBar) SetAIPrompt(prompt string) {
 }
 
 func (t *TitleBar) SetFileInfo(path string) {
+	// The database switcher segment only applies to Postgres connections.
+	t.dbBtn.AsCanvasItem().SetVisible(false)
 	if path == "" {
 		t.infoLabel.SetText("DuckDB  ›  In-Memory")
 		return
@@ -1854,18 +1878,21 @@ type StatusBar struct {
 	connLabel   Label.Instance
 	memPill     Label.Instance
 	leftBtn     Button.Instance
+	bottomBtn   Button.Instance
 	rightBtn    Button.Instance
 
-	OnPrevPage        func()
-	OnNextPage        func()
-	OnFirstPage       func()
-	OnLastPage        func()
-	OnToggleLeftPane  func()
-	OnToggleRightPane func()
+	OnPrevPage         func()
+	OnNextPage         func()
+	OnFirstPage        func()
+	OnLastPage         func()
+	OnToggleLeftPane   func()
+	OnToggleRightPane  func()
+	OnToggleBottomPane func()
 
-	leftPaneVisible  bool
-	rightPaneVisible bool
-	memFrame         int
+	leftPaneVisible   bool
+	rightPaneVisible  bool
+	bottomPaneVisible bool
+	memFrame          int
 }
 
 // footerDivider returns a thin vertical rule separating status-bar segments.
@@ -1909,6 +1936,12 @@ func (s *StatusBar) Ready() {
 		s.leftPaneVisible = !s.leftPaneVisible
 		if s.OnToggleLeftPane != nil {
 			s.OnToggleLeftPane()
+		}
+	})
+	s.bottomBtn = s.footerIconButton("▤", "Toggle Console (bottom pane)", func() {
+		s.bottomPaneVisible = !s.bottomPaneVisible
+		if s.OnToggleBottomPane != nil {
+			s.OnToggleBottomPane()
 		}
 	})
 	s.rightBtn = s.footerIconButton("◨", "Toggle Right Pane", func() {
@@ -1965,6 +1998,7 @@ func (s *StatusBar) Ready() {
 
 	// ── Assemble ────────────────────────────────────────────────────────
 	s.AsNode().AddChild(s.leftBtn.AsNode())
+	s.AsNode().AddChild(s.bottomBtn.AsNode())
 	s.AsNode().AddChild(s.rightBtn.AsNode())
 	s.AsNode().AddChild(footerDivider().AsNode())
 	s.AsNode().AddChild(s.connDot.AsNode())
@@ -2388,6 +2422,18 @@ func (a *App) onGatewayConnected(entry models.GatewayEntry, auth *bfaws.AuthMana
 	w := a.mainWin
 	password := entry.ResolvePassword()
 
+	if entry.IsDirect() {
+		// Direct Postgres: dial the real host:port with no tunnel or AWS auth.
+		RunOpenPostgres(entry.RDSHost, entry.RDSPort, entry.DBName, entry.DBUser, password,
+			entry.EffectiveSSLMode(), nextTabID, 0, w.results, func(msg string) {
+				w.gatewayLoadingMsg = msg
+			})
+		nextTabID++
+
+		w.pendingGateway = &GatewayConnection{Config: entry}
+		return
+	}
+
 	// For IAM auth, pass the AWS config; for password auth, pass nil
 	var awsCfg *aws.Config
 	if entry.UseIAMAuth() {
@@ -2749,6 +2795,13 @@ func (a *App) pollResults() {
 			if w.extActionTab != nil {
 				w.loadExtensions(w.extActionTab)
 			}
+		}
+
+		// Show the database switcher once its background list query completes.
+		if w.dbListMsg != nil {
+			res := w.dbListMsg
+			w.dbListMsg = nil
+			w.presentDatabaseSwitcher(res)
 		}
 
 		// Update gateway loading label + step tracker if background status changed
@@ -3299,6 +3352,7 @@ func RegisterAll() {
 	classdb.Register[ExtensionsPanel]()
 	classdb.Register[RowDetailPanel]()
 	classdb.Register[StatusBar]()
+	classdb.Register[ConsolePanel]()
 	classdb.Register[GatewayScreen]()
 	classdb.Register[GatewayInfoPanel]()
 	classdb.Register[App]()
