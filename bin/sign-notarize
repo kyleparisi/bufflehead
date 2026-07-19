@@ -1,0 +1,119 @@
+#!/bin/bash
+# Sign, notarize, and staple the macOS app + DMG for Developer ID distribution.
+#
+# Prerequisites (one-time, interactive — see README/notes):
+#   1. A "Developer ID Application" certificate installed in your login keychain.
+#        security find-identity -v -p codesigning     # should list it
+#   2. notarytool credentials saved as a keychain profile:
+#        xcrun notarytool store-credentials "bufflehead-notary" \
+#          --apple-id "you@example.com" --team-id "TEAMID" --password "app-specific-pw"
+#
+# Usage:
+#   SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" \
+#   NOTARY_PROFILE="bufflehead-notary" \
+#     ./bin/sign-notarize
+#
+# Flags / env:
+#   SKIP_BUILD=1     reuse the existing .app instead of rebuilding
+#   SKIP_NOTARIZE=1  sign only (fast local check; app will NOT pass Gatekeeper
+#                    on other Macs without notarization)
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+APP="$ROOT/releases/darwin/universal/Bufflehead.app"
+DMG="$ROOT/releases/Bufflehead.dmg"
+ENTITLEMENTS="$ROOT/packaging/macos/entitlements.plist"
+DMG_SETTINGS="$ROOT/packaging/dmg/settings.py"
+
+: "${SIGN_IDENTITY:?Set SIGN_IDENTITY to your 'Developer ID Application: ...' identity}"
+: "${SKIP_BUILD:=0}"
+: "${SKIP_NOTARIZE:=0}"
+if [ "$SKIP_NOTARIZE" != "1" ]; then
+    : "${NOTARY_PROFILE:?Set NOTARY_PROFILE (saved via 'xcrun notarytool store-credentials'), or set SKIP_NOTARIZE=1}"
+fi
+
+cd "$ROOT"
+
+# --- 1. Build ---------------------------------------------------------------
+if [ "$SKIP_BUILD" = "1" ]; then
+    echo "==> Skipping build (SKIP_BUILD=1)"
+else
+    echo "==> Building macOS app..."
+    GOOS=macos gd build ./cmd/viewer
+fi
+[ -d "$APP" ] || { echo "Error: $APP not found" >&2; exit 1; }
+
+# --- 2. Sign every nested Mach-O binary, deepest-first ----------------------
+# Hardened runtime + secure timestamp + our entitlements. Signing inside-out is
+# required: an outer signature is invalidated if you later re-sign something
+# nested inside it.
+sign_one() {
+    codesign --force --options runtime --timestamp \
+        --entitlements "$ENTITLEMENTS" \
+        --sign "$SIGN_IDENTITY" "$1"
+}
+
+echo "==> Discovering nested Mach-O binaries..."
+manifest="$(mktemp)"
+trap 'rm -f "$manifest"' EXIT
+while IFS= read -r -d '' f; do
+    if file -b "$f" | grep -q "Mach-O"; then
+        # prefix with slash-count so we can sort deepest-first
+        printf '%s\t%s\0' "$(tr -cd '/' <<<"$f" | wc -c | tr -d ' ')" "$f"
+    fi
+done < <(find "$APP" -type f -print0) \
+    | sort -z -t$'\t' -k1,1nr > "$manifest"
+
+count=0
+while IFS=$'\t' read -r -d '' _depth f; do
+    echo "    sign: ${f#"$ROOT"/}"
+    sign_one "$f"
+    count=$((count + 1))
+done < "$manifest"
+echo "    signed $count nested binaries"
+
+# --- 3. Sign any nested framework/bundle wrappers, then the .app itself ------
+while IFS= read -r -d '' fw; do
+    echo "    sign framework: ${fw#"$ROOT"/}"
+    sign_one "$fw"
+done < <(find "$APP" -type d \( -name "*.framework" -o -name "*.bundle" \) -print0)
+
+echo "==> Signing app bundle..."
+sign_one "$APP"
+
+# --- 4. Verify the signature -------------------------------------------------
+echo "==> Verifying signature..."
+codesign --verify --deep --strict --verbose=2 "$APP"
+codesign --display --verbose=4 "$APP" 2>&1 | grep -E "Authority|TeamIdentifier|Timestamp|flags" || true
+
+# --- 5. Build + sign the DMG ------------------------------------------------
+if ! python3 -c 'import dmgbuild' >/dev/null 2>&1; then
+    echo "Error: python package 'dmgbuild' is required." >&2
+    echo "Install: python3 -m pip install --user dmgbuild" >&2
+    exit 1
+fi
+echo "==> Building styled DMG..."
+rm -f "$DMG"
+python3 -m dmgbuild -s "$DMG_SETTINGS" "Bufflehead" "$DMG"
+echo "==> Signing DMG..."
+codesign --force --timestamp --sign "$SIGN_IDENTITY" "$DMG"
+
+# --- 6. Notarize + staple ---------------------------------------------------
+if [ "$SKIP_NOTARIZE" = "1" ]; then
+    echo "==> Skipping notarization (SKIP_NOTARIZE=1)."
+    echo "    NOTE: unnotarized — will be blocked by Gatekeeper on other Macs."
+else
+    echo "==> Submitting to Apple notary service (this can take a few minutes)..."
+    xcrun notarytool submit "$DMG" --keychain-profile "$NOTARY_PROFILE" --wait
+    echo "==> Stapling notarization ticket..."
+    xcrun stapler staple "$DMG"
+    # Staple the app too, so a copy dragged out of the DMG is self-contained.
+    xcrun stapler staple "$APP"
+    echo "==> Validating..."
+    xcrun stapler validate "$DMG"
+    spctl --assess --type open --context context:primary-signature --verbose=4 "$DMG" || true
+fi
+
+echo
+echo "Done: $DMG"
+ls -lh "$DMG"

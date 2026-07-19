@@ -99,8 +99,23 @@ If the `gopls` and `godoc` MCP servers are available, use them for Go workspace 
 
 ## Creating Releases
 
-Build the app and create a styled DMG, then publish a GitHub release:
+Bump the version in `graphics/export_presets.cfg` (macOS `application/short_version`
++ `application/version`, and the Windows presets' `file_version`/`product_version`).
+
+**Signed + notarized DMG (Developer ID — this is what ships to users):** builds
+the app, deep-signs every nested Mach-O with the hardened runtime, builds the
+styled DMG, then notarizes and staples it. Requires a "Developer ID Application"
+cert in the keychain and notary credentials saved as a keychain profile (see the
+header comment in `bin/sign-notarize`).
+```bash
+SIGN_IDENTITY="Developer ID Application: Kyle Parisi (63GMD6U4J2)" \
+NOTARY_PROFILE="bufflehead-notary" ./bin/sign-notarize
+gh release create vX.Y.Z releases/Bufflehead.dmg --title "vX.Y.Z" --notes "..."
+```
+Entitlements live in `packaging/macos/entitlements.plist`; `disable-library-validation`
+is required so the hardened runtime can load DuckDB's downloaded extension dylibs.
+
+**Unsigned DMG (local/dev only — Gatekeeper will block it on other Macs):**
 ```bash
 ./bin/release-dmg
-gh release create vX.Y.Z releases/Bufflehead.dmg --title "vX.Y.Z" --notes "..."
 ```

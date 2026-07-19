@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+      Hardened Runtime entitlements for Developer ID distribution (NOT the App
+      Store). These are permitted for notarized apps; they are what let a
+      hardened-runtime binary load the Godot engine dylib and DuckDB's
+      dynamically-downloaded, third-party-signed extension libraries.
+
+      disable-library-validation: REQUIRED. Bufflehead downloads DuckDB
+      extensions (.duckdb_extension dylibs) at runtime and loads them. Without
+      this, the hardened runtime refuses to load any library not signed by our
+      team, and every extension load fails.
+    -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+
+    <!--
+      allow-unsigned-executable-memory / allow-jit: Godot + some native code
+      paths map executable memory the hardened runtime would otherwise block.
+      Safe to keep for notarization; trim later if a build proves it unneeded.
+    -->
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+</dict>
+</plist>
