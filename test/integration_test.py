@@ -279,6 +279,56 @@ class TestRowDetail:
         assert s["detailWidthRatio"] == ratio_before
 
 
+class TestLeftPane:
+    """Toggling the left pane must collapse the whole sidebar column out of the
+    split (no blank gap), not just hide the inner sidebar content."""
+
+    def test_toggle_collapses_and_restores_sidebar_column(self):
+        close_all_tabs()
+        open_file(SAMPLE)
+
+        s = state()
+        assert s["leftPaneVisible"] is True
+        assert s["sidebarColVisible"] is True, "sidebar column should start visible"
+
+        # Hide: the sidebar column (the split's left child) must become invisible
+        # so the HSplitContainer reclaims the space — the bug left it visible,
+        # producing a blank gap.
+        assert post("toggle-left-pane")["ok"] is True
+        wait()
+        s = state()
+        assert s["leftPaneVisible"] is False
+        assert s["sidebarColVisible"] is False, (
+            "hiding the left pane must collapse the sidebar column, not leave a blank gap"
+        )
+
+        # Show again: fully restored.
+        assert post("toggle-left-pane")["ok"] is True
+        wait()
+        s = state()
+        assert s["leftPaneVisible"] is True
+        assert s["sidebarColVisible"] is True
+
+    def test_render_keeps_pane_hidden_across_tab_switch(self):
+        """The hidden state is model state, so a re-render (e.g. opening another
+        tab) must not resurrect the sidebar column."""
+        close_all_tabs()
+        open_file(SAMPLE)
+        post("toggle-left-pane")
+        wait()
+        assert state()["sidebarColVisible"] is False
+
+        # Opening a second file re-renders; the pane must stay hidden.
+        open_file(CITIES)
+        s = state()
+        assert s["leftPaneVisible"] is False
+        assert s["sidebarColVisible"] is False
+
+        # Restore for later tests.
+        post("toggle-left-pane")
+        wait()
+
+
 class TestFileFormats:
     def test_csv(self):
         close_all_tabs()
