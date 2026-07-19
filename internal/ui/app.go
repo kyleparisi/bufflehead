@@ -2525,6 +2525,17 @@ func (a *App) updateCachedState() {
 
 func (a *App) newWindow() {
 	aw := createSecondaryWindow(a.Duck, a.history, func() { a.newWindow() })
+	// A Window.New() secondary window defaults to content_scale_size {0,0}; on a
+	// HiDPI (Retina) display that makes its UI render tiny compared to the root
+	// window, which inherits the project viewport as its content-scale base.
+	// Copy the root window's content-scale settings so new windows match it.
+	if a.mainWin != nil {
+		rw := a.mainWin.window
+		aw.window.SetContentScaleMode(rw.ContentScaleMode())
+		aw.window.SetContentScaleAspect(rw.ContentScaleAspect())
+		aw.window.SetContentScaleSize(rw.ContentScaleSize())
+		aw.window.SetContentScaleFactor(rw.ContentScaleFactor())
+	}
 	aw.onReLogin = func() { a.openGatewayScreen() }
 	aw.onNewConnection = func() { a.openGatewayScreen() }
 	if a.ControlServer != nil {
