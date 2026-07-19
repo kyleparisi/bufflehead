@@ -26,6 +26,8 @@ import (
 	"graphics.gd/classdb/MarginContainer"
 	"graphics.gd/classdb/PanelContainer"
 	"graphics.gd/classdb/PopupMenu"
+	"graphics.gd/classdb/GUI"
+	"graphics.gd/classdb/PopupPanel"
 	"graphics.gd/classdb/TabBar"
 	"graphics.gd/classdb/VBoxContainer"
 	"graphics.gd/classdb/VSplitContainer"
@@ -48,6 +50,16 @@ type Connection struct {
 	// This is authoritative model state, not inferred from node selection.
 	activeTabID uint64
 	Gateway     *GatewayConnection // nil for local connections
+}
+
+// ConnKey returns a stable identifier used to scope query history to this
+// connection. It must stay stable across sessions, so gateways key off the saved
+// config name + current database rather than the dynamic local tunnel port.
+func (c *Connection) ConnKey() string {
+	if c.Gateway != nil {
+		return "gateway:" + c.Gateway.Config.Name + "/" + c.Gateway.Config.DBName
+	}
+	return c.Path
 }
 
 // GatewayConnection holds the gateway-specific state for a remote connection.
@@ -1386,7 +1398,9 @@ func (w *AppWindow) setSidebarView(ts *tabState, v sidebarView) {
 	switch v {
 	case viewHistory:
 		if w.history != nil {
-			ts.historyPanel.SetHistory(w.history.All())
+			// Scope history to this tab's connection so each connection shows
+			// only its own queries rather than a shared global list.
+			ts.historyPanel.SetHistory(w.history.AllFor(w.connKeyForTab(ts)))
 		}
 	case viewExtensions:
 		w.loadExtensions(ts)
@@ -1555,39 +1569,154 @@ func (w *AppWindow) presentDatabaseSwitcher(res *dbListResult) {
 		return
 	}
 
-	popup := PopupMenu.New()
-	// Map menu item id → database name (skip disabled/system + current).
-	idToName := map[int]string{}
-	for i, d := range res.dbs {
-		label := d.Name
-		if d.IsSystem {
-			label += "   (system)"
-		}
-		popup.AddItem(label)
-		popup.SetItemAsCheckable(i, true)
-		if d.Name == res.current {
-			popup.SetItemChecked(i, true)
-			popup.SetItemDisabled(i, true) // already here
-		} else {
-			idToName[i] = d.Name
-		}
-	}
-
 	connIdx := res.connIdx
-	popup.OnIdPressed(func(id int) {
-		if name, ok := idToName[id]; ok {
-			w.switchDatabase(connIdx, name)
-		}
-		popup.AsNode().QueueFree()
-	})
+
+	popup := PopupPanel.New()
+	// A fresh PopupPanel Window defaults to content_scale_size {0,0}, which renders
+	// tiny on HiDPI displays; match the root window so its fonts/metrics scale.
+	if root, ok := rootWindow(); ok {
+		matchContentScale(popup.AsWindow(), root)
+	}
+	popup.AsWindow().AddThemeStyleboxOverride("panel", databasePopoverPanel().AsStyleBox())
+	popup.AsWindow().SetWrapControls(true)
 	popup.AsWindow().OnCloseRequested(func() {
 		popup.AsNode().QueueFree()
 	})
+
+	content := buildDatabaseSwitcher(res.dbs, res.current,
+		func(name string) {
+			w.switchDatabase(connIdx, name)
+			popup.AsNode().QueueFree()
+		},
+		func() {
+			popup.AsNode().QueueFree()
+			w.showDatabaseSwitcher(connIdx)
+		},
+	)
+	popup.AsNode().AddChild(content.AsNode())
 
 	w.titleBar.AsNode().AddChild(popup.AsNode())
 	popup.AsWindow().SetPosition(DisplayServer.MouseGetPosition())
 	popup.AsWindow().Popup()
 	w.statusBar.SetStatus("")
+}
+
+// buildDatabaseSwitcher builds the "Switch Database" popover content (header +
+// count badge, dividers, database rows, and a refresh footer) from a database
+// list. It is decoupled from any window/connection so both the live app popover
+// and the UI lab can render it. onSwitch is called with the chosen database name
+// when a switchable row is pressed; onRefresh when the footer is pressed.
+func buildDatabaseSwitcher(dbs []db.DatabaseInfo, current string, onSwitch func(name string), onRefresh func()) VBoxContainer.Instance {
+	content := VBoxContainer.New()
+	content.AsControl().AddThemeConstantOverride("separation", 0)
+	content.AsControl().SetCustomMinimumSize(Vector2.New(scaled(232), 0))
+
+	// ── Header: "SWITCH DATABASE" + count badge ─────────────────────────
+	header := HBoxContainer.New()
+	header.AsControl().AddThemeConstantOverride("separation", 8)
+
+	title := Label.New()
+	title.SetText("SWITCH DATABASE")
+	title.AsControl().AddThemeColorOverride("font_color", colorTextMuted)
+	title.AsControl().AddThemeFontSizeOverride("font_size", fontSize(popoverHeaderFont))
+	title.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+
+	badge := PanelContainer.New()
+	badgeSB := makeStyleBox(colorBtnHover, 4, 0, colorBorder)
+	badgeSB.AsStyleBox().SetContentMarginLeft(6)
+	badgeSB.AsStyleBox().SetContentMarginRight(6)
+	badgeSB.AsStyleBox().SetContentMarginTop(1)
+	badgeSB.AsStyleBox().SetContentMarginBottom(1)
+	badge.AsControl().AddThemeStyleboxOverride("panel", badgeSB.AsStyleBox())
+	badge.AsControl().SetSizeFlagsVertical(Control.SizeShrinkCenter)
+	badgeLabel := Label.New()
+	badgeLabel.SetText(fmt.Sprintf("%d", len(dbs)))
+	badgeLabel.AsControl().AddThemeColorOverride("font_color", colorTextMuted)
+	badgeLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(popoverBadgeFont))
+	badge.AsNode().AddChild(badgeLabel.AsNode())
+
+	header.AsNode().AddChild(title.AsNode())
+	header.AsNode().AddChild(badge.AsNode())
+
+	headerMargin := MarginContainer.New()
+	headerMargin.AsControl().AddThemeConstantOverride("margin_left", 12)
+	headerMargin.AsControl().AddThemeConstantOverride("margin_right", 12)
+	headerMargin.AsControl().AddThemeConstantOverride("margin_top", 8)
+	headerMargin.AsControl().AddThemeConstantOverride("margin_bottom", 8)
+	headerMargin.AsNode().AddChild(header.AsNode())
+
+	// hDivider builds a full-width 1px horizontal rule.
+	hDivider := func() PanelContainer.Instance {
+		d := PanelContainer.New()
+		d.AsControl().SetCustomMinimumSize(Vector2.New(0, scaled(1)))
+		d.AsControl().AddThemeStyleboxOverride("panel", makeStyleBox(colorBorder, 0, 0, colorBorder).AsStyleBox())
+		return d
+	}
+
+	// ── Database rows ───────────────────────────────────────────────────
+	rows := VBoxContainer.New()
+	rows.AsControl().AddThemeConstantOverride("separation", 0)
+	for _, d := range dbs {
+		btn := Button.New()
+		btn.SetText(d.Name)
+		btn.SetAlignment(GUI.HorizontalAlignmentLeft)
+		btn.SetIconAlignment(GUI.HorizontalAlignmentRight)
+		btn.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+		switch {
+		case d.Name == current:
+			btn.SetIcon(loadSVGTexture(svgCheckCircle))
+			applyDbRowCurrent(btn.AsControl())
+			btn.AsBaseButton().SetDisabled(true)
+			btn.AsControl().SetTooltipText("Current database")
+		case d.IsSystem:
+			btn.SetIcon(loadSVGTexture(svgLock))
+			applyDbRowSystem(btn.AsControl())
+			btn.AsBaseButton().SetDisabled(true)
+			btn.AsControl().SetTooltipText("System database")
+		default:
+			applyDbRowSelectable(btn.AsControl())
+			dbName := d.Name
+			btn.AsBaseButton().OnPressed(func() {
+				if onSwitch != nil {
+					onSwitch(dbName)
+				}
+			})
+		}
+		rows.AsNode().AddChild(btn.AsNode())
+	}
+
+	rowsMargin := MarginContainer.New()
+	rowsMargin.AsControl().AddThemeConstantOverride("margin_top", 4)
+	rowsMargin.AsControl().AddThemeConstantOverride("margin_bottom", 4)
+	rowsMargin.AsNode().AddChild(rows.AsNode())
+
+	// ── Footer: refresh list ────────────────────────────────────────────
+	refresh := Button.New()
+	refresh.SetText("↻  Refresh list")
+	refresh.SetAlignment(GUI.HorizontalAlignmentLeft)
+	applyFooterGhostButton(refresh.AsControl())
+	refresh.AsControl().AddThemeColorOverride("font_color", colorTextMuted)
+	refresh.AsControl().AddThemeFontSizeOverride("font_size", fontSize(popoverFooterFont))
+	refresh.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	refresh.AsBaseButton().OnPressed(func() {
+		if onRefresh != nil {
+			onRefresh()
+		}
+	})
+	footerMargin := MarginContainer.New()
+	footerMargin.AsControl().AddThemeConstantOverride("margin_left", 6)
+	footerMargin.AsControl().AddThemeConstantOverride("margin_right", 6)
+	footerMargin.AsControl().AddThemeConstantOverride("margin_top", 2)
+	footerMargin.AsControl().AddThemeConstantOverride("margin_bottom", 4)
+	footerMargin.AsNode().AddChild(refresh.AsNode())
+
+	// ── Assemble ────────────────────────────────────────────────────────
+	content.AsNode().AddChild(headerMargin.AsNode())
+	content.AsNode().AddChild(hDivider().AsNode())
+	content.AsNode().AddChild(rowsMargin.AsNode())
+	content.AsNode().AddChild(hDivider().AsNode())
+	content.AsNode().AddChild(footerMargin.AsNode())
+	return content
 }
 
 // showNewConnectionMenu opens the "+" rail menu offering the two ways to create
@@ -1984,6 +2113,15 @@ func buildAIPrompt(entry models.GatewayEntry, tables []db.TableInfo, controlAddr
 	return b.String()
 }
 
+// connKeyForTab returns the stable connection key for a tab's connection, used
+// to scope query history. Empty if the tab isn't bound to a valid connection.
+func (w *AppWindow) connKeyForTab(ts *tabState) string {
+	if ts != nil && ts.connIdx >= 0 && ts.connIdx < len(w.connections) {
+		return w.connections[ts.connIdx].ConnKey()
+	}
+	return ""
+}
+
 // handleQueryResult applies a query result to the UI.
 func (w *AppWindow) handleQueryResult(res DBResult) {
 	ts := w.findTab(res.TabID)
@@ -2005,6 +2143,7 @@ func (w *AppWindow) handleQueryResult(res DBResult) {
 			if sql := res.UserSQL; sql != "" {
 				w.history.Add(models.HistoryEntry{
 					SQL:        sql,
+					Conn:       w.connKeyForTab(ts),
 					FilePath:   ts.State.FilePath,
 					Timestamp:  time.Now(),
 					DurationMs: res.Elapsed.Milliseconds(),
@@ -2028,6 +2167,7 @@ func (w *AppWindow) handleQueryResult(res DBResult) {
 			// Store the user's query, not the internal VirtualSQL wrapper.
 			w.history.Add(models.HistoryEntry{
 				SQL:        res.UserSQL,
+				Conn:       w.connKeyForTab(ts),
 				FilePath:   ts.State.FilePath,
 				Timestamp:  time.Now(),
 				RowCount:   result.Total,

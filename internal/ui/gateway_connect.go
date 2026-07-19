@@ -460,15 +460,19 @@ func (w *AppWindow) handleReconnectResult(res DBResult) {
 			w.statusBar.SetStatus("Reconnect failed: " + conn.Name)
 		}
 
-		// Show step detail in the grid when the user triggered this, or on any
-		// failure so the breakdown is always visible.
+		// Record the step-by-step detail in the console so it's available without
+		// clobbering the data grid — a successful reconnect/database switch is not
+		// an error and shouldn't render as one. Only a genuine failure escalates to
+		// the data grid (and pops the console open), where the breakdown is prominent.
 		if uiInitiated || !overallOK {
 			detail := formatReconnectSteps(conn.Name, overallOK, oc.Steps)
-			if ts := w.currentTab(); ts != nil && ts.connIdx == idx {
-				ts.dataGrid.ShowError(detail)
-			}
 			if !overallOK {
+				if ts := w.currentTab(); ts != nil && ts.connIdx == idx {
+					ts.dataGrid.ShowError(detail)
+				}
 				w.logConsole(detail)
+			} else {
+				LogConsole(detail)
 			}
 		}
 	}
