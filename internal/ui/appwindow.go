@@ -2,6 +2,8 @@ package ui
 
 import (
 	"fmt"
+	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -997,12 +999,19 @@ func (w *AppWindow) render() {
 			w.titleBar.SetAIPrompt(buildAIPrompt(conn.Gateway.Config, conn.Tables, w.controlAddr))
 			w.titleBar.SetReconnectVisible(true)
 		} else {
-			// Local connection: a loaded file tab gets a prompt describing how to
-			// query it over the control API. Reconnect is gateway-only.
+			// Local connection: a loaded file or database gets a prompt describing
+			// how to query it over the control API. Reconnect is gateway-only.
 			w.titleBar.SetReconnectVisible(false)
-			if active.State.FilePath != "" {
+			switch {
+			case active.State.FilePath != "":
+				// A flat data file (CSV/Parquet/…) in the in-memory connection:
+				// queried by its single-quoted path.
 				w.titleBar.SetAIPrompt(buildFileAIPrompt(active.State.FilePath, conn.Name, active.State.Schema, w.controlAddr))
-			} else {
+			case conn.Path != "" && conn.Path != ":memory:":
+				// A database file (DuckDB/SQLite) opened as its own connection:
+				// queried by table name.
+				w.titleBar.SetAIPrompt(buildDBAIPrompt(conn.Name, conn.Path, conn.Tables, w.controlAddr))
+			default:
 				w.titleBar.SetAIPrompt("")
 			}
 		}
@@ -1142,11 +1151,38 @@ func (w *AppWindow) isDuckDBFile(path string) bool {
 	return false
 }
 
+// sqliteMagic is the 16-byte header every SQLite database file begins with.
+const sqliteMagic = "SQLite format 3\x00"
+
+// isSQLiteFile reports whether path is a SQLite database, detected by its file
+// header rather than extension — sqlite files use .sqlite, .db, and others, and
+// a .db could equally be DuckDB, so the magic bytes are the reliable signal.
+func isSQLiteFile(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	hdr := make([]byte, len(sqliteMagic))
+	if _, err := io.ReadFull(f, hdr); err != nil {
+		return false
+	}
+	return string(hdr) == sqliteMagic
+}
+
 func (w *AppWindow) onFileSelected(path string) {
 	w.onFileSelectedWithCmd(path, nil)
 }
 
 func (w *AppWindow) onFileSelectedWithCmd(path string, cmd *control.Command) {
+	// Check the SQLite header before the extension test: a SQLite database
+	// needs to be ATTACHed via the sqlite extension, not opened natively or
+	// read as a data file, and it may carry a .db extension that would
+	// otherwise be routed to the native DuckDB opener.
+	if isSQLiteFile(path) {
+		w.onSQLiteOpenedWithCmd(path, cmd)
+		return
+	}
 	if w.isDuckDBFile(path) {
 		w.onDatabaseOpenedWithCmd(path, cmd)
 		return
@@ -1245,6 +1281,16 @@ func (w *AppWindow) onDatabaseOpenedWithCmd(path string, cmd *control.Command) {
 	tid := nextTabID
 	nextTabID++
 	RunOpenDB(path, tid, 0, cmd, w.results)
+}
+
+// onSQLiteOpenedWithCmd opens a SQLite file as a new connection. It mirrors
+// onDatabaseOpenedWithCmd but attaches via the sqlite extension; the result
+// flows through the same ReqOpenDB path in handleOpenDBResult.
+func (w *AppWindow) onSQLiteOpenedWithCmd(path string, cmd *control.Command) {
+	w.statusBar.SetStatus("Opening database…")
+	tid := nextTabID
+	nextTabID++
+	RunOpenSQLite(path, tid, 0, cmd, w.results)
 }
 
 // handleOpenDBResult processes the result of an async OpenDB operation.
@@ -1764,7 +1810,7 @@ func (w *AppWindow) showOpenFileDialog() {
 		"",
 		false,
 		DisplayServer.FileDialogModeOpenFile,
-		[]string{"*.parquet,*.duckdb,*.db,*.ddb,*.csv,*.json,*.tsv ; Data Files"},
+		[]string{"*.parquet,*.duckdb,*.db,*.ddb,*.sqlite,*.sqlite3,*.csv,*.json,*.tsv ; Data Files"},
 		func(status bool, selectedPaths []string, selectedFilterIndex int) {
 			if status && len(selectedPaths) > 0 {
 				w.onFileSelected(selectedPaths[0])
@@ -2139,6 +2185,44 @@ func buildFileAIPrompt(filePath, connName string, schema []db.Column, controlAdd
 		b.WriteString("\nSchema:\n")
 		for _, c := range schema {
 			b.WriteString(fmt.Sprintf("- %s %s\n", c.Name, c.DataType))
+		}
+	}
+
+	return b.String()
+}
+
+// buildDBAIPrompt produces an AI prompt for a local database file (DuckDB or
+// SQLite) opened as its own connection. Unlike a flat data file, it's queried by
+// table name through the /sql control endpoint (naming the connection), so the
+// prompt lists the connection's tables/views and their columns.
+func buildDBAIPrompt(connName, dbPath string, tables []db.TableInfo, controlAddr string) string {
+	var b strings.Builder
+	b.WriteString("I have a local database open in Bufflehead that you can query with SQL (DuckDB engine).\n")
+	b.WriteString(fmt.Sprintf("Database file: %s\n", dbPath))
+	b.WriteString("\nRun queries via HTTP (no auth needed, Bufflehead manages the connection).\n")
+	b.WriteString(fmt.Sprintf("Query tables by name, naming the connection in the request:\n"))
+	b.WriteString(fmt.Sprintf("  curl -s -X POST http://%s/sql --data-raw \"{\\\"sql\\\":\\\"SELECT * FROM <table> LIMIT 10\\\",\\\"connection\\\":\\\"%s\\\"}\"\n", controlAddr, connName))
+	b.WriteString("\nResults are limited to 100 rows by default. Queries time out after 30 seconds.\n")
+	b.WriteString("Response format: {\"columns\":[...],\"rows\":[[...],...],\"total\":N}\n")
+
+	if len(tables) > 0 {
+		b.WriteString("\nSchema:\n")
+		for _, t := range tables {
+			prefix := "- " + t.Name
+			if strings.EqualFold(t.Type, "view") {
+				prefix += " (view)"
+			}
+			// Columns may be unavailable (e.g. DuckDB's sqlite extension doesn't
+			// report view columns) — omit the parenthesised list in that case.
+			var cols []string
+			for _, c := range t.Columns {
+				cols = append(cols, fmt.Sprintf("%s %s", c.Name, c.DataType))
+			}
+			if len(cols) > 0 {
+				b.WriteString(fmt.Sprintf("%s (%s)\n", prefix, strings.Join(cols, ", ")))
+			} else {
+				b.WriteString(prefix + "\n")
+			}
 		}
 	}
 

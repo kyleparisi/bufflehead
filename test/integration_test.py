@@ -21,6 +21,7 @@ JSONF = str(TESTDATA / "events.json")
 TSV = str(TESTDATA / "metrics.tsv")
 CORRUPT = str(TESTDATA / "corrupted.parquet")
 DUCKDB = str(TESTDATA / "test.duckdb")
+SQLITE = str(TESTDATA / "test.sqlite")
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────
@@ -334,6 +335,49 @@ class TestDuckDB:
         assert "name" in s["columns"]
 
     def test_query_view(self):
+        post("query", {"sql": "SELECT * FROM user_orders"})
+        wait()
+        s = state()
+        assert s["rowCount"] == 3
+        assert "amount" in s["columns"]
+
+
+class TestSQLite:
+    """SQLite files are detected by their header and opened as a connection via
+    DuckDB's sqlite extension (ATTACH ... TYPE SQLITE), not read as a flat data
+    file — so their tables and views are queryable like a DuckDB database."""
+
+    def test_open_sqlite_creates_connection(self):
+        close_all_connections()
+        close_all_tabs()
+        result = open_file(SQLITE)
+        assert result["ok"] is True
+        s = state()
+        # Opened as its own DB connection (index 0 is the in-memory DuckDB).
+        assert s["connectionCount"] == 2
+        assert s["activeConnIdx"] == 1
+        assert s["activeTabTitle"] == "test.sqlite"
+        assert s["schemaTableCount"] == 3  # users, orders, user_orders
+
+    def test_sqlite_shows_ai_button(self):
+        """The 'Ask AI' button is available for SQLite, with a DB-style prompt
+        that queries by table name (not by file path) and lists the schema."""
+        s = state()
+        assert s["aiPromptVisible"] is True
+        prompt = s["aiPrompt"]
+        assert "test.sqlite" in prompt            # connection name for /sql
+        assert "SELECT * FROM <table>" in prompt  # query-by-table guidance
+        assert "user_orders (view)" in prompt     # view listed in schema
+        assert "users" in prompt
+
+    def test_query_sqlite_table(self):
+        post("query", {"sql": "SELECT * FROM users"})
+        wait()
+        s = state()
+        assert s["rowCount"] == 3
+        assert "name" in s["columns"]
+
+    def test_query_sqlite_view(self):
         post("query", {"sql": "SELECT * FROM user_orders"})
         wait()
         s = state()
