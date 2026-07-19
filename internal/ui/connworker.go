@@ -400,8 +400,22 @@ func (cw *ConnWorker) handleOpenFile(req DBRequest) {
 // sending the result to the provided results channel.
 // This is used for .duckdb files where no worker exists yet.
 func RunOpenDB(dbPath string, tabID, generation uint64, cmd *control.Command, results chan DBResult) {
+	runOpenDBWith(db.OpenDB, dbPath, tabID, generation, cmd, results)
+}
+
+// RunOpenSQLite is the SQLite counterpart to RunOpenDB: it attaches the file
+// through DuckDB's sqlite extension. The result flows through the same
+// ReqOpenDB path, so the connection is created identically.
+func RunOpenSQLite(dbPath string, tabID, generation uint64, cmd *control.Command, results chan DBResult) {
+	runOpenDBWith(db.OpenSQLite, dbPath, tabID, generation, cmd, results)
+}
+
+// runOpenDBWith opens a database file with the given opener, lists its tables
+// and per-table schemas, and reports the result. Shared by RunOpenDB and
+// RunOpenSQLite, which differ only in how the file is opened.
+func runOpenDBWith(open func(string) (*db.DB, error), dbPath string, tabID, generation uint64, cmd *control.Command, results chan DBResult) {
 	go func() {
-		dbConn, err := db.OpenDB(dbPath)
+		dbConn, err := open(dbPath)
 		if err != nil {
 			results <- DBResult{
 				Kind:       ReqOpenDB,

@@ -325,7 +325,13 @@ func (t *TitleBar) SetAIPrompt(prompt string) {
 	t.aiPrompt = prompt
 	t.copyBtn.AsCanvasItem().SetVisible(prompt != "")
 	t.setAIButtonDefault()
-	t.refreshBtn.AsCanvasItem().SetVisible(prompt != "")
+}
+
+// SetReconnectVisible toggles the reconnect (↻) button. It is gateway-only —
+// local file connections have nothing to reconnect — so it's controlled
+// separately from the AI prompt button.
+func (t *TitleBar) SetReconnectVisible(v bool) {
+	t.refreshBtn.AsCanvasItem().SetVisible(v)
 }
 
 func (t *TitleBar) SetFileInfo(path string) {
@@ -351,6 +357,8 @@ func (t *TitleBar) SetFileInfo(path string) {
 		ext = strings.ToLower(name[dot:])
 	}
 	switch ext {
+	case ".sqlite", ".sqlite3":
+		t.infoLabel.SetText("SQLite  ›  " + name)
 	case ".duckdb", ".db", ".ddb":
 		t.infoLabel.SetText("DuckDB  ›  " + name)
 	case ".parquet":
@@ -2600,6 +2608,11 @@ func (a *App) updateCachedState() {
 		}
 	}
 	state["detailToggleActive"] = w.statusBar.rightPaneVisible
+	// AI ("Ask AI") button: visible only when a prompt is set for the active
+	// connection. Exposed so tests can verify it appears for file, DuckDB, and
+	// SQLite connections.
+	state["aiPromptVisible"] = w.titleBar.copyBtn.AsCanvasItem().Visible()
+	state["aiPrompt"] = w.titleBar.aiPrompt
 	if s := w.currentState(); s != nil {
 		state["filePath"] = s.FilePath
 		state["userSQL"] = s.UserSQL

@@ -450,6 +450,7 @@ func (w *AppWindow) handleReconnectResult(res DBResult) {
 				}
 				if idx == w.activeConnIdx {
 					w.titleBar.SetAIPrompt(buildAIPrompt(cfg, conn.Tables, w.controlAddr))
+					w.titleBar.SetReconnectVisible(true)
 					w.titleBar.SetConnectionInfo("PostgreSQL", conn.Name, cfg.DBName)
 				}
 			}
