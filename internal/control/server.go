@@ -260,6 +260,13 @@ func buildMux(s *Server) *http.ServeMux {
 		s.handleCommand(w, r, "show_extensions")
 	})
 
+	// Toggle the left pane (sidebar column + connection rail) — same as the
+	// status-bar "◧" button. Used to verify the pane collapses without leaving
+	// a blank gap in the split.
+	mux.HandleFunc("POST /toggle-left-pane", func(w http.ResponseWriter, r *http.Request) {
+		s.handleCommand(w, r, "toggle_left_pane")
+	})
+
 	// Exit the gateway/new-connection screen (same as the screen's Close button).
 	mux.HandleFunc("POST /close-gateway", func(w http.ResponseWriter, r *http.Request) {
 		s.handleCommand(w, r, "close_gateway")

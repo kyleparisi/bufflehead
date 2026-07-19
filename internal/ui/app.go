@@ -2559,6 +2559,12 @@ func (a *App) updateCachedState() {
 	}
 	state["activeConnIdx"] = w.activeConnIdx
 	state["visibleTabCount"] = w.tabBar.TabCount()
+	// Left-pane (sidebar column) projection. leftPaneVisible is the model bit;
+	// sidebarColVisible is the actual split child — they must agree, and when
+	// hidden the column collapses so the split leaves no blank gap.
+	state["leftPaneVisible"] = !w.leftPaneHidden
+	state["sidebarColVisible"] = w.sidebarCol.AsCanvasItem().Visible()
+	state["connRailVisible"] = w.connRailWrap.AsCanvasItem().Visible()
 	// Ordered tabIDs of the visible (connection-scoped) tab bar, plus the
 	// active tab's position within it, so tests can verify ordering/selection.
 	visIDs := make([]uint64, 0, len(w.tabs))
@@ -3272,6 +3278,12 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 			return
 		}
 		w.showExtensionsSidebar(ts)
+		cmd.Respond(control.Result{OK: true})
+
+	case "toggle_left_pane":
+		if w.statusBar.OnToggleLeftPane != nil {
+			w.statusBar.OnToggleLeftPane()
+		}
 		cmd.Respond(control.Result{OK: true})
 
 	case "close_gateway":

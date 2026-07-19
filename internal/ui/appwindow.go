@@ -96,6 +96,12 @@ type AppWindow struct {
 	consoleWrap PanelContainer.Instance
 	consoleOpen bool
 
+	// leftPaneHidden is window-level state: when true, the whole left pane (the
+	// sidebar column + connection rail) is collapsed out of the split. render()
+	// projects it — hiding the split's sidebar child so the HSplitContainer
+	// reclaims the space instead of leaving a blank gap.
+	leftPaneHidden bool
+
 	// Connection rail
 	connRail      VBoxContainer.Instance
 	connList      VBoxContainer.Instance // holds the connection buttons (mem + added)
@@ -314,16 +320,11 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 		}
 	}
 	w.statusBar.OnToggleLeftPane = func() {
-		ts := w.currentTab()
-		if ts == nil {
-			return
-		}
-		visible := ts.sidebarWrap.AsCanvasItem().Visible()
-		ts.sidebarWrap.AsCanvasItem().SetVisible(!visible)
-		// Also toggle connection rail
-		if len(w.connections) > 0 {
-			w.connRailWrap.AsCanvasItem().SetVisible(!visible)
-		}
+		// Event mutates state only; render() collapses/restores the whole left
+		// pane (sidebar column collapses out of the split so no blank gap is
+		// left behind — the earlier bug hid only the inner sidebar content).
+		w.leftPaneHidden = !w.leftPaneHidden
+		w.render()
 	}
 	w.statusBar.OnToggleRightPane = func() {
 		ts := w.currentTab()
@@ -935,6 +936,13 @@ func (w *AppWindow) render() {
 		ts.outerWrap.AsCanvasItem().SetVisible(show)
 	}
 
+	// Left pane: collapse the whole sidebar column (the split's left child) and
+	// the connection rail when hidden. Hiding the split child makes the
+	// HSplitContainer reclaim the space rather than leaving a blank gap. The
+	// rail only shows when there's at least one connection to list.
+	w.sidebarCol.AsCanvasItem().SetVisible(!w.leftPaneHidden)
+	w.connRailWrap.AsCanvasItem().SetVisible(!w.leftPaneHidden && len(w.connections) > 0)
+
 	// Rebuild the visible TabBar from state (filtered to the active connection),
 	// keying each bar tab to its tabID. Suppress the signals this emits.
 	w.suppressTabSignals = true
@@ -1290,7 +1298,8 @@ func (w *AppWindow) handleOpenDBResult(res DBResult) {
 	dbIdx := len(w.connections)
 	w.connections = append(w.connections, conn)
 	w.connList.AsNode().AddChild(btn.AsNode())
-	w.connRailWrap.AsCanvasItem().SetVisible(true)
+	// Rail visibility is projected by render() from state (connection count +
+	// leftPaneHidden); newTabForConnection below renders.
 
 	w.wireConnButton(btn, dbIdx)
 
@@ -1945,7 +1954,8 @@ func (w *AppWindow) handleOpenGatewayResult(res DBResult) {
 	gwIdx := len(w.connections)
 	w.connections = append(w.connections, conn)
 	w.connList.AsNode().AddChild(btn.AsNode())
-	w.connRailWrap.AsCanvasItem().SetVisible(true)
+	// Rail visibility is projected by render() from state; newTabForConnection
+	// below renders.
 
 	w.wireConnButton(btn, gwIdx)
 
