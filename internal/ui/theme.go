@@ -20,6 +20,19 @@ func fontSize(base int) int {
 // navFontBase is the base size for all navigation / chrome text.
 const navFontBase = 10
 
+// Database switcher popover + breadcrumb tunables. Rendered at true pixel size
+// now that popup windows inherit the root's HiDPI content scale.
+const (
+	popoverRowFont    = 14  // database name rows
+	popoverHeaderFont = 12  // "SWITCH DATABASE" caption
+	popoverFooterFont = 13  // "Refresh list"
+	popoverBadgeFont  = 11  // count badge
+	popoverRowPadX    = 12  // row horizontal padding
+	popoverRowPadY    = 6   // row vertical padding
+	pillMaxWidth      = 360 // connection breadcrumb max width
+	pillLineHeight    = 17  // breadcrumb line box ≈ 1.5 × 11px font
+)
+
 // scaled returns a layout dimension in logical points.
 func scaled(base float32) float32 {
 	return base
@@ -28,24 +41,24 @@ func scaled(base float32) float32 {
 // Pro-Grade Data System — Modern IDE dark theme with an indigo/lavender primary,
 // green + blue semantic accents, and low-contrast tonal layering (Stitch design tokens).
 var (
-	colorBg         = Color.RGBA{R: 0.0745, G: 0.0745, B: 0.0824, A: 1} // #131315 — surface / background
-	colorBgSidebar  = Color.RGBA{R: 0.1255, G: 0.1216, B: 0.1333, A: 1} // #201F22 — surface-container
-	colorBgDarker   = Color.RGBA{R: 0.0549, G: 0.0549, B: 0.0627, A: 1} // #0E0E10 — surface-container-lowest
-	colorBgPanel    = Color.RGBA{R: 0.1098, G: 0.1059, B: 0.1137, A: 1} // #1C1B1D — surface-container-low
-	colorBgInput    = Color.RGBA{R: 0.1647, G: 0.1647, B: 0.1725, A: 1} // #2A2A2C — surface-container-high
-	colorBgHeader   = Color.RGBA{R: 0.1647, G: 0.1647, B: 0.1725, A: 1} // #2A2A2C — surface-container-high
-	colorRowOdd     = Color.RGBA{R: 0.0745, G: 0.0745, B: 0.0824, A: 1} // #131315 — surface (zebra light)
-	colorRowEven    = Color.RGBA{R: 0.0549, G: 0.0549, B: 0.0627, A: 1} // #0E0E10 — surface-container-lowest (zebra dark)
-	colorBorder     = Color.RGBA{R: 0.2745, G: 0.2706, B: 0.3333, A: 0.5}  // #464555 at 50% — outline-variant
-	colorBorderDim  = Color.RGBA{R: 0.2745, G: 0.2706, B: 0.3333, A: 0.2}  // #464555 at 20% — ghost border
-	colorText       = Color.RGBA{R: 0.898, G: 0.8824, B: 0.8941, A: 1}  // #E5E1E4 — on-surface
-	colorTextBright = Color.RGBA{R: 1.0, G: 1.0, B: 1.0, A: 1}          // #FFFFFF
-	colorTextDim    = Color.RGBA{R: 0.5686, G: 0.5608, B: 0.6314, A: 1} // #918FA1 — outline
-	colorTextMuted  = Color.RGBA{R: 0.7804, G: 0.7686, B: 0.8471, A: 1} // #C7C4D8 — on-surface-variant
-	colorAccent     = Color.RGBA{R: 0.7647, G: 0.7529, B: 1.0, A: 1}    // #C3C0FF — primary
-	colorSelected   = Color.RGBA{R: 0.3098, G: 0.2745, B: 0.898, A: 1}  // #4F46E5 — primary-container (indigo)
-	colorBtnNormal  = Color.RGBA{R: 0.1647, G: 0.1647, B: 0.1725, A: 1} // #2A2A2C — surface-container-high
-	colorBtnHover   = Color.RGBA{R: 0.2078, G: 0.2039, B: 0.2157, A: 1} // #353437 — surface-container-highest
+	colorBg         = Color.RGBA{R: 0.0745, G: 0.0745, B: 0.0824, A: 1}   // #131315 — surface / background
+	colorBgSidebar  = Color.RGBA{R: 0.1255, G: 0.1216, B: 0.1333, A: 1}   // #201F22 — surface-container
+	colorBgDarker   = Color.RGBA{R: 0.0549, G: 0.0549, B: 0.0627, A: 1}   // #0E0E10 — surface-container-lowest
+	colorBgPanel    = Color.RGBA{R: 0.1098, G: 0.1059, B: 0.1137, A: 1}   // #1C1B1D — surface-container-low
+	colorBgInput    = Color.RGBA{R: 0.1647, G: 0.1647, B: 0.1725, A: 1}   // #2A2A2C — surface-container-high
+	colorBgHeader   = Color.RGBA{R: 0.1647, G: 0.1647, B: 0.1725, A: 1}   // #2A2A2C — surface-container-high
+	colorRowOdd     = Color.RGBA{R: 0.0745, G: 0.0745, B: 0.0824, A: 1}   // #131315 — surface (zebra light)
+	colorRowEven    = Color.RGBA{R: 0.0549, G: 0.0549, B: 0.0627, A: 1}   // #0E0E10 — surface-container-lowest (zebra dark)
+	colorBorder     = Color.RGBA{R: 0.2745, G: 0.2706, B: 0.3333, A: 0.5} // #464555 at 50% — outline-variant
+	colorBorderDim  = Color.RGBA{R: 0.2745, G: 0.2706, B: 0.3333, A: 0.2} // #464555 at 20% — ghost border
+	colorText       = Color.RGBA{R: 0.898, G: 0.8824, B: 0.8941, A: 1}    // #E5E1E4 — on-surface
+	colorTextBright = Color.RGBA{R: 1.0, G: 1.0, B: 1.0, A: 1}            // #FFFFFF
+	colorTextDim    = Color.RGBA{R: 0.5686, G: 0.5608, B: 0.6314, A: 1}   // #918FA1 — outline
+	colorTextMuted  = Color.RGBA{R: 0.7804, G: 0.7686, B: 0.8471, A: 1}   // #C7C4D8 — on-surface-variant
+	colorAccent     = Color.RGBA{R: 0.7647, G: 0.7529, B: 1.0, A: 1}      // #C3C0FF — primary
+	colorSelected   = Color.RGBA{R: 0.3098, G: 0.2745, B: 0.898, A: 1}    // #4F46E5 — primary-container (indigo)
+	colorBtnNormal  = Color.RGBA{R: 0.1647, G: 0.1647, B: 0.1725, A: 1}   // #2A2A2C — surface-container-high
+	colorBtnHover   = Color.RGBA{R: 0.2078, G: 0.2039, B: 0.2157, A: 1}   // #353437 — surface-container-highest
 
 	// SQL syntax highlighting — green keywords, blue strings (matches the design's editor)
 	colorSQLKeyword  = Color.RGBA{R: 0.3059, G: 0.8706, B: 0.6392, A: 1} // #4EDEA3 — tertiary (green)
@@ -224,6 +237,94 @@ func applyConnTileErrorTheme(c Control.Instance) {
 	c.AddThemeColorOverride("font_color", colorTextBright)
 	c.AddThemeColorOverride("font_hover_color", colorTextBright)
 	c.AddThemeFontSizeOverride("font_size", fontSize(11))
+}
+
+// applyBreadcrumbSegmentTheme styles the clickable database segment in the
+// title-bar breadcrumb: mono text with a subtle indigo-tinted background that
+// brightens on hover, signaling it opens the database switcher.
+func applyBreadcrumbSegmentTheme(c Control.Instance) {
+	tint := Color.RGBA{R: 0.3098, G: 0.2745, B: 0.898, A: 0.14}  // indigo @ 14%
+	hover := Color.RGBA{R: 0.3098, G: 0.2745, B: 0.898, A: 0.28} // indigo @ 28%
+	normal := makeStyleBox(tint, 4, 0, tint)
+	normal.AsStyleBox().SetContentMarginLeft(6)
+	normal.AsStyleBox().SetContentMarginRight(6)
+	normal.AsStyleBox().SetContentMarginTop(1)
+	normal.AsStyleBox().SetContentMarginBottom(1)
+	hoverSB := makeStyleBox(hover, 4, 0, hover)
+	hoverSB.AsStyleBox().SetContentMarginLeft(6)
+	hoverSB.AsStyleBox().SetContentMarginRight(6)
+	hoverSB.AsStyleBox().SetContentMarginTop(1)
+	hoverSB.AsStyleBox().SetContentMarginBottom(1)
+	c.AddThemeStyleboxOverride("normal", normal.AsStyleBox())
+	c.AddThemeStyleboxOverride("hover", hoverSB.AsStyleBox())
+	c.AddThemeStyleboxOverride("pressed", hoverSB.AsStyleBox())
+	c.AddThemeColorOverride("font_color", colorText)
+	c.AddThemeColorOverride("font_hover_color", colorTextBright)
+}
+
+// ── Database switcher popover ────────────────────────────────────────────────
+
+// databasePopoverPanel styles the switcher's floating panel — surface-container-high
+// with a soft drop shadow, matching the Stitch "Switch Database" popover.
+func databasePopoverPanel() StyleBoxFlat.Instance {
+	sb := makeStyleBox(colorBgInput, 8, 1, colorBorder)
+	sb.SetShadowColor(Color.RGBA{R: 0, G: 0, B: 0, A: 0.5})
+	sb.SetShadowSize(int(scaled(10)))
+	return sb
+}
+
+// dbRowMargins gives a switcher row its inner padding (live-tunable).
+func dbRowMargins(sb StyleBoxFlat.Instance) {
+	sb.AsStyleBox().SetContentMarginLeft(popoverRowPadX)
+	sb.AsStyleBox().SetContentMarginRight(popoverRowPadX)
+	sb.AsStyleBox().SetContentMarginTop(popoverRowPadY)
+	sb.AsStyleBox().SetContentMarginBottom(popoverRowPadY)
+}
+
+// applyDbRowSelectable styles a switchable database row: transparent at rest,
+// surface-highest on hover.
+func applyDbRowSelectable(c Control.Instance) {
+	normal := makeStyleBox(Color.RGBA{}, 4, 0, colorBorder)
+	dbRowMargins(normal)
+	hover := makeStyleBox(colorBtnHover, 4, 0, colorBorder)
+	dbRowMargins(hover)
+	c.AddThemeStyleboxOverride("normal", normal.AsStyleBox())
+	c.AddThemeStyleboxOverride("hover", hover.AsStyleBox())
+	c.AddThemeStyleboxOverride("pressed", hover.AsStyleBox())
+	c.AddThemeColorOverride("font_color", colorText)
+	c.AddThemeColorOverride("font_hover_color", colorTextBright)
+	c.AddThemeFontOverride("font", monoFont())
+	c.AddThemeFontSizeOverride("font_size", fontSize(popoverRowFont))
+}
+
+// applyDbRowCurrent styles the currently-connected database row: indigo tint with
+// a 3px indigo left accent and lavender text. Disabled (you're already here).
+func applyDbRowCurrent(c Control.Instance) {
+	tint := Color.RGBA{R: 0.3098, G: 0.2745, B: 0.898, A: 0.16} // indigo @ 16%
+	sb := makeStyleBox(tint, 4, 0, colorSelected)
+	sb.SetBorderWidthLeft(3)
+	sb.SetBorderColor(colorSelected)
+	dbRowMargins(sb)
+	for _, state := range []string{"normal", "hover", "pressed", "disabled"} {
+		c.AddThemeStyleboxOverride(state, sb.AsStyleBox())
+	}
+	c.AddThemeColorOverride("font_color", colorAccent)
+	c.AddThemeColorOverride("font_disabled_color", colorAccent)
+	c.AddThemeFontOverride("font", monoFont())
+	c.AddThemeFontSizeOverride("font_size", fontSize(popoverRowFont))
+}
+
+// applyDbRowSystem styles a system/maintenance database row: transparent and dim.
+// Disabled (can't be opened as a working database).
+func applyDbRowSystem(c Control.Instance) {
+	empty := makeStyleBox(Color.RGBA{}, 4, 0, colorBorder)
+	dbRowMargins(empty)
+	c.AddThemeStyleboxOverride("normal", empty.AsStyleBox())
+	c.AddThemeStyleboxOverride("disabled", empty.AsStyleBox())
+	c.AddThemeColorOverride("font_color", colorTextDim)
+	c.AddThemeColorOverride("font_disabled_color", colorTextDim)
+	c.AddThemeFontOverride("font", monoFont())
+	c.AddThemeFontSizeOverride("font_size", fontSize(popoverRowFont))
 }
 
 func applyInputTheme(c Control.Instance) {
@@ -434,6 +535,13 @@ func monoFont() Font.Instance {
 
 // Themed checkbox icons — subtle outlined square when off, indigo fill + white
 // check when on (matches the design's custom checkbox, not Godot's default).
+// svgCheckCircle — indigo filled circle with a white check, marks the current DB
+// in the database switcher.
+const svgCheckCircle = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="#4f46e5"/><path d="M4.6 8.2 L6.9 10.6 L11.6 5.2" fill="none" stroke="#ffffff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`
+
+// svgLock — dim padlock, marks system/maintenance databases that can't be opened.
+const svgLock = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#918fa1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>`
+
 const svgCheckboxOff = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><rect x="1" y="1" width="14" height="14" rx="3" fill="none" stroke="#5a5968" stroke-width="1.5"/></svg>`
 const svgCheckboxOn = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><rect x="1" y="1" width="14" height="14" rx="3" fill="#4f46e5"/><path d="M4.5 8.2 L6.8 10.5 L11.5 5.2" fill="none" stroke="#ffffff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`
 

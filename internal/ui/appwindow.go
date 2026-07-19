@@ -26,6 +26,8 @@ import (
 	"graphics.gd/classdb/MarginContainer"
 	"graphics.gd/classdb/PanelContainer"
 	"graphics.gd/classdb/PopupMenu"
+	"graphics.gd/classdb/GUI"
+	"graphics.gd/classdb/PopupPanel"
 	"graphics.gd/classdb/TabBar"
 	"graphics.gd/classdb/VBoxContainer"
 	"graphics.gd/classdb/VSplitContainer"
@@ -48,6 +50,16 @@ type Connection struct {
 	// This is authoritative model state, not inferred from node selection.
 	activeTabID uint64
 	Gateway     *GatewayConnection // nil for local connections
+}
+
+// ConnKey returns a stable identifier used to scope query history to this
+// connection. It must stay stable across sessions, so gateways key off the saved
+// config name + current database rather than the dynamic local tunnel port.
+func (c *Connection) ConnKey() string {
+	if c.Gateway != nil {
+		return "gateway:" + c.Gateway.Config.Name + "/" + c.Gateway.Config.DBName
+	}
+	return c.Path
 }
 
 // GatewayConnection holds the gateway-specific state for a remote connection.
@@ -76,6 +88,13 @@ type AppWindow struct {
 	sidebarCol   VBoxContainer.Instance // left side of split, holds per-tab sidebars
 	contentCol   VBoxContainer.Instance // right side of split, holds tabbar + per-tab content
 	emptyView    VBoxContainer.Instance
+
+	// Bottom console pane (window-level, collapsible). bodyVSplit wraps the
+	// content area over the console; console visibility is model state.
+	bodyVSplit  VSplitContainer.Instance
+	console     *ConsolePanel
+	consoleWrap PanelContainer.Instance
+	consoleOpen bool
 
 	// Connection rail
 	connRail      VBoxContainer.Instance
@@ -109,6 +128,10 @@ type AppWindow struct {
 	// on the main thread in Process (mirrors the gatewayLoadingMsg pattern).
 	extActionMsg *extActionResult
 	extActionTab *tabState
+
+	// Database switcher: a background goroutine lists databases and posts the
+	// result here; Process drains it on the main thread to show the popup.
+	dbListMsg *dbListResult
 
 	// Control server address for AI prompt
 	controlAddr string
@@ -310,6 +333,10 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 		visible := ts.detailWrap.AsCanvasItem().Visible()
 		ts.detailWrap.AsCanvasItem().SetVisible(!visible)
 	}
+	w.statusBar.OnToggleBottomPane = func() {
+		w.consoleOpen = !w.consoleOpen
+		w.renderConsole()
+	}
 	statusMargin.AsNode().AddChild(w.statusBar.AsNode())
 	statusWrap.AsNode().AddChild(statusMargin.AsNode())
 
@@ -398,9 +425,25 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 	contentHBox.AsNode().AddChild(w.split.AsNode())
 	contentHBox.AsNode().AddChild(w.emptyView.AsNode())
 
+	// Bottom console pane — a window-level VSplit puts the content above a
+	// collapsible console. The console is hidden until toggled from the status
+	// bar (or auto-opened on an error).
+	w.console = new(ConsolePanel)
+	w.consoleWrap = PanelContainer.New()
+	w.consoleWrap.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	w.consoleWrap.AsNode().AddChild(w.console.AsNode())
+	w.consoleWrap.AsCanvasItem().SetVisible(false)
+
+	w.bodyVSplit = VSplitContainer.New()
+	w.bodyVSplit.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	w.bodyVSplit.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
+	w.bodyVSplit.AsSplitContainer().SetSplitOffset(-160) // console ~160px from bottom
+	w.bodyVSplit.AsNode().AddChild(contentHBox.AsNode())
+	w.bodyVSplit.AsNode().AddChild(w.consoleWrap.AsNode())
+
 	// Assemble — tab bar is added per-tab inside rightPanel now
 	outerVBox.AsNode().AddChild(w.titleBar.AsNode())
-	outerVBox.AsNode().AddChild(contentHBox.AsNode())
+	outerVBox.AsNode().AddChild(w.bodyVSplit.AsNode())
 	outerVBox.AsNode().AddChild(statusWrap.AsNode())
 
 	bg.AsNode().AddChild(outerVBox.AsNode())
@@ -440,6 +483,9 @@ func (w *AppWindow) addNewTab() {
 			if ts := w.currentTab(); ts != nil && ts.sqlPanel != nil {
 				ts.sqlPanel.Run()
 			}
+		}
+		w.titleBar.OnPickDatabase = func() {
+			w.showDatabaseSwitcher(w.activeConnIdx)
 		}
 		w.navWired = true
 	}
@@ -862,6 +908,9 @@ func (w *AppWindow) closeTab(idx int) {
 // must not mutate state beyond the w.activeTab cache it derives. See CLAUDE.md
 // "UI Rendering: Treat It As A State Machine".
 func (w *AppWindow) render() {
+	// Bottom console visibility is window-level state, independent of tabs.
+	w.renderConsole()
+
 	// No tabs at all → empty view. Clear the bar so no stale tabs linger.
 	if len(w.tabs) == 0 {
 		w.activeTab = -1
@@ -925,11 +974,18 @@ func (w *AppWindow) render() {
 
 	w.showTabView()
 
-	// Title bar reflects the active tab's file or its connection.
+	// Title bar reflects the active tab's file or its connection. Postgres
+	// connections use the connection breadcrumb (with the clickable database
+	// switcher segment); DuckDB/file tabs use the file breadcrumb.
 	if active.State.FilePath != "" {
 		w.titleBar.SetFileInfo(active.State.FilePath)
 	} else if active.connIdx > 0 && active.connIdx < len(w.connections) {
-		w.titleBar.SetFileInfo(w.connections[active.connIdx].Path)
+		conn := w.connections[active.connIdx]
+		if conn.Gateway != nil {
+			w.titleBar.SetConnectionInfo("PostgreSQL", conn.Name, conn.Gateway.Config.DBName)
+		} else {
+			w.titleBar.SetFileInfo(conn.Path)
+		}
 	} else {
 		w.titleBar.SetFileInfo("")
 	}
@@ -1186,7 +1242,8 @@ func (w *AppWindow) onDatabaseOpenedWithCmd(path string, cmd *control.Command) {
 // handleOpenDBResult processes the result of an async OpenDB operation.
 func (w *AppWindow) handleOpenDBResult(res DBResult) {
 	if res.Err != nil {
-		w.statusBar.SetStatus("Error: " + res.Err.Error())
+		w.statusBar.SetStatus(statusLine("Error: " + res.Err.Error()))
+		w.logConsole("Open error: " + res.Err.Error())
 		if ts := w.currentTab(); ts != nil {
 			ts.dataGrid.ShowError(res.Err.Error())
 		}
@@ -1341,7 +1398,9 @@ func (w *AppWindow) setSidebarView(ts *tabState, v sidebarView) {
 	switch v {
 	case viewHistory:
 		if w.history != nil {
-			ts.historyPanel.SetHistory(w.history.All())
+			// Scope history to this tab's connection so each connection shows
+			// only its own queries rather than a shared global list.
+			ts.historyPanel.SetHistory(w.history.AllFor(w.connKeyForTab(ts)))
 		}
 	case viewExtensions:
 		w.loadExtensions(ts)
@@ -1462,6 +1521,202 @@ func (w *AppWindow) showConnContextMenu(idx int) {
 	w.connRail.AsNode().AddChild(popup.AsNode())
 	popup.AsWindow().SetPosition(DisplayServer.MouseGetPosition())
 	popup.AsWindow().Popup()
+}
+
+// dbListResult carries the outcome of a background database-list query back to
+// the main thread, where the switcher popup is built.
+type dbListResult struct {
+	connIdx int
+	current string
+	dbs     []db.DatabaseInfo
+	err     error
+}
+
+// showDatabaseSwitcher fetches the list of databases on the given connection's
+// server in a background goroutine (a DB query must not run on the main thread),
+// then Process drains the result and pops the switcher menu. Only valid for
+// Postgres connections.
+func (w *AppWindow) showDatabaseSwitcher(idx int) {
+	if idx <= 0 || idx >= len(w.connections) {
+		return
+	}
+	conn := w.connections[idx]
+	if conn.Gateway == nil {
+		return
+	}
+	pg, ok := conn.DB.(*db.PostgresDB)
+	if !ok {
+		return
+	}
+	current := conn.Gateway.Config.DBName
+	w.statusBar.SetStatus("Loading databases…")
+	go func() {
+		dbs, err := pg.Databases()
+		w.dbListMsg = &dbListResult{connIdx: idx, current: current, dbs: dbs, err: err}
+	}()
+}
+
+// presentDatabaseSwitcher builds and shows the switcher PopupMenu from a
+// completed database list. Runs on the main thread (called from Process).
+func (w *AppWindow) presentDatabaseSwitcher(res *dbListResult) {
+	if res.err != nil {
+		w.statusBar.SetStatus(statusLine("Database list error: " + res.err.Error()))
+		w.logConsole("Database list error: " + res.err.Error())
+		return
+	}
+	if len(res.dbs) == 0 {
+		w.statusBar.SetStatus("No databases found")
+		return
+	}
+
+	connIdx := res.connIdx
+
+	popup := PopupPanel.New()
+	// A fresh PopupPanel Window defaults to content_scale_size {0,0}, which renders
+	// tiny on HiDPI displays; match the root window so its fonts/metrics scale.
+	if root, ok := rootWindow(); ok {
+		matchContentScale(popup.AsWindow(), root)
+	}
+	popup.AsWindow().AddThemeStyleboxOverride("panel", databasePopoverPanel().AsStyleBox())
+	popup.AsWindow().SetWrapControls(true)
+	popup.AsWindow().OnCloseRequested(func() {
+		popup.AsNode().QueueFree()
+	})
+
+	content := buildDatabaseSwitcher(res.dbs, res.current,
+		func(name string) {
+			w.switchDatabase(connIdx, name)
+			popup.AsNode().QueueFree()
+		},
+		func() {
+			popup.AsNode().QueueFree()
+			w.showDatabaseSwitcher(connIdx)
+		},
+	)
+	popup.AsNode().AddChild(content.AsNode())
+
+	w.titleBar.AsNode().AddChild(popup.AsNode())
+	popup.AsWindow().SetPosition(DisplayServer.MouseGetPosition())
+	popup.AsWindow().Popup()
+	w.statusBar.SetStatus("")
+}
+
+// buildDatabaseSwitcher builds the "Switch Database" popover content (header +
+// count badge, dividers, database rows, and a refresh footer) from a database
+// list. It is decoupled from any window/connection so both the live app popover
+// and the UI lab can render it. onSwitch is called with the chosen database name
+// when a switchable row is pressed; onRefresh when the footer is pressed.
+func buildDatabaseSwitcher(dbs []db.DatabaseInfo, current string, onSwitch func(name string), onRefresh func()) VBoxContainer.Instance {
+	content := VBoxContainer.New()
+	content.AsControl().AddThemeConstantOverride("separation", 0)
+	content.AsControl().SetCustomMinimumSize(Vector2.New(scaled(232), 0))
+
+	// ── Header: "SWITCH DATABASE" + count badge ─────────────────────────
+	header := HBoxContainer.New()
+	header.AsControl().AddThemeConstantOverride("separation", 8)
+
+	title := Label.New()
+	title.SetText("SWITCH DATABASE")
+	title.AsControl().AddThemeColorOverride("font_color", colorTextMuted)
+	title.AsControl().AddThemeFontSizeOverride("font_size", fontSize(popoverHeaderFont))
+	title.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+
+	badge := PanelContainer.New()
+	badgeSB := makeStyleBox(colorBtnHover, 4, 0, colorBorder)
+	badgeSB.AsStyleBox().SetContentMarginLeft(6)
+	badgeSB.AsStyleBox().SetContentMarginRight(6)
+	badgeSB.AsStyleBox().SetContentMarginTop(1)
+	badgeSB.AsStyleBox().SetContentMarginBottom(1)
+	badge.AsControl().AddThemeStyleboxOverride("panel", badgeSB.AsStyleBox())
+	badge.AsControl().SetSizeFlagsVertical(Control.SizeShrinkCenter)
+	badgeLabel := Label.New()
+	badgeLabel.SetText(fmt.Sprintf("%d", len(dbs)))
+	badgeLabel.AsControl().AddThemeColorOverride("font_color", colorTextMuted)
+	badgeLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(popoverBadgeFont))
+	badge.AsNode().AddChild(badgeLabel.AsNode())
+
+	header.AsNode().AddChild(title.AsNode())
+	header.AsNode().AddChild(badge.AsNode())
+
+	headerMargin := MarginContainer.New()
+	headerMargin.AsControl().AddThemeConstantOverride("margin_left", 12)
+	headerMargin.AsControl().AddThemeConstantOverride("margin_right", 12)
+	headerMargin.AsControl().AddThemeConstantOverride("margin_top", 8)
+	headerMargin.AsControl().AddThemeConstantOverride("margin_bottom", 8)
+	headerMargin.AsNode().AddChild(header.AsNode())
+
+	// hDivider builds a full-width 1px horizontal rule.
+	hDivider := func() PanelContainer.Instance {
+		d := PanelContainer.New()
+		d.AsControl().SetCustomMinimumSize(Vector2.New(0, scaled(1)))
+		d.AsControl().AddThemeStyleboxOverride("panel", makeStyleBox(colorBorder, 0, 0, colorBorder).AsStyleBox())
+		return d
+	}
+
+	// ── Database rows ───────────────────────────────────────────────────
+	rows := VBoxContainer.New()
+	rows.AsControl().AddThemeConstantOverride("separation", 0)
+	for _, d := range dbs {
+		btn := Button.New()
+		btn.SetText(d.Name)
+		btn.SetAlignment(GUI.HorizontalAlignmentLeft)
+		btn.SetIconAlignment(GUI.HorizontalAlignmentRight)
+		btn.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+		switch {
+		case d.Name == current:
+			btn.SetIcon(loadSVGTexture(svgCheckCircle))
+			applyDbRowCurrent(btn.AsControl())
+			btn.AsBaseButton().SetDisabled(true)
+			btn.AsControl().SetTooltipText("Current database")
+		case d.IsSystem:
+			btn.SetIcon(loadSVGTexture(svgLock))
+			applyDbRowSystem(btn.AsControl())
+			btn.AsBaseButton().SetDisabled(true)
+			btn.AsControl().SetTooltipText("System database")
+		default:
+			applyDbRowSelectable(btn.AsControl())
+			dbName := d.Name
+			btn.AsBaseButton().OnPressed(func() {
+				if onSwitch != nil {
+					onSwitch(dbName)
+				}
+			})
+		}
+		rows.AsNode().AddChild(btn.AsNode())
+	}
+
+	rowsMargin := MarginContainer.New()
+	rowsMargin.AsControl().AddThemeConstantOverride("margin_top", 4)
+	rowsMargin.AsControl().AddThemeConstantOverride("margin_bottom", 4)
+	rowsMargin.AsNode().AddChild(rows.AsNode())
+
+	// ── Footer: refresh list ────────────────────────────────────────────
+	refresh := Button.New()
+	refresh.SetText("↻  Refresh list")
+	refresh.SetAlignment(GUI.HorizontalAlignmentLeft)
+	applyFooterGhostButton(refresh.AsControl())
+	refresh.AsControl().AddThemeColorOverride("font_color", colorTextMuted)
+	refresh.AsControl().AddThemeFontSizeOverride("font_size", fontSize(popoverFooterFont))
+	refresh.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	refresh.AsBaseButton().OnPressed(func() {
+		if onRefresh != nil {
+			onRefresh()
+		}
+	})
+	footerMargin := MarginContainer.New()
+	footerMargin.AsControl().AddThemeConstantOverride("margin_left", 6)
+	footerMargin.AsControl().AddThemeConstantOverride("margin_right", 6)
+	footerMargin.AsControl().AddThemeConstantOverride("margin_top", 2)
+	footerMargin.AsControl().AddThemeConstantOverride("margin_bottom", 4)
+	footerMargin.AsNode().AddChild(refresh.AsNode())
+
+	// ── Assemble ────────────────────────────────────────────────────────
+	content.AsNode().AddChild(headerMargin.AsNode())
+	content.AsNode().AddChild(hDivider().AsNode())
+	content.AsNode().AddChild(rowsMargin.AsNode())
+	content.AsNode().AddChild(hDivider().AsNode())
+	content.AsNode().AddChild(footerMargin.AsNode())
+	return content
 }
 
 // showNewConnectionMenu opens the "+" rail menu offering the two ways to create
@@ -1666,9 +1921,13 @@ func (w *AppWindow) handleOpenGatewayResult(res DBResult) {
 	pgWorker := NewConnWorker(pgConn, w.results)
 	pgWorker.Start()
 
+	connPath := fmt.Sprintf("postgresql://localhost:%d/%s", gw.Config.LocalPort, gw.Config.DBName)
+	if gw.Config.IsDirect() {
+		connPath = fmt.Sprintf("postgresql://%s:%d/%s", gw.Config.RDSHost, gw.Config.RDSPort, gw.Config.DBName)
+	}
 	conn := &Connection{
 		Name:    name,
-		Path:    fmt.Sprintf("postgresql://localhost:%d/%s", gw.Config.LocalPort, gw.Config.DBName),
+		Path:    connPath,
 		DB:      pgConn,
 		Tables:  tables,
 		worker:  pgWorker,
@@ -1699,17 +1958,51 @@ func (w *AppWindow) handleOpenGatewayResult(res DBResult) {
 // showConnError displays a connection/query error in the given tab's data grid
 // and status bar. For expired-login errors it shows friendly guidance and pops
 // a dialog offering to re-authenticate.
+// renderConsole projects w.consoleOpen onto the bottom-pane nodes. Idempotent;
+// safe to call repeatedly (state-machine render convention).
+func (w *AppWindow) renderConsole() {
+	if w.consoleWrap == (PanelContainer.Instance{}) {
+		return
+	}
+	w.consoleWrap.AsCanvasItem().SetVisible(w.consoleOpen)
+	if w.statusBar != nil {
+		w.statusBar.bottomPaneVisible = w.consoleOpen
+	}
+}
+
+// logConsole appends a message to the console buffer and pops the console open
+// so the user sees it. Use for errors worth surfacing/sharing.
+func (w *AppWindow) logConsole(msg string) {
+	LogConsole(msg)
+	if !w.consoleOpen {
+		w.consoleOpen = true
+		w.renderConsole()
+	}
+}
+
 func (w *AppWindow) showConnError(ts *tabState, err error, statusPrefix string) {
 	msg, isAuth := bfaws.FormatConnError(err)
 	if ts != nil {
 		ts.dataGrid.ShowError(msg)
 	}
+	// Surface the full error in the console for copy/paste sharing; keep the
+	// status bar to a single concise line pointing at the console for detail.
+	w.logConsole(statusPrefix + err.Error())
 	if isAuth {
 		w.statusBar.SetStatus("Login expired — log in again to reconnect")
 		w.promptReLogin()
 		return
 	}
-	w.statusBar.SetStatus(statusPrefix + err.Error())
+	w.statusBar.SetStatus(statusLine(statusPrefix + err.Error()))
+}
+
+// statusLine collapses a possibly multi-line message into a single, trimmed
+// line suitable for the status bar (full text lives in the console).
+func statusLine(msg string) string {
+	if i := strings.IndexByte(msg, '\n'); i >= 0 {
+		msg = strings.TrimRight(msg[:i], " :") + " — see Console for details"
+	}
+	return msg
 }
 
 // promptReLogin shows a dialog guiding the user to re-authenticate. Confirming
@@ -1820,6 +2113,15 @@ func buildAIPrompt(entry models.GatewayEntry, tables []db.TableInfo, controlAddr
 	return b.String()
 }
 
+// connKeyForTab returns the stable connection key for a tab's connection, used
+// to scope query history. Empty if the tab isn't bound to a valid connection.
+func (w *AppWindow) connKeyForTab(ts *tabState) string {
+	if ts != nil && ts.connIdx >= 0 && ts.connIdx < len(w.connections) {
+		return w.connections[ts.connIdx].ConnKey()
+	}
+	return ""
+}
+
 // handleQueryResult applies a query result to the UI.
 func (w *AppWindow) handleQueryResult(res DBResult) {
 	ts := w.findTab(res.TabID)
@@ -1841,6 +2143,7 @@ func (w *AppWindow) handleQueryResult(res DBResult) {
 			if sql := res.UserSQL; sql != "" {
 				w.history.Add(models.HistoryEntry{
 					SQL:        sql,
+					Conn:       w.connKeyForTab(ts),
 					FilePath:   ts.State.FilePath,
 					Timestamp:  time.Now(),
 					DurationMs: res.Elapsed.Milliseconds(),
@@ -1864,6 +2167,7 @@ func (w *AppWindow) handleQueryResult(res DBResult) {
 			// Store the user's query, not the internal VirtualSQL wrapper.
 			w.history.Add(models.HistoryEntry{
 				SQL:        res.UserSQL,
+				Conn:       w.connKeyForTab(ts),
 				FilePath:   ts.State.FilePath,
 				Timestamp:  time.Now(),
 				RowCount:   result.Total,
@@ -1902,7 +2206,8 @@ func (w *AppWindow) handleOpenFileResult(res DBResult) {
 
 	if res.Schema == nil && res.Err != nil {
 		// Schema failed — show error
-		w.statusBar.SetStatus("Error: " + res.Err.Error())
+		w.statusBar.SetStatus(statusLine("Error: " + res.Err.Error()))
+		w.logConsole("Query error: " + res.Err.Error())
 		ts.dataGrid.ShowError(res.Err.Error())
 		if res.ControlCmd != nil {
 			res.ControlCmd.Respond(control.Result{Error: res.Err.Error()})

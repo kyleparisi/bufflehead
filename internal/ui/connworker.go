@@ -40,7 +40,7 @@ type DBRequest struct {
 	ConnIdx    int // connection index (for ReqRefresh)
 	Navigating bool
 	ControlCmd *control.Command
-	SQLReply   chan SQLReply    // for ReqSQL: synchronous response channel
+	SQLReply   chan SQLReply   // for ReqSQL: synchronous response channel
 	Ctx        context.Context // for ReqSQL: cancels when HTTP client disconnects
 }
 
@@ -441,6 +441,70 @@ func RunOpenDB(dbPath string, tabID, generation uint64, cmd *control.Command, re
 			Tables:     tables,
 			ControlCmd: cmd,
 			DBPath:     dbPath,
+		}
+	}()
+}
+
+// RunOpenPostgres connects directly to a reachable Postgres host in a one-shot
+// goroutine (no SSM tunnel), listing tables and schemas, then sending the
+// result. Used by the direct Postgres connection type. statusFunc is an
+// optional progress callback (may be nil).
+func RunOpenPostgres(host string, port int, dbName, user, password, sslMode string,
+	tabID, generation uint64, results chan DBResult, statusFunc func(string)) {
+	go func() {
+		if statusFunc != nil {
+			statusFunc("Connecting to database...")
+		}
+
+		type pgResult struct {
+			conn *db.PostgresDB
+			err  error
+		}
+		ch := make(chan pgResult, 1)
+		go func() {
+			pgConn, err := db.NewPostgresDirect(host, port, dbName, user, password, sslMode)
+			ch <- pgResult{pgConn, err}
+		}()
+
+		var pgConn *db.PostgresDB
+		var err error
+		select {
+		case r := <-ch:
+			pgConn, err = r.conn, r.err
+		case <-time.After(30 * time.Second):
+			err = fmt.Errorf("connection timed out after 30s — host may be unreachable")
+		}
+
+		if err != nil {
+			results <- DBResult{Kind: ReqOpenGateway, TabID: tabID, Generation: generation, Err: err}
+			return
+		}
+
+		if statusFunc != nil {
+			statusFunc("Loading tables...")
+		}
+		tables, err := pgConn.Tables()
+		if err != nil {
+			pgConn.Close()
+			results <- DBResult{Kind: ReqOpenGateway, TabID: tabID, Generation: generation, Err: err}
+			return
+		}
+
+		if statusFunc != nil {
+			statusFunc(fmt.Sprintf("Loading schema for %d tables...", len(tables)))
+		}
+		if err := pgConn.AllTableSchemas(tables); err != nil {
+			pgConn.Close()
+			results <- DBResult{Kind: ReqOpenGateway, TabID: tabID, Generation: generation, Err: fmt.Errorf("load schemas: %w", err)}
+			return
+		}
+
+		results <- DBResult{
+			Kind:       ReqOpenGateway,
+			TabID:      tabID,
+			Generation: generation,
+			Querier:    pgConn,
+			Tables:     tables,
 		}
 	}()
 }

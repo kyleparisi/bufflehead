@@ -20,6 +20,9 @@ import (
 func main() {
 	startup.LoadingScene()
 
+	// Mirror log output into the in-app console pane (keeps stderr too).
+	ui.InstallConsoleLog()
+
 	ui.RegisterAll()
 
 	DisplayServer.WindowSetSize(Vector2i.New(1440, 900), 0)

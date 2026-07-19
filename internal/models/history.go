@@ -11,6 +11,7 @@ import (
 
 type HistoryEntry struct {
 	SQL        string    `json:"sql"`
+	Conn       string    `json:"conn,omitempty"` // stable connection key; scopes history to a connection
 	FilePath   string    `json:"filePath,omitempty"`
 	Timestamp  time.Time `json:"timestamp"`
 	RowCount   int64     `json:"rowCount,omitempty"`
@@ -61,6 +62,25 @@ func (h *QueryHistory) Recent(n int) []HistoryEntry {
 
 func (h *QueryHistory) All() []HistoryEntry {
 	return h.Recent(len(h.Entries))
+}
+
+// RecentFor returns up to n entries whose Conn matches connKey, newest first.
+// History is scoped per connection so each connection shows only its own queries.
+func (h *QueryHistory) RecentFor(connKey string, n int) []HistoryEntry {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	result := make([]HistoryEntry, 0, n)
+	for i := len(h.Entries) - 1; i >= 0 && len(result) < n; i-- {
+		if h.Entries[i].Conn == connKey {
+			result = append(result, h.Entries[i])
+		}
+	}
+	return result
+}
+
+// AllFor returns all entries for the given connection key, newest first.
+func (h *QueryHistory) AllFor(connKey string) []HistoryEntry {
+	return h.RecentFor(connKey, len(h.Entries))
 }
 
 func (h *QueryHistory) load() {

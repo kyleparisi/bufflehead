@@ -89,21 +89,53 @@ type GatewayScreen struct {
 	rdsErr           string
 	rdsResult        []bfaws.RDSInstance
 	formRDSHost      LineEdit.Instance
-	formRDSPort   LineEdit.Instance
-	formDBName    LineEdit.Instance
-	formDBUser    LineEdit.Instance
-	formDBPass    LineEdit.Instance
-	formPassVBox  VBoxContainer.Instance // container for password field, hidden in IAM mode
-	formStatus    Label.Instance
-	formIAMAuth   bool // true = IAM auth, false = password
-	formPassBtn   Button.Instance
-	formIAMBtn    Button.Instance
+	formRDSPort      LineEdit.Instance
+	formDBName       LineEdit.Instance
+	formDBUser       LineEdit.Instance
+	formDBPass       LineEdit.Instance
+	formPassVBox     VBoxContainer.Instance // container for password field, hidden in IAM mode
+	formStatus       Label.Instance
+	formIAMAuth      bool // true = IAM auth, false = password
+	formPassBtn      Button.Instance
+	formIAMBtn       Button.Instance
 
 	// Numbered step indicators (turn into a green ✓ when the step is satisfied)
 	step1Num Label.Instance
 	step2Num Label.Instance
 	step3Num Label.Instance
+
+	// ── Connection-type selection (authoritative state) ──
+	connKind models.ConnKind
+
+	// Connection-type selector tiles
+	typeAWSBtn Button.Instance
+	typePGBtn  Button.Instance
+	typeSSHBtn Button.Instance
+
+	// Panels toggled by connKind (AWS flow vs. direct Postgres form)
+	ssoPanel     PanelContainer.Instance
+	awsFormPanel PanelContainer.Instance
+	pgFormPanel  PanelContainer.Instance
+
+	// Direct Postgres form fields
+	pgLabel     LineEdit.Instance
+	pgEnv       LineEdit.Instance
+	pgHost      LineEdit.Instance
+	pgPort      LineEdit.Instance
+	pgDBName    LineEdit.Instance
+	pgDBUser    LineEdit.Instance
+	pgDBPass    LineEdit.Instance
+	pgPassVBox  VBoxContainer.Instance // password field, hidden when "No Password"
+	pgSSLMode   OptionButton.Instance
+	pgStatus    Label.Instance
+	pgNoPass    bool // true = trust/no-password auth
+	pgPassBtn   Button.Instance
+	pgNoPassBtn Button.Instance
 }
+
+// pgSSLModes lists the sslmode options for the direct Postgres form dropdown,
+// in display order.
+var pgSSLModes = []string{"prefer", "require", "disable"}
 
 type gatewayCard struct {
 	entry       models.GatewayEntry
@@ -120,6 +152,7 @@ type gatewayCard struct {
 	connected   bool
 	connecting  bool
 	fromForm    bool // true if created from inline form (no statusDot/logLbl/actionBtn)
+	direct      bool // true for direct Postgres bookmarks (no AWS auth/tunnel)
 }
 
 func (g *GatewayScreen) SetConfig(cfg *models.GatewayConfig) {
@@ -186,13 +219,24 @@ func (g *GatewayScreen) Ready() {
 	leftTitle.AsControl().AddThemeColorOverride("font_color", colorText)
 	leftCol.AsNode().AddChild(leftTitle.AsNode())
 
-	// SSO Login section
-	ssoPanel := g.buildSSOPanel()
-	leftCol.AsNode().AddChild(ssoPanel.AsNode())
+	// Connection-type selector (drives which form is shown below)
+	selector := g.buildTypeSelector()
+	leftCol.AsNode().AddChild(selector.AsNode())
 
-	// New connection form
-	formPanel := g.buildForm()
-	leftCol.AsNode().AddChild(formPanel.AsNode())
+	// SSO Login section (AWS gateway flow)
+	g.ssoPanel = g.buildSSOPanel()
+	leftCol.AsNode().AddChild(g.ssoPanel.AsNode())
+
+	// AWS gateway connection form
+	g.awsFormPanel = g.buildForm()
+	leftCol.AsNode().AddChild(g.awsFormPanel.AsNode())
+
+	// Direct Postgres connection form
+	g.pgFormPanel = g.buildPGForm()
+	leftCol.AsNode().AddChild(g.pgFormPanel.AsNode())
+
+	// Project the initial connection-type state onto the panels.
+	g.renderConnKind()
 
 	leftScroll.AsNode().AddChild(leftCol.AsNode())
 	columns.AsNode().AddChild(leftScroll.AsNode())
@@ -241,6 +285,106 @@ func (g *GatewayScreen) Ready() {
 	columns.AsNode().AddChild(rightScroll.AsNode())
 
 	g.AsNode().AddChild(columns.AsNode())
+}
+
+// buildTypeSelector builds the row of connection-type tiles shown above the
+// forms. Selecting a tile mutates g.connKind and re-renders; it never pokes the
+// panels directly (see renderConnKind).
+func (g *GatewayScreen) buildTypeSelector() VBoxContainer.Instance {
+	box := VBoxContainer.New()
+	box.AsControl().AddThemeConstantOverride("separation", 4)
+
+	lbl := Label.New()
+	lbl.SetText("CONNECTION TYPE")
+	lbl.AsControl().AddThemeFontSizeOverride("font_size", fontSize(10))
+	lbl.AsControl().AddThemeColorOverride("font_color", colorTextMuted)
+	box.AsNode().AddChild(lbl.AsNode())
+
+	row := HBoxContainer.New()
+	row.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	row.AsControl().AddThemeConstantOverride("separation", 8)
+
+	g.typeAWSBtn = g.makeTypeTile("☁  AWS Gateway", "SSO + SSM tunnel to RDS", false)
+	g.typeAWSBtn.AsBaseButton().OnPressed(func() {
+		g.connKind = models.KindAWSGateway
+		g.renderConnKind()
+	})
+	row.AsNode().AddChild(g.typeAWSBtn.AsNode())
+
+	g.typePGBtn = g.makeTypeTile("⛁  PostgreSQL", "Direct host — local, VPN, or public", false)
+	g.typePGBtn.AsBaseButton().OnPressed(func() {
+		g.connKind = models.KindPostgres
+		g.renderConnKind()
+	})
+	row.AsNode().AddChild(g.typePGBtn.AsNode())
+
+	g.typeSSHBtn = g.makeTypeTile("⌨  SSH + PostgreSQL", "Coming soon", true)
+	g.typeSSHBtn.AsBaseButton().SetDisabled(true)
+	row.AsNode().AddChild(g.typeSSHBtn.AsNode())
+
+	box.AsNode().AddChild(row.AsNode())
+	return box
+}
+
+// makeTypeTile builds a single connection-type selector tile with a bold title
+// line and a dim subtitle line. Disabled tiles are dimmed for "coming soon".
+func (g *GatewayScreen) makeTypeTile(title, subtitle string, disabled bool) Button.Instance {
+	btn := Button.New()
+	btn.SetText(title + "\n" + subtitle)
+	btn.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	btn.AsControl().SetCustomMinimumSize(Vector2.New(0, scaled(48)))
+	btn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
+	if disabled {
+		btn.AsControl().AddThemeColorOverride("font_color", colorTextDim)
+	}
+	return btn
+}
+
+// applyTypeTileTheme styles a selector tile: indigo-tinted active border when
+// selected, subtle surface otherwise.
+func applyTypeTileTheme(c Control.Instance, active bool) {
+	if active {
+		sb := makeStyleBoxPadded(colorBgInput, 4, 1, colorAccent, 8)
+		c.AddThemeStyleboxOverride("normal", sb.AsStyleBox())
+		c.AddThemeStyleboxOverride("hover", sb.AsStyleBox())
+		c.AddThemeStyleboxOverride("pressed", sb.AsStyleBox())
+		c.AddThemeColorOverride("font_color", colorTextBright)
+	} else {
+		normal := makeStyleBoxPadded(colorBgPanel, 4, 1, colorBorderDim, 8)
+		hover := makeStyleBoxPadded(colorBgInput, 4, 1, colorBorder, 8)
+		c.AddThemeStyleboxOverride("normal", normal.AsStyleBox())
+		c.AddThemeStyleboxOverride("hover", hover.AsStyleBox())
+		c.AddThemeStyleboxOverride("pressed", hover.AsStyleBox())
+		c.AddThemeColorOverride("font_color", colorTextMuted)
+		c.AddThemeColorOverride("font_hover_color", colorText)
+	}
+}
+
+// renderConnKind is the single projection of connKind onto the view: it toggles
+// which forms are visible and highlights the active selector tile. It is
+// idempotent and must not mutate state.
+func (g *GatewayScreen) renderConnKind() {
+	aws := g.connKind == models.KindAWSGateway
+
+	if g.typeAWSBtn != (Button.Instance{}) {
+		applyTypeTileTheme(g.typeAWSBtn.AsControl(), aws)
+	}
+	if g.typePGBtn != (Button.Instance{}) {
+		applyTypeTileTheme(g.typePGBtn.AsControl(), g.connKind == models.KindPostgres)
+	}
+	if g.typeSSHBtn != (Button.Instance{}) {
+		applyTypeTileTheme(g.typeSSHBtn.AsControl(), false)
+	}
+
+	if g.ssoPanel != (PanelContainer.Instance{}) {
+		g.ssoPanel.AsCanvasItem().SetVisible(aws)
+	}
+	if g.awsFormPanel != (PanelContainer.Instance{}) {
+		g.awsFormPanel.AsCanvasItem().SetVisible(aws)
+	}
+	if g.pgFormPanel != (PanelContainer.Instance{}) {
+		g.pgFormPanel.AsCanvasItem().SetVisible(!aws)
+	}
 }
 
 // buildSSOPanel creates the SSO login section — start URL + region + button.
@@ -860,6 +1004,290 @@ func (g *GatewayScreen) buildForm() PanelContainer.Instance {
 	return panel
 }
 
+// buildPGForm builds the direct Postgres connection form (label/env, host/port,
+// db/user, password toggle, sslmode). Shown when connKind == KindPostgres.
+func (g *GatewayScreen) buildPGForm() PanelContainer.Instance {
+	panel := PanelContainer.New()
+	border := makeStyleBox(colorBgPanel, 6, 1, colorBorderDim)
+	border.AsStyleBox().SetContentMarginAll(scaled(16))
+	panel.AsControl().AddThemeStyleboxOverride("panel", border.AsStyleBox())
+
+	vbox := VBoxContainer.New()
+	vbox.AsControl().AddThemeConstantOverride("separation", 8)
+
+	title := Label.New()
+	title.SetText("Connection Details")
+	title.AsControl().AddThemeFontSizeOverride("font_size", fontSize(14))
+	title.AsControl().AddThemeColorOverride("font_color", colorText)
+	vbox.AsNode().AddChild(title.AsNode())
+
+	g.pgLabel, g.pgEnv = g.makeFieldPair(vbox, "Label", "e.g. local-dev", 2, "Environment", "e.g. dev", 1)
+	g.pgHost, g.pgPort = g.makeFieldPair(vbox, "Host", "localhost", 3, "Port", "5432", 1)
+	g.pgPort.SetText("5432")
+	g.pgDBName, g.pgDBUser = g.makeFieldPair(vbox, "Database Name", "postgres", 1, "Username", "postgres", 1)
+
+	// Authentication toggle: Password vs No Password
+	authLabel := Label.New()
+	authLabel.SetText("Authentication")
+	authLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
+	authLabel.AsControl().AddThemeColorOverride("font_color", colorTextDim)
+	vbox.AsNode().AddChild(authLabel.AsNode())
+
+	authRow := HBoxContainer.New()
+	authRow.AsControl().AddThemeConstantOverride("separation", 4)
+
+	g.pgPassBtn = Button.New()
+	g.pgPassBtn.SetText("Password")
+	g.pgPassBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
+	applyButtonTheme(g.pgPassBtn.AsControl())
+	g.pgPassBtn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(100), scaled(28)))
+
+	g.pgNoPassBtn = Button.New()
+	g.pgNoPassBtn.SetText("No Password")
+	g.pgNoPassBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
+	applySecondaryButtonTheme(g.pgNoPassBtn.AsControl())
+	g.pgNoPassBtn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(100), scaled(28)))
+
+	g.pgPassBtn.AsBaseButton().OnPressed(func() {
+		g.pgNoPass = false
+		applyButtonTheme(g.pgPassBtn.AsControl())
+		applySecondaryButtonTheme(g.pgNoPassBtn.AsControl())
+		g.pgPassVBox.AsCanvasItem().SetVisible(true)
+	})
+	g.pgNoPassBtn.AsBaseButton().OnPressed(func() {
+		g.pgNoPass = true
+		applyButtonTheme(g.pgNoPassBtn.AsControl())
+		applySecondaryButtonTheme(g.pgPassBtn.AsControl())
+		g.pgPassVBox.AsCanvasItem().SetVisible(false)
+	})
+
+	authRow.AsNode().AddChild(g.pgPassBtn.AsNode())
+	authRow.AsNode().AddChild(g.pgNoPassBtn.AsNode())
+	vbox.AsNode().AddChild(authRow.AsNode())
+
+	// Password field (hidden when "No Password")
+	g.pgPassVBox = VBoxContainer.New()
+	g.pgPassVBox.AsControl().AddThemeConstantOverride("separation", 2)
+	passLbl := Label.New()
+	passLbl.SetText("Password")
+	passLbl.AsControl().AddThemeFontSizeOverride("font_size", fontSize(10))
+	passLbl.AsControl().AddThemeColorOverride("font_color", colorTextMuted)
+	g.pgDBPass = LineEdit.New()
+	g.pgDBPass.SetPlaceholderText("stored securely in your OS keychain")
+	applyInputTheme(g.pgDBPass.AsControl())
+	g.pgDBPass.AsControl().AddThemeFontSizeOverride("font_size", fontSize(12))
+	g.pgDBPass.SetSecretCharacter("●")
+	g.pgDBPass.SetSecret(true)
+	g.pgPassVBox.AsNode().AddChild(passLbl.AsNode())
+	g.pgPassVBox.AsNode().AddChild(g.pgDBPass.AsNode())
+	vbox.AsNode().AddChild(g.pgPassVBox.AsNode())
+
+	// SSL Mode dropdown
+	sslVBox := VBoxContainer.New()
+	sslVBox.AsControl().AddThemeConstantOverride("separation", 2)
+	sslLbl := Label.New()
+	sslLbl.SetText("SSL Mode")
+	sslLbl.AsControl().AddThemeFontSizeOverride("font_size", fontSize(10))
+	sslLbl.AsControl().AddThemeColorOverride("font_color", colorTextMuted)
+	g.pgSSLMode = OptionButton.New()
+	for _, m := range pgSSLModes {
+		g.pgSSLMode.AddItem(m)
+	}
+	applyInputTheme(g.pgSSLMode.AsControl())
+	g.pgSSLMode.AsControl().AddThemeFontSizeOverride("font_size", fontSize(12))
+	g.pgSSLMode.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	sslVBox.AsNode().AddChild(sslLbl.AsNode())
+	sslVBox.AsNode().AddChild(g.pgSSLMode.AsNode())
+	vbox.AsNode().AddChild(sslVBox.AsNode())
+
+	// Helper text
+	helper := Label.New()
+	helper.SetText("Use this for local databases, VPN-reachable instances, or public endpoints. No AWS credentials needed.")
+	helper.AsControl().AddThemeFontSizeOverride("font_size", fontSize(10))
+	helper.AsControl().AddThemeColorOverride("font_color", colorTextDim)
+	helper.SetAutowrapMode(3)
+	vbox.AsNode().AddChild(helper.AsNode())
+
+	// Status label
+	g.pgStatus = Label.New()
+	g.pgStatus.SetText("")
+	g.pgStatus.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
+	g.pgStatus.AsControl().AddThemeColorOverride("font_color", colorTextMuted)
+	g.pgStatus.SetAutowrapMode(3)
+	vbox.AsNode().AddChild(g.pgStatus.AsNode())
+
+	// Connect + Test buttons
+	btnRow := HBoxContainer.New()
+	btnRow.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	btnRow.AsControl().AddThemeConstantOverride("separation", 8)
+
+	connectBtn := Button.New()
+	connectBtn.SetText("Connect")
+	connectBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(13))
+	applyButtonTheme(connectBtn.AsControl())
+	connectBtn.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	connectBtn.AsControl().SetSizeFlagsStretchRatio(2)
+	connectBtn.AsControl().SetCustomMinimumSize(Vector2.New(0, scaled(34)))
+	connectBtn.AsBaseButton().OnPressed(func() {
+		g.onPGConnect()
+	})
+
+	testBtn := Button.New()
+	testBtn.SetText("Test Connection")
+	testBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(12))
+	applySecondaryButtonTheme(testBtn.AsControl())
+	testBtn.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	testBtn.AsControl().SetSizeFlagsStretchRatio(1)
+	testBtn.AsControl().SetCustomMinimumSize(Vector2.New(0, scaled(34)))
+	testBtn.AsControl().SetTooltipText("Validate the form fields without connecting")
+	testBtn.AsBaseButton().OnPressed(func() {
+		g.onPGTest()
+	})
+
+	btnRow.AsNode().AddChild(connectBtn.AsNode())
+	btnRow.AsNode().AddChild(testBtn.AsNode())
+	vbox.AsNode().AddChild(btnRow.AsNode())
+
+	panel.AsNode().AddChild(vbox.AsNode())
+	return panel
+}
+
+// selectedSSLMode returns the sslmode string chosen in the dropdown.
+func (g *GatewayScreen) selectedSSLMode() string {
+	idx := g.pgSSLMode.Selected()
+	if idx < 0 || idx >= len(pgSSLModes) {
+		return "prefer"
+	}
+	return pgSSLModes[idx]
+}
+
+// onPGTest validates the direct-Postgres form fields locally (no network).
+// Only Label is required; blank connection-target fields fall back to the local
+// Postgres defaults (localhost:5432, postgres/postgres) at Connect time.
+func (g *GatewayScreen) onPGTest() {
+	if g.pgLabel.Text() == "" {
+		g.pgStatus.SetText("Missing: Label")
+		g.pgStatus.AsControl().AddThemeColorOverride("font_color", colorStatusRed)
+		return
+	}
+
+	host := valueOrDefault(g.pgHost.Text(), "localhost")
+	port := valueOrDefault(g.pgPort.Text(), "5432")
+	dbName := valueOrDefault(g.pgDBName.Text(), "postgres")
+	dbUser := valueOrDefault(g.pgDBUser.Text(), "postgres")
+
+	g.pgStatus.SetText(fmt.Sprintf("✓ Ready — will connect to %s@%s:%s/%s", dbUser, host, port, dbName))
+	g.pgStatus.AsControl().AddThemeColorOverride("font_color", colorStatusGreen)
+}
+
+// valueOrDefault returns v if non-empty, otherwise def.
+func valueOrDefault(v, def string) string {
+	if v == "" {
+		return def
+	}
+	return v
+}
+
+// onPGConnect validates the direct-Postgres form, persists a bookmark (with the
+// password in the OS keychain when provided), and starts a direct connection.
+func (g *GatewayScreen) onPGConnect() {
+	label := g.pgLabel.Text()
+	env := g.pgEnv.Text()
+	host := g.pgHost.Text()
+	portStr := g.pgPort.Text()
+	dbName := g.pgDBName.Text()
+	dbUser := g.pgDBUser.Text()
+	dbPass := g.pgDBPass.Text()
+
+	setErr := func(msg string) {
+		g.pgStatus.SetText(msg)
+		g.pgStatus.AsControl().AddThemeColorOverride("font_color", colorStatusRed)
+	}
+
+	// Apply sensible defaults for the connection-target fields when left blank —
+	// a local Postgres install listens on localhost:5432 with a "postgres"
+	// database and role, so these get you a working connection out of the box.
+	if host == "" {
+		host = "localhost"
+		g.pgHost.SetText(host)
+	}
+	if dbName == "" {
+		dbName = "postgres"
+		g.pgDBName.SetText(dbName)
+	}
+	if dbUser == "" {
+		dbUser = "postgres"
+		g.pgDBUser.SetText(dbUser)
+	}
+
+	// Label stays required: it names the bookmark and must be a valid slug.
+	if label == "" {
+		setErr("Label is required")
+		return
+	}
+	if err := models.ValidateLabel(label); err != nil {
+		setErr(err.Error())
+		return
+	}
+
+	port, _ := strconv.Atoi(portStr)
+	if port == 0 {
+		port = 5432
+		g.pgPort.SetText(strconv.Itoa(port))
+	}
+
+	sslMode := g.selectedSSLMode()
+
+	// Determine secret storage: keychain when a password is provided.
+	secretKind := models.SecretNone
+	if !g.pgNoPass && dbPass != "" {
+		if err := models.SetSecret(label, dbPass); err != nil {
+			// Keychain unavailable (e.g. headless Linux). Connect this session
+			// with the in-memory password but don't persist it.
+			g.pgStatus.SetText("Note: OS keychain unavailable — password won't be saved for next time.")
+			g.pgStatus.AsControl().AddThemeColorOverride("font_color", colorStatusYellow)
+		} else {
+			secretKind = models.SecretKeychain
+		}
+	}
+
+	entry := models.GatewayEntry{
+		Name:       label,
+		Kind:       models.KindPostgres,
+		RDSHost:    host,
+		RDSPort:    port,
+		DBName:     dbName,
+		DBUser:     dbUser,
+		DBPassword: dbPass, // in-memory only for this session
+		SSLMode:    sslMode,
+		SecretKind: secretKind,
+	}
+
+	// Save/update a bookmark (raw password never written to the JSON file).
+	if g.bookmarks != nil {
+		bm := models.Bookmark{
+			Label:      label,
+			Kind:       models.KindPostgres,
+			Env:        env,
+			RDSHost:    host,
+			RDSPort:    port,
+			DBName:     dbName,
+			DBUser:     dbUser,
+			SSLMode:    sslMode,
+			SecretKind: secretKind,
+		}
+		g.bookmarks.Add(bm)
+	}
+
+	g.pgStatus.SetText("Connecting...")
+	g.pgStatus.AsControl().AddThemeColorOverride("font_color", colorStatusYellow)
+
+	// Direct connections have no AWS auth/tunnel — hand straight to OnConnect.
+	if g.OnConnect != nil {
+		g.OnConnect(entry, nil, nil)
+	}
+}
+
 // makeFieldCol builds a labeled input column (label above input) that expands
 // horizontally so it can sit in a two-column row.
 func (g *GatewayScreen) makeFieldCol(label, placeholder string) (VBoxContainer.Instance, LineEdit.Instance) {
@@ -1101,16 +1529,16 @@ func (g *GatewayScreen) onFormConnect() {
 	// Save as bookmark (password is not persisted, only env var name)
 	if g.bookmarks != nil {
 		bm := models.Bookmark{
-			Label:        label,
-			Env:          env,
-			AWSProfile:   profile,
-			AWSRegion:    region,
-			InstanceID:   instanceID,
-			RDSHost:      rdsHost,
-			RDSPort:      rdsPort,
-			DBName:       dbName,
-			DBUser:       dbUser,
-			AuthMode:     authMode,
+			Label:      label,
+			Env:        env,
+			AWSProfile: profile,
+			AWSRegion:  region,
+			InstanceID: instanceID,
+			RDSHost:    rdsHost,
+			RDSPort:    rdsPort,
+			DBName:     dbName,
+			DBUser:     dbUser,
+			AuthMode:   authMode,
 		}
 		g.bookmarks.Add(bm)
 	}
@@ -1355,16 +1783,26 @@ func (g *GatewayScreen) buildBookmarkCard(bm models.Bookmark) PanelContainer.Ins
 		row1.AsNode().AddChild(makeAccentChip(strings.ToUpper(bm.Env), envBadgeColor(bm.Env), "EnvBadge").AsNode())
 	}
 
+	isDirect := bm.Kind == models.KindPostgres
+
 	// Detail rows — wrap so a long endpoint fits the card width instead of
 	// forcing the card wider than the column (which pushed the buttons off-screen).
 	hostLabel := Label.New()
-	hostLabel.SetText(fmt.Sprintf("%s/%s @ %s", bm.DBName, bm.DBUser, bm.RDSHost))
+	if isDirect {
+		hostLabel.SetText(fmt.Sprintf("%s/%s @ %s:%d", bm.DBName, bm.DBUser, bm.RDSHost, bm.RDSPort))
+	} else {
+		hostLabel.SetText(fmt.Sprintf("%s/%s @ %s", bm.DBName, bm.DBUser, bm.RDSHost))
+	}
 	hostLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
 	hostLabel.AsControl().AddThemeColorOverride("font_color", colorTextDim)
 	hostLabel.SetAutowrapMode(3)
 
 	profileLabel := Label.New()
-	profileLabel.SetText("AWS Profile: " + bm.AWSProfile)
+	if isDirect {
+		profileLabel.SetText("Direct PostgreSQL · SSL: " + bm.SSLMode)
+	} else {
+		profileLabel.SetText("AWS Profile: " + bm.AWSProfile)
+	}
 	profileLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
 	profileLabel.AsControl().AddThemeColorOverride("font_color", colorTextDim)
 	profileLabel.SetAutowrapMode(3)
@@ -1374,7 +1812,11 @@ func (g *GatewayScreen) buildBookmarkCard(bm models.Bookmark) PanelContainer.Ins
 	row4.AsControl().AddThemeConstantOverride("separation", 8)
 
 	statusLabel := Label.New()
-	statusLabel.SetText("Checking credentials...")
+	if isDirect {
+		statusLabel.SetText("Ready")
+	} else {
+		statusLabel.SetText("Checking credentials...")
+	}
 	statusLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
 	statusLabel.AsControl().AddThemeColorOverride("font_color", colorTextMuted)
 	statusLabel.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
@@ -1412,21 +1854,30 @@ func (g *GatewayScreen) buildBookmarkCard(bm models.Bookmark) PanelContainer.Ins
 	entry := bm.ToGatewayEntry(0)
 	card := &gatewayCard{
 		entry:     entry,
-		auth:      bfaws.NewAuthManager(bm.AWSProfile, bm.AWSRegion),
 		statusLbl: statusLabel,
 		logLbl:    logLabel,
 		actionBtn: actionBtn,
 		statusDot: statusDot,
+		direct:    isDirect,
+	}
+	if !isDirect {
+		card.auth = bfaws.NewAuthManager(bm.AWSProfile, bm.AWSRegion)
 	}
 	g.cards = append(g.cards, card)
 	cardIdx := len(g.cards) - 1
 
-	// Check credentials async
-	go func() {
-		status := card.auth.Status()
-		card.credStatus = status
-		card.needsUpdate = true
-	}()
+	if isDirect {
+		// Direct connections have no credentials to check — mark ready now.
+		statusDot.SetText("●")
+		statusDot.AsControl().AddThemeColorOverride("font_color", colorStatusGreen)
+	} else {
+		// Check credentials async
+		go func() {
+			status := card.auth.Status()
+			card.credStatus = status
+			card.needsUpdate = true
+		}()
+	}
 
 	// Wire action button
 	actionBtn.AsBaseButton().OnPressed(func() {
@@ -1450,6 +1901,18 @@ func (g *GatewayScreen) onCardAction(idx int) {
 		return
 	}
 	card := g.cards[idx]
+
+	// Direct Postgres bookmarks skip AWS auth/tunnel entirely.
+	if card.direct {
+		card.statusLbl.SetText("Connecting...")
+		card.statusDot.AsControl().AddThemeColorOverride("font_color", colorStatusYellow)
+		card.actionBtn.SetText("Connecting...")
+		card.actionBtn.AsBaseButton().SetDisabled(true)
+		if g.OnConnect != nil {
+			g.OnConnect(card.entry, nil, nil)
+		}
+		return
+	}
 
 	switch card.credStatus {
 	case bfaws.CredsExpired, bfaws.CredsNoCredentials:

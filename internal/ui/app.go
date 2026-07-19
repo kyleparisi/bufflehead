@@ -68,17 +68,21 @@ import (
 type TitleBar struct {
 	PanelContainer.Extension[TitleBar] `gd:"TitleBar"`
 
-	infoLabel     Label.Instance
-	copyBtn       Button.Instance
-	refreshBtn    Button.Instance
-	runBtn        Button.Instance
-	aiPrompt      string
-	NavBackBtn    Button.Instance
-	NavFwdBtn     Button.Instance
-	OnRefresh     func() // called when refresh button is pressed
-	OnRun         func() // called when the Run button is pressed
-	WindowID      int
-	resetCopyText bool // set by goroutine, read by Process on main thread
+	infoLabel      Label.Instance
+	pill           PanelContainer.Instance // breadcrumb pill (sized to content, capped)
+	pillRow        HBoxContainer.Instance  // icon + breadcrumb + db segment inside the pill
+	dbBtn          Button.Instance         // clickable database segment (opens switcher)
+	copyBtn        Button.Instance
+	refreshBtn     Button.Instance
+	runBtn         Button.Instance
+	aiPrompt       string
+	NavBackBtn     Button.Instance
+	NavFwdBtn      Button.Instance
+	OnRefresh      func() // called when refresh button is pressed
+	OnRun          func() // called when the Run button is pressed
+	OnPickDatabase func() // called when the database breadcrumb segment is clicked
+	WindowID       int
+	resetCopyText  bool // set by goroutine, read by Process on main thread
 }
 
 func (t *TitleBar) GuiInput(event InputEvent.Instance) {
@@ -134,16 +138,28 @@ func (t *TitleBar) Ready() {
 	t.NavFwdBtn.AsBaseButton().SetDisabled(true)
 	t.NavFwdBtn.AsControl().SetMouseFilter(Control.MouseFilterStop)
 
-	// Spacer (draggable area)
+	// Equal expand-fill spacers flank the breadcrumb pill so it sits centered in
+	// the title bar (between the left nav cluster and the right-side buttons)
+	// rather than stretching or hugging one edge. Both are draggable window area.
 	spacer := Control.New()
 	spacer.SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	spacer.SetSizeFlagsStretchRatio(1)
 	spacer.SetMouseFilter(Control.MouseFilterPass)
 
-	// ── Right: breadcrumb pill (db icon + connection) + AI + reconnect ──
+	spacerRight := Control.New()
+	spacerRight.SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	spacerRight.SetSizeFlagsStretchRatio(1)
+	spacerRight.SetMouseFilter(Control.MouseFilterPass)
+
+	// ── Center: breadcrumb pill (db icon + connection) + AI + reconnect ──
 	pill := PanelContainer.New()
 	pill.AsControl().AddThemeStyleboxOverride("panel", titlePill().AsStyleBox())
 	pill.AsControl().SetSizeFlagsVertical(Control.SizeShrinkCenter)
 	pill.AsControl().SetMouseFilter(Control.MouseFilterPass)
+	// The breadcrumb sizes to its content (flexible) and is capped at pillMaxWidth
+	// by refitPill; the flanking spacers absorb the leftover space and keep it
+	// centered. Longer connection paths truncate with an ellipsis at the cap.
+	pill.AsControl().SetSizeFlagsHorizontal(Control.SizeShrinkCenter)
 
 	pillRow := HBoxContainer.New()
 	pillRow.AsControl().AddThemeConstantOverride("separation", 6)
@@ -162,6 +178,33 @@ func (t *TitleBar) Ready() {
 	t.infoLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
 	t.infoLabel.AsControl().AddThemeFontOverride("font", monoFont())
 	t.infoLabel.AsControl().SetMouseFilter(Control.MouseFilterPass)
+	// The breadcrumb is the flexible element: it truncates with an ellipsis when
+	// the window is too narrow so the right-side buttons (Run/AI) are never
+	// clipped off. It expands to show full text when there's room.
+	// Unclipped by default so a short breadcrumb sizes the pill snugly; refitPill
+	// switches on ellipsis clipping only when the content would exceed the cap.
+	t.infoLabel.SetTextOverrunBehavior(TextServer.OverrunNoTrimming)
+	t.infoLabel.SetClipText(false)
+	t.infoLabel.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	// 1.5× line-height: a taller line box with the text vertically centered.
+	t.infoLabel.SetVerticalAlignment(GUI.VerticalAlignmentCenter)
+	t.infoLabel.AsControl().SetCustomMinimumSize(Vector2.New(scaled(24), scaled(pillLineHeight)))
+
+	// Clickable database segment — only shown for Postgres connections. Opens
+	// the database switcher popup.
+	t.dbBtn = Button.New()
+	t.dbBtn.SetText("")
+	t.dbBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
+	t.dbBtn.AsControl().AddThemeFontOverride("font", monoFont())
+	t.dbBtn.AsControl().SetCustomMinimumSize(Vector2.New(0, scaled(pillLineHeight)))
+	applyBreadcrumbSegmentTheme(t.dbBtn.AsControl())
+	t.dbBtn.AsControl().SetTooltipText("Switch database")
+	t.dbBtn.AsCanvasItem().SetVisible(false)
+	t.dbBtn.AsBaseButton().OnPressed(func() {
+		if t.OnPickDatabase != nil {
+			t.OnPickDatabase()
+		}
+	})
 
 	t.copyBtn = Button.New()
 	t.copyBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(10))
@@ -196,7 +239,10 @@ func (t *TitleBar) Ready() {
 
 	pillRow.AsNode().AddChild(dbIcon.AsNode())
 	pillRow.AsNode().AddChild(t.infoLabel.AsNode())
+	pillRow.AsNode().AddChild(t.dbBtn.AsNode())
 	pill.AsNode().AddChild(pillRow.AsNode())
+	t.pill = pill
+	t.pillRow = pillRow
 
 	// Prominent Run button (indigo CTA)
 	t.runBtn = Button.New()
@@ -220,6 +266,7 @@ func (t *TitleBar) Ready() {
 	row.AsNode().AddChild(t.NavFwdBtn.AsNode())
 	row.AsNode().AddChild(spacer.AsNode())
 	row.AsNode().AddChild(pill.AsNode())
+	row.AsNode().AddChild(spacerRight.AsNode())
 	row.AsNode().AddChild(t.refreshBtn.AsNode())
 	row.AsNode().AddChild(t.copyBtn.AsNode())
 	row.AsNode().AddChild(t.runBtn.AsNode())
@@ -249,7 +296,29 @@ func (t *TitleBar) Process(delta Float.X) {
 }
 
 func (t *TitleBar) SetConnectionInfo(driver, name, dbName string) {
-	t.infoLabel.SetText(driver + "  ›  " + name + "  ›  " + dbName)
+	// The database name is rendered as a separate clickable segment (the
+	// switcher), so the label carries only the driver › connection prefix.
+	t.infoLabel.SetText(driver + "  ›  " + name + "  ›  ")
+	t.dbBtn.SetText(dbName + "  ▾")
+	t.dbBtn.AsCanvasItem().SetVisible(true)
+	t.refitPill()
+}
+
+// refitPill sizes the breadcrumb pill to its content, capped at pillMaxWidth: a
+// short connection path gets a snug pill, a long one caps at the max and
+// ellipsizes. Called after the breadcrumb text/segment changes.
+func (t *TitleBar) refitPill() {
+	maxW := scaled(pillMaxWidth)
+	// Measure natural (unclipped) content width, then cap.
+	t.infoLabel.SetClipText(false)
+	t.infoLabel.SetTextOverrunBehavior(TextServer.OverrunNoTrimming)
+	if t.pillRow.AsControl().GetCombinedMinimumSize().X > maxW {
+		t.infoLabel.SetClipText(true)
+		t.infoLabel.SetTextOverrunBehavior(TextServer.OverrunTrimEllipsis)
+		t.pill.AsControl().SetCustomMinimumSize(Vector2.New(maxW, 0))
+	} else {
+		t.pill.AsControl().SetCustomMinimumSize(Vector2.New(0, 0))
+	}
 }
 
 func (t *TitleBar) SetAIPrompt(prompt string) {
@@ -260,10 +329,14 @@ func (t *TitleBar) SetAIPrompt(prompt string) {
 }
 
 func (t *TitleBar) SetFileInfo(path string) {
+	// The database switcher segment only applies to Postgres connections.
+	t.dbBtn.AsCanvasItem().SetVisible(false)
 	if path == "" {
 		t.infoLabel.SetText("DuckDB  ›  In-Memory")
+		t.refitPill()
 		return
 	}
+	defer t.refitPill()
 	// Extract filename
 	name := path
 	for i := len(path) - 1; i >= 0; i-- {
@@ -1854,18 +1927,21 @@ type StatusBar struct {
 	connLabel   Label.Instance
 	memPill     Label.Instance
 	leftBtn     Button.Instance
+	bottomBtn   Button.Instance
 	rightBtn    Button.Instance
 
-	OnPrevPage        func()
-	OnNextPage        func()
-	OnFirstPage       func()
-	OnLastPage        func()
-	OnToggleLeftPane  func()
-	OnToggleRightPane func()
+	OnPrevPage         func()
+	OnNextPage         func()
+	OnFirstPage        func()
+	OnLastPage         func()
+	OnToggleLeftPane   func()
+	OnToggleRightPane  func()
+	OnToggleBottomPane func()
 
-	leftPaneVisible  bool
-	rightPaneVisible bool
-	memFrame         int
+	leftPaneVisible   bool
+	rightPaneVisible  bool
+	bottomPaneVisible bool
+	memFrame          int
 }
 
 // footerDivider returns a thin vertical rule separating status-bar segments.
@@ -1911,6 +1987,12 @@ func (s *StatusBar) Ready() {
 			s.OnToggleLeftPane()
 		}
 	})
+	s.bottomBtn = s.footerIconButton("▤", "Toggle Console (bottom pane)", func() {
+		s.bottomPaneVisible = !s.bottomPaneVisible
+		if s.OnToggleBottomPane != nil {
+			s.OnToggleBottomPane()
+		}
+	})
 	s.rightBtn = s.footerIconButton("◨", "Toggle Right Pane", func() {
 		s.rightPaneVisible = !s.rightPaneVisible
 		if s.OnToggleRightPane != nil {
@@ -1927,11 +2009,14 @@ func (s *StatusBar) Ready() {
 	s.connLabel = s.footerText("in-memory", colorTypeInt) // #89CEFF blue
 
 	// ── Query metrics / transient status ────────────────────────────────
+	// The status message is the flexible element: it expands to push pagination
+	// + mem pill to the right, and truncates with an ellipsis when long so those
+	// controls are never clipped off the right edge.
 	s.statusLabel = s.footerText("Ready", colorTextMuted)
-
-	// Spacer pushes pagination + mem pill to the right.
-	spacer := Control.New()
-	spacer.SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	s.statusLabel.SetTextOverrunBehavior(TextServer.OverrunTrimEllipsis)
+	s.statusLabel.SetClipText(true)
+	s.statusLabel.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	s.statusLabel.AsControl().SetCustomMinimumSize(Vector2.New(scaled(24), 0))
 
 	// ── Right: pagination ───────────────────────────────────────────────
 	firstBtn := s.footerIconButton("«", "First Page", func() {
@@ -1965,13 +2050,13 @@ func (s *StatusBar) Ready() {
 
 	// ── Assemble ────────────────────────────────────────────────────────
 	s.AsNode().AddChild(s.leftBtn.AsNode())
+	s.AsNode().AddChild(s.bottomBtn.AsNode())
 	s.AsNode().AddChild(s.rightBtn.AsNode())
 	s.AsNode().AddChild(footerDivider().AsNode())
 	s.AsNode().AddChild(s.connDot.AsNode())
 	s.AsNode().AddChild(s.connLabel.AsNode())
 	s.AsNode().AddChild(footerDivider().AsNode())
 	s.AsNode().AddChild(s.statusLabel.AsNode())
-	s.AsNode().AddChild(spacer.AsNode())
 	s.AsNode().AddChild(firstBtn.AsNode())
 	s.AsNode().AddChild(prevBtn.AsNode())
 	s.AsNode().AddChild(s.pageLabel.AsNode())
@@ -2388,6 +2473,18 @@ func (a *App) onGatewayConnected(entry models.GatewayEntry, auth *bfaws.AuthMana
 	w := a.mainWin
 	password := entry.ResolvePassword()
 
+	if entry.IsDirect() {
+		// Direct Postgres: dial the real host:port with no tunnel or AWS auth.
+		RunOpenPostgres(entry.RDSHost, entry.RDSPort, entry.DBName, entry.DBUser, password,
+			entry.EffectiveSSLMode(), nextTabID, 0, w.results, func(msg string) {
+				w.gatewayLoadingMsg = msg
+			})
+		nextTabID++
+
+		w.pendingGateway = &GatewayConnection{Config: entry}
+		return
+	}
+
 	// For IAM auth, pass the AWS config; for password auth, pass nil
 	var awsCfg *aws.Config
 	if entry.UseIAMAuth() {
@@ -2523,18 +2620,31 @@ func (a *App) updateCachedState() {
 	a.cachedState, _ = json.Marshal(state)
 }
 
+// rootWindow returns the application's root Window (the main OS window), if the
+// scene tree is available. It's the content-scale reference for every child
+// window/popup so they render at the correct HiDPI scale.
+func rootWindow() (Window.Instance, bool) {
+	if tree, ok := Object.As[SceneTree.Instance](Engine.GetMainLoop()); ok {
+		return tree.Root().AsWindow(), true
+	}
+	return Window.Instance{}, false
+}
+
+// matchContentScale copies src's content-scale settings onto dst. A freshly
+// created Window (secondary window or PopupPanel) defaults to content_scale_size
+// {0,0}, which on a HiDPI (Retina) display renders its UI tiny compared to the
+// root; copying the root's settings keeps child windows visually consistent.
+func matchContentScale(dst, src Window.Instance) {
+	dst.SetContentScaleMode(src.ContentScaleMode())
+	dst.SetContentScaleAspect(src.ContentScaleAspect())
+	dst.SetContentScaleSize(src.ContentScaleSize())
+	dst.SetContentScaleFactor(src.ContentScaleFactor())
+}
+
 func (a *App) newWindow() {
 	aw := createSecondaryWindow(a.Duck, a.history, func() { a.newWindow() })
-	// A Window.New() secondary window defaults to content_scale_size {0,0}; on a
-	// HiDPI (Retina) display that makes its UI render tiny compared to the root
-	// window, which inherits the project viewport as its content-scale base.
-	// Copy the root window's content-scale settings so new windows match it.
 	if a.mainWin != nil {
-		rw := a.mainWin.window
-		aw.window.SetContentScaleMode(rw.ContentScaleMode())
-		aw.window.SetContentScaleAspect(rw.ContentScaleAspect())
-		aw.window.SetContentScaleSize(rw.ContentScaleSize())
-		aw.window.SetContentScaleFactor(rw.ContentScaleFactor())
+		matchContentScale(aw.window, a.mainWin.window)
 	}
 	aw.onReLogin = func() { a.openGatewayScreen() }
 	aw.onNewConnection = func() { a.openGatewayScreen() }
@@ -2749,6 +2859,13 @@ func (a *App) pollResults() {
 			if w.extActionTab != nil {
 				w.loadExtensions(w.extActionTab)
 			}
+		}
+
+		// Show the database switcher once its background list query completes.
+		if w.dbListMsg != nil {
+			res := w.dbListMsg
+			w.dbListMsg = nil
+			w.presentDatabaseSwitcher(res)
 		}
 
 		// Update gateway loading label + step tracker if background status changed
@@ -2971,7 +3088,9 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 			cmd.Respond(control.Result{Error: "no active tab/history"})
 			return
 		}
-		entries := w.history.All()
+		// Scope to the tab's connection so the index matches the displayed,
+		// per-connection history list.
+		entries := w.history.AllFor(w.connKeyForTab(ts))
 		if d.Index < 0 || d.Index >= len(entries) {
 			cmd.Respond(control.Result{Error: "invalid history index"})
 			return
@@ -3299,6 +3418,7 @@ func RegisterAll() {
 	classdb.Register[ExtensionsPanel]()
 	classdb.Register[RowDetailPanel]()
 	classdb.Register[StatusBar]()
+	classdb.Register[ConsolePanel]()
 	classdb.Register[GatewayScreen]()
 	classdb.Register[GatewayInfoPanel]()
 	classdb.Register[App]()

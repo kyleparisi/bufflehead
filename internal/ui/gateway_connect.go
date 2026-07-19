@@ -173,6 +173,23 @@ func (w *AppWindow) reconnectConnection(idx int, cmd *control.Command) {
 		outcome := &ReconnectOutcome{ConnIdx: idx, Steps: steps}
 		finish := func() { w.results <- DBResult{Kind: ReqReconnect, ControlCmd: cmd, Reconnect: outcome} }
 
+		// Direct Postgres: no tunnel or AWS auth — just reopen the DB.
+		if entry.IsDirect() {
+			pgConn, tables, err := openDirectPostgresDB(entry)
+			if err != nil {
+				outcome.Steps = append(outcome.Steps, control.ReconnectStep{
+					Step: "connect_db", OK: false, Error: err.Error(),
+				})
+				finish()
+				return
+			}
+			outcome.Steps = append(outcome.Steps, control.ReconnectStep{Step: "connect_db", OK: true})
+			outcome.Querier = pgConn
+			outcome.Tables = tables
+			finish()
+			return
+		}
+
 		// Refresh AWS credentials/config for IAM auth so an expired SSO login
 		// surfaces here (and a fresh login is picked up) before we build a token.
 		var awsCfg *aws.Config
@@ -224,6 +241,73 @@ func (w *AppWindow) reconnectConnection(idx int, cmd *control.Command) {
 	}()
 }
 
+// switchDatabase re-points a Postgres connection at a different database on the
+// same server. It reuses the reconnect teardown+rebuild plumbing but KEEPS the
+// SSM tunnel (host:port is database-agnostic) — only the DB pool is swapped for
+// one bound to the new dbname. The new schema/tables repopulate via the shared
+// ReqReconnect result handler.
+func (w *AppWindow) switchDatabase(idx int, dbName string) {
+	if idx <= 0 || idx >= len(w.connections) {
+		return
+	}
+	conn := w.connections[idx]
+	if conn.Gateway == nil {
+		return
+	}
+	if conn.Gateway.Config.DBName == dbName {
+		return // already on this database
+	}
+
+	// ── State change: point the config at the new database. ──
+	conn.Gateway.Config.DBName = dbName
+	entry := conn.Gateway.Config
+
+	w.statusBar.SetStatus(fmt.Sprintf("Switching %s to database %q...", conn.Name, dbName))
+
+	// ── Teardown (main thread): stop worker + close DB pool, keep the tunnel. ──
+	if conn.worker != nil {
+		conn.worker.Stop()
+		conn.worker = nil
+	}
+	if conn.DB != nil {
+		conn.DB.Close()
+		conn.DB = nil
+	}
+
+	steps := []control.ReconnectStep{{Step: "cancel_queries", OK: true}, {Step: "close_db", OK: true}}
+
+	// ── Rebuild (goroutine): open a new pool bound to dbName over the same tunnel. ──
+	go func() {
+		outcome := &ReconnectOutcome{ConnIdx: idx, Steps: steps, Tunnel: conn.Gateway.Tunnel}
+		finish := func() { w.results <- DBResult{Kind: ReqReconnect, Reconnect: outcome} }
+
+		var pgConn *db.PostgresDB
+		var tables []db.TableInfo
+		var err error
+		if entry.IsDirect() {
+			pgConn, tables, err = openDirectPostgresDB(entry)
+		} else {
+			var awsCfg *aws.Config
+			if entry.UseIAMAuth() && conn.Gateway.Auth != nil {
+				cfg := conn.Gateway.Auth.Config()
+				awsCfg = &cfg
+			}
+			rdsEndpoint := fmt.Sprintf("%s:%d", entry.RDSHost, entry.RDSPort)
+			pgConn, tables, err = openGatewayDB("127.0.0.1", entry.LocalPort, rdsEndpoint,
+				entry.DBName, entry.DBUser, entry.ResolvePassword(), awsCfg)
+		}
+		if err != nil {
+			outcome.Steps = append(outcome.Steps, control.ReconnectStep{Step: "connect_db", OK: false, Error: err.Error()})
+			finish()
+			return
+		}
+		outcome.Steps = append(outcome.Steps, control.ReconnectStep{Step: "connect_db", OK: true})
+		outcome.Querier = pgConn
+		outcome.Tables = tables
+		finish()
+	}()
+}
+
 // openGatewayDB opens a Postgres gateway connection and loads its tables and
 // schemas, synchronously. It mirrors RunOpenGateway's connect logic but returns
 // directly instead of posting to a channel, so it can be used inside a caller's
@@ -252,6 +336,45 @@ func openGatewayDB(host string, port int, rdsEndpoint, dbName, user, password st
 		pgConn, err = r.conn, r.err
 	case <-time.After(30 * time.Second):
 		return nil, nil, fmt.Errorf("connection timed out after 30s — tunnel may not be forwarding data")
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+
+	tables, err := pgConn.Tables()
+	if err != nil {
+		pgConn.Close()
+		return nil, nil, fmt.Errorf("load tables: %w", err)
+	}
+	if err := pgConn.AllTableSchemas(tables); err != nil {
+		pgConn.Close()
+		return nil, nil, fmt.Errorf("load schemas: %w", err)
+	}
+	return pgConn, tables, nil
+}
+
+// openDirectPostgresDB opens a direct Postgres connection (no tunnel) and loads
+// its tables and schemas synchronously. Mirrors openGatewayDB for the direct
+// Postgres connection type.
+func openDirectPostgresDB(entry models.GatewayEntry) (*db.PostgresDB, []db.TableInfo, error) {
+	type pgResult struct {
+		conn *db.PostgresDB
+		err  error
+	}
+	ch := make(chan pgResult, 1)
+	go func() {
+		pgConn, err := db.NewPostgresDirect(entry.RDSHost, entry.RDSPort,
+			entry.DBName, entry.DBUser, entry.ResolvePassword(), entry.EffectiveSSLMode())
+		ch <- pgResult{pgConn, err}
+	}()
+
+	var pgConn *db.PostgresDB
+	var err error
+	select {
+	case r := <-ch:
+		pgConn, err = r.conn, r.err
+	case <-time.After(30 * time.Second):
+		return nil, nil, fmt.Errorf("connection timed out after 30s — host may be unreachable")
 	}
 	if err != nil {
 		return nil, nil, err
@@ -315,8 +438,20 @@ func (w *AppWindow) handleReconnectResult(res DBResult) {
 					ts.sqlPanel.SetCompletionTables(conn.Tables)
 				}
 			}
-			if idx == w.activeConnIdx && conn.Gateway != nil {
-				w.titleBar.SetAIPrompt(buildAIPrompt(conn.Gateway.Config, conn.Tables, w.controlAddr))
+			if conn.Gateway != nil {
+				// Keep the connection Path and breadcrumb in sync with the
+				// (possibly changed) database name — a database switch reuses
+				// this handler with a new Config.DBName.
+				cfg := conn.Gateway.Config
+				if cfg.IsDirect() {
+					conn.Path = fmt.Sprintf("postgresql://%s:%d/%s", cfg.RDSHost, cfg.RDSPort, cfg.DBName)
+				} else {
+					conn.Path = fmt.Sprintf("postgresql://localhost:%d/%s", cfg.LocalPort, cfg.DBName)
+				}
+				if idx == w.activeConnIdx {
+					w.titleBar.SetAIPrompt(buildAIPrompt(cfg, conn.Tables, w.controlAddr))
+					w.titleBar.SetConnectionInfo("PostgreSQL", conn.Name, cfg.DBName)
+				}
 			}
 			applyConnTileTheme(conn.button.AsControl(), idx == w.activeConnIdx)
 			w.statusBar.SetStatus(fmt.Sprintf("Reconnected: %s (%d tables/views)", conn.Name, len(conn.Tables)))
@@ -325,11 +460,19 @@ func (w *AppWindow) handleReconnectResult(res DBResult) {
 			w.statusBar.SetStatus("Reconnect failed: " + conn.Name)
 		}
 
-		// Show step detail in the grid when the user triggered this, or on any
-		// failure so the breakdown is always visible.
+		// Record the step-by-step detail in the console so it's available without
+		// clobbering the data grid — a successful reconnect/database switch is not
+		// an error and shouldn't render as one. Only a genuine failure escalates to
+		// the data grid (and pops the console open), where the breakdown is prominent.
 		if uiInitiated || !overallOK {
-			if ts := w.currentTab(); ts != nil && ts.connIdx == idx {
-				ts.dataGrid.ShowError(formatReconnectSteps(conn.Name, overallOK, oc.Steps))
+			detail := formatReconnectSteps(conn.Name, overallOK, oc.Steps)
+			if !overallOK {
+				if ts := w.currentTab(); ts != nil && ts.connIdx == idx {
+					ts.dataGrid.ShowError(detail)
+				}
+				w.logConsole(detail)
+			} else {
+				LogConsole(detail)
 			}
 		}
 	}
