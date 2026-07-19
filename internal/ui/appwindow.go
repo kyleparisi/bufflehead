@@ -995,8 +995,16 @@ func (w *AppWindow) render() {
 		conn := w.connections[w.activeConnIdx]
 		if conn.Gateway != nil {
 			w.titleBar.SetAIPrompt(buildAIPrompt(conn.Gateway.Config, conn.Tables, w.controlAddr))
+			w.titleBar.SetReconnectVisible(true)
 		} else {
-			w.titleBar.SetAIPrompt("")
+			// Local connection: a loaded file tab gets a prompt describing how to
+			// query it over the control API. Reconnect is gateway-only.
+			w.titleBar.SetReconnectVisible(false)
+			if active.State.FilePath != "" {
+				w.titleBar.SetAIPrompt(buildFileAIPrompt(active.State.FilePath, conn.Name, active.State.Schema, w.controlAddr))
+			} else {
+				w.titleBar.SetAIPrompt("")
+			}
 		}
 		connName := conn.Name
 		if conn.Path == ":memory:" {
@@ -2065,6 +2073,7 @@ func (w *AppWindow) handleRefreshResult(res DBResult) {
 	// Update AI prompt if this is the active connection
 	if idx == w.activeConnIdx && conn.Gateway != nil {
 		w.titleBar.SetAIPrompt(buildAIPrompt(conn.Gateway.Config, conn.Tables, w.controlAddr))
+		w.titleBar.SetReconnectVisible(true)
 	}
 
 	w.statusBar.SetStatus(fmt.Sprintf("Refreshed: %s (%d tables/views)", conn.Name, len(conn.Tables)))
@@ -2107,6 +2116,29 @@ func buildAIPrompt(entry models.GatewayEntry, tables []db.TableInfo, controlAddr
 				prefix = "- " + t.Name + " (view)"
 			}
 			b.WriteString(fmt.Sprintf("%s (%s)\n", prefix, strings.Join(cols, ", ")))
+		}
+	}
+
+	return b.String()
+}
+
+// buildFileAIPrompt produces an AI prompt for a local data file (CSV, Parquet,
+// JSON, TSV, …) opened in the in-memory DuckDB connection. The agent queries the
+// file by its single-quoted path via the /sql control endpoint.
+func buildFileAIPrompt(filePath, connName string, schema []db.Column, controlAddr string) string {
+	var b strings.Builder
+	b.WriteString("I have a local data file open in Bufflehead that you can query with SQL (DuckDB).\n")
+	b.WriteString(fmt.Sprintf("File: %s\n", filePath))
+	b.WriteString("\nRun queries via HTTP (no auth needed, Bufflehead manages the connection).\n")
+	b.WriteString("Reference the file by its single-quoted path in the FROM clause:\n")
+	b.WriteString(fmt.Sprintf("  curl -s -X POST http://%s/sql --data-raw \"{\\\"sql\\\":\\\"SELECT * FROM '%s' LIMIT 10\\\",\\\"connection\\\":\\\"%s\\\"}\"\n", controlAddr, filePath, connName))
+	b.WriteString("\nResults are limited to 100 rows by default. Queries time out after 30 seconds.\n")
+	b.WriteString("Response format: {\"columns\":[...],\"rows\":[[...],...],\"total\":N}\n")
+
+	if len(schema) > 0 {
+		b.WriteString("\nSchema:\n")
+		for _, c := range schema {
+			b.WriteString(fmt.Sprintf("- %s %s\n", c.Name, c.DataType))
 		}
 	}
 
@@ -2225,6 +2257,10 @@ func (w *AppWindow) handleOpenFileResult(res DBResult) {
 
 	// Delegate query result handling
 	w.handleQueryResult(res)
+
+	// Re-project the title bar now that the schema is loaded, so the "Ask AI"
+	// button appears with a file-specific prompt (render reads State.Schema).
+	w.render()
 }
 
 func (w *AppWindow) updateNavButtons() {
