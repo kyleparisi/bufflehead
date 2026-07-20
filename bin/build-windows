@@ -165,11 +165,10 @@ sign_enabled=0
 ensure_sign_tool() {
   command -v sign >/dev/null 2>&1 && return
   step "install dotnet 'sign' CLI"
-  if [ -n "${SIGN_TOOL_VERSION:-}" ]; then
-    dotnet tool install --global sign --version "$SIGN_TOOL_VERSION"
-  else
-    dotnet tool install --global sign --prerelease
-  fi
+  # Pinned (the 'sign' package is prerelease-only, so a floating --prerelease
+  # could pull a version that drops the artifact-signing command). Override with
+  # SIGN_TOOL_VERSION if you need a newer build.
+  dotnet tool install --global sign --version "${SIGN_TOOL_VERSION:-0.9.1-beta.26330.1}"
   export PATH="$PATH:$(cygpath -u "${USERPROFILE:-$HOME}")/.dotnet/tools"
 }
 
@@ -183,10 +182,10 @@ sign_files() {   # sign_files <file>...
   for f in "$@"; do
     [ -f "$f" ] || { echo "  sign: $f missing, skipping"; continue; }
     echo "  sign: $f"
-    sign code trusted-signing \
-      --trusted-signing-endpoint "$SIGN_ENDPOINT" \
-      --trusted-signing-account "$SIGN_ACCOUNT" \
-      --trusted-signing-certificate-profile "$SIGN_PROFILE" \
+    sign code artifact-signing \
+      --artifact-signing-endpoint "$SIGN_ENDPOINT" \
+      --artifact-signing-account "$SIGN_ACCOUNT" \
+      --artifact-signing-certificate-profile "$SIGN_PROFILE" \
       --timestamp-url "http://timestamp.acs.microsoft.com" \
       --description "Bufflehead" \
       --description-url "https://bufflehead.app" \
