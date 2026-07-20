@@ -149,6 +149,58 @@ step "verify bundle self-contained"
   echo "self-contained (all lib*.dll deps present)"
 )
 
+# --- Authenticode signing (Azure Artifact Signing) ---------------------------
+# Signs the shipped PE binaries via the dotnet 'sign' CLI backed by Azure
+# Artifact Signing (formerly Trusted Signing). Enabled only when the AZURE_SIGN_*
+# vars are set, so unsigned local/dev builds keep working. Auth is
+# DefaultAzureCredential: in CI, AZURE_TENANT_ID / AZURE_CLIENT_ID /
+# AZURE_CLIENT_SECRET (a service principal with the "Artifact Signing Certificate
+# Profile Signer" role); locally, `az login` also works.
+SIGN_ENDPOINT="${AZURE_SIGN_ENDPOINT:-}"
+SIGN_ACCOUNT="${AZURE_SIGN_ACCOUNT:-}"
+SIGN_PROFILE="${AZURE_SIGN_PROFILE:-}"
+sign_enabled=0
+[ -n "$SIGN_ENDPOINT" ] && [ -n "$SIGN_ACCOUNT" ] && [ -n "$SIGN_PROFILE" ] && sign_enabled=1
+
+ensure_sign_tool() {
+  command -v sign >/dev/null 2>&1 && return
+  step "install dotnet 'sign' CLI"
+  if [ -n "${SIGN_TOOL_VERSION:-}" ]; then
+    dotnet tool install --global sign --version "$SIGN_TOOL_VERSION"
+  else
+    dotnet tool install --global sign --prerelease
+  fi
+  export PATH="$PATH:$(cygpath -u "${USERPROFILE:-$HOME}")/.dotnet/tools"
+}
+
+sign_files() {   # sign_files <file>...
+  if [ "$sign_enabled" != 1 ]; then
+    echo "  signing skipped (AZURE_SIGN_* not set) for:$(printf ' %s' "$@")"
+    return
+  fi
+  ensure_sign_tool
+  local f
+  for f in "$@"; do
+    [ -f "$f" ] || { echo "  sign: $f missing, skipping"; continue; }
+    echo "  sign: $f"
+    sign code trusted-signing \
+      --trusted-signing-endpoint "$SIGN_ENDPOINT" \
+      --trusted-signing-account "$SIGN_ACCOUNT" \
+      --trusted-signing-certificate-profile "$SIGN_PROFILE" \
+      --timestamp-url "http://timestamp.acs.microsoft.com" \
+      --description "Bufflehead" \
+      --description-url "https://bufflehead.app" \
+      "$f"
+  done
+}
+
+# Sign our binaries (and the bundled MinGW runtime DLLs) BEFORE packaging, so the
+# installer wraps already-signed files. Signing must be the last write to each
+# PE — icon/metadata are already applied above.
+step "sign bundle binaries"
+sign_files "$OUT/Bufflehead.exe" "$OUT/windows_amd64.dll" \
+  "$OUT/libstdc++-6.dll" "$OUT/libgcc_s_seh-1.dll" "$OUT/libwinpthread-1.dll"
+
 # --- one-click installer (Inno Setup) ----------------------------------------
 step "build installer"
 find_iscc() {
@@ -182,6 +234,11 @@ iss_defs=("/DAppVersion=$V3")
 [ -f graphics/icon.ico ] && iss_defs+=("/DIconFile=$(cygpath -w "$PWD/graphics/icon.ico")")
 # Disable MSYS2 path-mangling of the /D and /O switches for this native exe.
 MSYS2_ARG_CONV_EXCL='*' "$iscc" "${iss_defs[@]}" "/Oinstaller" packaging/windows/bufflehead.iss
+
+# Sign the installer LAST — this is the file users download, so its signature is
+# what Windows SmartScreen/UAC evaluates.
+step "sign installer"
+sign_files "installer/Bufflehead-Setup.exe"
 
 step "done"
 echo "bundle:    $OUT/"

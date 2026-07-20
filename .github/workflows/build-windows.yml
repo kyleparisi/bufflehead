@@ -31,8 +31,19 @@ jobs:
         shell: msys2 {0}
         # Pin GDPATH so gd is not in "local toolchain" mode and will
         # auto-download the pinned Godot 4.6.1 editor + libgodot.
+        #
+        # AZURE_SIGN_* turn on Authenticode signing via Azure Artifact Signing.
+        # The endpoint/account/profile are not secret; the service-principal
+        # credentials are (repo secrets). If the AZURE_* secrets are absent the
+        # build still succeeds — it just produces unsigned binaries.
         env:
           GDPATH: ${{ runner.temp }}/gd
+          AZURE_SIGN_ENDPOINT: https://eus.codesigning.azure.net/
+          AZURE_SIGN_ACCOUNT: bufflehead
+          AZURE_SIGN_PROFILE: bufflehead
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
         run: ./bin/build-windows
 
       - name: Upload Windows bundle (exe + GDExtension + runtime DLLs)
