@@ -322,6 +322,13 @@ func buildMux(s *Server) *http.ServeMux {
 		s.handleCommand(w, r, "reconnect")
 	})
 
+	// Show the "AWS SSO Session Expired" re-login modal without a live auth
+	// failure — used by integration tests and manual UI inspection. Optional
+	// payload: {"db":"...","detail":"..."} to preview specific text.
+	mux.HandleFunc("POST /show-relogin", func(w http.ResponseWriter, r *http.Request) {
+		s.handleCommand(w, r, "show_relogin")
+	})
+
 	mux.HandleFunc("GET /screenshot", func(w http.ResponseWriter, r *http.Request) {
 		cmd := &Command{
 			Action: "screenshot",

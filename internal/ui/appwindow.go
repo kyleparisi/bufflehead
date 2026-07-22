@@ -16,7 +16,6 @@ import (
 
 	"graphics.gd/classdb/BoxContainer"
 	"graphics.gd/classdb/Button"
-	"graphics.gd/classdb/ConfirmationDialog"
 	"graphics.gd/classdb/Control"
 	"graphics.gd/classdb/DisplayServer"
 	"graphics.gd/classdb/HBoxContainer"
@@ -149,7 +148,9 @@ type AppWindow struct {
 	onReLogin       func() // opens the gateway/SSO screen to re-authenticate
 	onNewConnection func() // opens the gateway screen to add a new connection
 
-	reLoginDialogOpen bool // guards against stacking re-login dialogs
+	reLoginDialogOpen bool             // guards against stacking re-login dialogs
+	rootPanel         PanelContainer.Instance // full-window root; host for modal overlays
+	reLoginOverlay    Control.Instance   // the in-scene re-login modal overlay (freed on dismiss)
 }
 
 // buildUI creates the full UI tree and returns the root node.
@@ -457,6 +458,7 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 	w.navWired = false
 
 	// Don't create tabs here — caller must call addNewTab() after adding bg to tree
+	w.rootPanel = bg
 	return bg
 }
 
@@ -2054,7 +2056,7 @@ func (w *AppWindow) showConnError(ts *tabState, err error, statusPrefix string) 
 	w.logConsole(statusPrefix + err.Error())
 	if isAuth {
 		w.statusBar.SetStatus("Login expired — log in again to reconnect")
-		w.promptReLogin()
+		w.promptReLogin(w.connDBName(ts), reLoginDetail(err))
 		return
 	}
 	w.statusBar.SetStatus(statusLine(statusPrefix + err.Error()))
@@ -2067,40 +2069,6 @@ func statusLine(msg string) string {
 		msg = strings.TrimRight(msg[:i], " :") + " — see Console for details"
 	}
 	return msg
-}
-
-// promptReLogin shows a dialog guiding the user to re-authenticate. Confirming
-// opens the connection/SSO screen. Guarded so only one dialog shows at a time.
-func (w *AppWindow) promptReLogin() {
-	if w.reLoginDialogOpen {
-		return
-	}
-	w.reLoginDialogOpen = true
-
-	dlg := ConfirmationDialog.New()
-	dlg.AsWindow().SetTitle("Login Expired")
-	dlg.AsAcceptDialog().SetDialogText(
-		"Your AWS SSO login has expired, so Bufflehead lost access to this database.\n\n" +
-			"Would you like to log in again now?")
-	dlg.AsAcceptDialog().SetOkButtonText("Log in again")
-	dlg.SetCancelButtonText("Not now")
-
-	dlg.AsAcceptDialog().OnConfirmed(func() {
-		w.reLoginDialogOpen = false
-		if w.onReLogin != nil {
-			w.onReLogin()
-		}
-		dlg.AsNode().QueueFree()
-	})
-	dlg.AsWindow().OnCloseRequested(func() {
-		w.reLoginDialogOpen = false
-		dlg.AsNode().QueueFree()
-	})
-
-	// Attach the dialog inside the current window's scene tree so it centers
-	// over the app. tabBarWrap is always part of that tree.
-	w.tabBarWrap.AsNode().AddChild(dlg.AsNode())
-	dlg.AsWindow().PopupCentered()
 }
 
 // handleRefreshResult updates a connection's table list and refreshes the sidebar.
