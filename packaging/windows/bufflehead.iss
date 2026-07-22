@@ -25,6 +25,13 @@ AppPublisher=Kyle Parisi
 DefaultDirName={autopf}\Bufflehead
 DefaultGroupName=Bufflehead
 DisableProgramGroupPage=yes
+; Install per-user so no admin/UAC elevation is needed (many users can't get
+; IT/admin rights). With PrivilegesRequired=lowest the {auto*} constants above
+; resolve to per-user locations ({localappdata}\Programs, per-user Start Menu /
+; desktop). PrivilegesRequiredOverridesAllowed=dialog still lets someone with
+; admin rights choose an all-users install if they want one.
+PrivilegesRequired=lowest
+PrivilegesRequiredOverridesAllowed=dialog
 UninstallDisplayIcon={app}\Bufflehead.exe
 OutputBaseFilename=Bufflehead-Setup
 ; Icon for Setup.exe itself — optional (passed by bin/build-windows as
