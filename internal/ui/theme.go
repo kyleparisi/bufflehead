@@ -533,6 +533,14 @@ func monoFont() Font.Instance {
 	return f.AsFont()
 }
 
+// boldFont returns a semibold UI system font for emphasized headings.
+func boldFont() Font.Instance {
+	f := SystemFont.New()
+	f.SetFontNames([]string{"SF Pro Display", "Helvetica Neue", "Arial", "sans-serif"})
+	f.SetFontWeight(600)
+	return f.AsFont()
+}
+
 // Themed checkbox icons — subtle outlined square when off, indigo fill + white
 // check when on (matches the design's custom checkbox, not Godot's default).
 // svgCheckCircle — indigo filled circle with a white check, marks the current DB

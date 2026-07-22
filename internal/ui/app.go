@@ -2916,7 +2916,7 @@ func (a *App) pollResults() {
 					// Prompt re-login once per error transition (guarded by
 					// LastTunnelMsg dedup below and the dialog's own guard).
 					if conn.Gateway.LastTunnelMsg != msg {
-						w.promptReLogin()
+						w.promptReLogin(conn.Gateway.Config.DBName, reLoginDetailString(tunnel.LastError()))
 					}
 				} else {
 					msg = conn.Name + ": Tunnel error — " + tunnel.LastError()
@@ -3282,6 +3282,25 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 			return
 		}
 		w.showHistorySidebar(ts)
+		cmd.Respond(control.Result{OK: true})
+
+	case "show_relogin":
+		// Test/preview hook: render the re-login modal with sample or supplied
+		// text, without a live auth failure.
+		var pd struct {
+			DB     string `json:"db"`
+			Detail string `json:"detail"`
+		}
+		if len(cmd.Data) > 0 {
+			_ = json.Unmarshal(cmd.Data, &pd)
+		}
+		if pd.DB == "" {
+			pd.DB = "advisorarch"
+		}
+		if pd.Detail == "" {
+			pd.Detail = "Error: Status 401 - Unauthorized (Session Token Revoked)"
+		}
+		w.promptReLogin(pd.DB, pd.Detail)
 		cmd.Respond(control.Result{OK: true})
 
 	case "show_extensions":
