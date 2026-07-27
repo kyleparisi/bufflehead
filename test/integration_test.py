@@ -114,6 +114,14 @@ def count_nodes_named(tscn_text, name):
     return sum(1 for n in parse_tscn(tscn_text) if n["path"].split("/")[-1] == name)
 
 
+def count_nodes_name_prefix(tscn_text, prefix):
+    """Count nodes whose leaf name starts with `prefix` (e.g. per-item names
+    like 'BookmarkCard_<label>')."""
+    return sum(
+        1 for n in parse_tscn(tscn_text) if n["path"].split("/")[-1].startswith(prefix)
+    )
+
+
 def ui_tree(width=None, height=None, scale=None):
     params = {}
     if width:
@@ -1169,6 +1177,47 @@ class TestConnectionControls:
         )
 
         # Restore a normal data view for subsequent tests.
+        open_file(SAMPLE)
+
+    def test_gateway_screen_renders_with_many_bookmarks(self):
+        """Regression: with 6+ saved AWS bookmarks the connection screen used to
+        render blank (only the header) or crash. Building ~100+ Godot nodes in
+        one frame overflowed graphics.gd's object-pool GC, which freed the
+        layout containers; the per-card credential goroutine also raced the
+        frame loop. Seed 8 bookmarks, open the screen, and verify every card
+        renders and the app stays alive."""
+        close_all_connections()
+        close_all_tabs()
+        post("new-tab")
+        time.sleep(0.3)
+
+        labels = [f"gw-{i}" for i in range(8)]
+        try:
+            for label in labels:
+                assert post("create-test-bookmark", {"label": label})["ok"] is True
+
+            assert post("open-gateway")["ok"] is True
+            # Cards build a few per frame — give it time to finish.
+            time.sleep(1.5)
+
+            tree = ui_tree()
+            assert find_node(tree, "GatewayScreen") is not None, (
+                "gateway screen should render with many bookmarks present"
+            )
+            assert count_nodes_name_prefix(tree, "BookmarkCard_") >= 8, (
+                "all 8 seeded bookmarks should render as cards (was blank before)"
+            )
+
+            # A crash would have killed the control server.
+            assert state() is not None, "app crashed while gateway screen open"
+
+            assert post("close-gateway")["ok"] is True
+            time.sleep(0.3)
+            assert state() is not None, "app crashed during gateway teardown"
+        finally:
+            for label in labels:
+                post("delete-test-bookmark", {"label": label})
+
         open_file(SAMPLE)
 
 

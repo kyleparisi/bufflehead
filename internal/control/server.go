@@ -57,6 +57,14 @@ type CloseConnectionData struct {
 	Index int `json:"index"`
 }
 
+// CreateTestBookmarkData is the optional payload for "create_test_bookmark". A
+// custom label lets a test seed several distinct AWS bookmarks — the many-card
+// render path that overflowed graphics.gd's object pool. Empty label defaults
+// to "dummy-bookmark".
+type CreateTestBookmarkData struct {
+	Label string `json:"label,omitempty"`
+}
+
 // SelectColumnsData is the payload for the "select_columns" action: the set of
 // column names to keep visible (empty means all).
 type SelectColumnsData struct {
@@ -276,6 +284,11 @@ func buildMux(s *Server) *http.ServeMux {
 	// bookmark persistence across platforms (esp. Windows) and restarts.
 	mux.HandleFunc("POST /create-test-bookmark", func(w http.ResponseWriter, r *http.Request) {
 		s.handleCommand(w, r, "create_test_bookmark")
+	})
+
+	// Remove a bookmark by label — lets tests clean up seeded bookmarks.
+	mux.HandleFunc("POST /delete-test-bookmark", func(w http.ResponseWriter, r *http.Request) {
+		s.handleCommand(w, r, "delete_test_bookmark")
 	})
 
 	mux.HandleFunc("POST /select-row", func(w http.ResponseWriter, r *http.Request) {
