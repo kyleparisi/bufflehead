@@ -39,6 +39,17 @@ type GatewayScreen struct {
 	gateways  []models.GatewayEntry
 	cards     []*gatewayCard
 
+	// Saved-connection cards are built incrementally (a few per frame) from
+	// Process rather than all at once in Ready. Building ~100+ Godot nodes in a
+	// single frame overflowed graphics.gd's 128-entry object pool chunk, whose
+	// growth mid-frame made the per-frame GC free freshly-created container
+	// nodes — the connection screen rendered blank with 6+ saved connections.
+	// Spreading the work keeps each frame well under that boundary.
+	rightCol       VBoxContainer.Instance
+	pendingCards   []func() PanelContainer.Instance
+	savedCardsIdx  int
+	savedCardsDone bool
+
 	OnConnect func(entry models.GatewayEntry, auth *bfaws.AuthManager, tunnel *bfaws.TunnelManager)
 	OnCancel  func() // exit the connection screen
 
@@ -256,22 +267,27 @@ func (g *GatewayScreen) Ready() {
 	rightTitle.AsControl().AddThemeColorOverride("font_color", colorText)
 	rightCol.AsNode().AddChild(rightTitle.AsNode())
 
-	// Saved gateway cards (from YAML config)
+	// Queue the saved-connection cards to be built incrementally from Process
+	// (see savedCardsIdx handling there). Building them all now would create too
+	// many nodes in one frame and trip graphics.gd's object-pool GC.
+	g.rightCol = rightCol
 	for i, entry := range g.gateways {
-		cardPanel := g.buildCardPanel(entry, i)
-		rightCol.AsNode().AddChild(cardPanel.AsNode())
+		entry, i := entry, i
+		g.pendingCards = append(g.pendingCards, func() PanelContainer.Instance {
+			return g.buildCardPanel(entry, i)
+		})
 	}
-
-	// Bookmark cards
 	if g.bookmarks != nil {
 		for _, bm := range g.bookmarks.All() {
-			bmCard := g.buildBookmarkCard(bm)
-			rightCol.AsNode().AddChild(bmCard.AsNode())
+			bm := bm
+			g.pendingCards = append(g.pendingCards, func() PanelContainer.Instance {
+				return g.buildBookmarkCard(bm)
+			})
 		}
 	}
 
 	// Empty state when no saved connections
-	if len(g.gateways) == 0 && (g.bookmarks == nil || len(g.bookmarks.All()) == 0) {
+	if len(g.pendingCards) == 0 {
 		emptyLabel := Label.New()
 		emptyLabel.SetText("No saved connections yet.\nUse the form to connect, and it will be saved here automatically.")
 		emptyLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(13))
@@ -279,6 +295,7 @@ func (g *GatewayScreen) Ready() {
 		emptyLabel.SetAutowrapMode(3)
 		emptyLabel.SetHorizontalAlignment(1)
 		rightCol.AsNode().AddChild(emptyLabel.AsNode())
+		g.savedCardsDone = true
 	}
 
 	rightScroll.AsNode().AddChild(rightCol.AsNode())
@@ -1722,12 +1739,10 @@ func (g *GatewayScreen) buildCardPanel(entry models.GatewayEntry, idx int) Panel
 	}
 	g.cards = append(g.cards, card)
 
-	// Check credentials async
-	go func() {
-		status := card.auth.Status()
-		card.credStatus = status
-		card.needsUpdate = true
-	}()
+	// Credentials are checked synchronously when the user clicks Connect (see
+	// onCardAction). We do NOT check them in a goroutine at build time — that
+	// raced the frame loop and crashed the connection screen.
+	statusLabel.SetText("Ready — click Connect")
 
 	// Wire action button
 	cardIdx := idx
@@ -1754,6 +1769,8 @@ func envBadgeColor(env string) Color.RGBA {
 
 func (g *GatewayScreen) buildBookmarkCard(bm models.Bookmark) PanelContainer.Instance {
 	panel := PanelContainer.New()
+	// Stable, unique name so integration tests can count rendered cards.
+	panel.AsNode().SetName("BookmarkCard_" + bm.Label)
 	border := makeStyleBox(colorBgPanel, 6, 1, colorBorderDim)
 	border.AsStyleBox().SetContentMarginAll(scaled(16))
 	panel.AsControl().AddThemeStyleboxOverride("panel", border.AsStyleBox())
@@ -1871,12 +1888,9 @@ func (g *GatewayScreen) buildBookmarkCard(bm models.Bookmark) PanelContainer.Ins
 		statusDot.SetText("●")
 		statusDot.AsControl().AddThemeColorOverride("font_color", colorStatusGreen)
 	} else {
-		// Check credentials async
-		go func() {
-			status := card.auth.Status()
-			card.credStatus = status
-			card.needsUpdate = true
-		}()
+		// Credentials are checked synchronously when the user clicks Connect
+		// (see onCardAction). No build-time goroutine — it raced the frame loop.
+		statusLabel.SetText("Ready — click Connect")
 	}
 
 	// Wire action button
@@ -1913,6 +1927,11 @@ func (g *GatewayScreen) onCardAction(idx int) {
 		}
 		return
 	}
+
+	// Check credentials now, synchronously, in response to the user's click —
+	// replacing the old build-time goroutine that raced the frame loop.
+	// auth.Status() has its own 5s timeout.
+	card.credStatus = card.auth.Status()
 
 	switch card.credStatus {
 	case bfaws.CredsExpired, bfaws.CredsNoCredentials:
@@ -1985,6 +2004,22 @@ func (g *GatewayScreen) startGatewayConnection(card *gatewayCard) {
 
 // Process is called each frame to update UI from background goroutines.
 func (g *GatewayScreen) Process(delta Float.X) {
+	// Build saved-connection cards a few per frame (see pendingCards). Doing
+	// this incrementally keeps the number of Godot nodes created per frame below
+	// graphics.gd's object-pool GC boundary that otherwise freed the columns.
+	if !g.savedCardsDone && g.rightCol != (VBoxContainer.Instance{}) {
+		const cardsPerFrame = 2
+		for n := 0; n < cardsPerFrame && g.savedCardsIdx < len(g.pendingCards); n++ {
+			card := g.pendingCards[g.savedCardsIdx]()
+			g.rightCol.AsNode().AddChild(card.AsNode())
+			g.savedCardsIdx++
+		}
+		if g.savedCardsIdx >= len(g.pendingCards) {
+			g.savedCardsDone = true
+			g.pendingCards = nil
+		}
+	}
+
 	// ── SSO login updates ──
 	if g.ssoUpdate {
 		g.ssoUpdate = false

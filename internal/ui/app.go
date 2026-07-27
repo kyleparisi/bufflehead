@@ -15,11 +15,11 @@ import (
 	bfaws "bufflehead/internal/aws"
 	"bufflehead/internal/completion"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"bufflehead/internal/control"
 	"bufflehead/internal/db"
 	"bufflehead/internal/models"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 
 	"graphics.gd/classdb"
 	"graphics.gd/classdb/BoxContainer"
@@ -41,15 +41,15 @@ import (
 	"graphics.gd/classdb/Label"
 	"graphics.gd/classdb/LineEdit"
 	"graphics.gd/classdb/MarginContainer"
-	"graphics.gd/classdb/TextureRect"
 	"graphics.gd/classdb/Node"
 	"graphics.gd/classdb/PanelContainer"
 	"graphics.gd/classdb/PopupMenu"
 	"graphics.gd/classdb/SceneTree"
-	"graphics.gd/classdb/StyleBoxEmpty"
 	"graphics.gd/classdb/ScrollContainer"
-	"graphics.gd/classdb/TextServer"
 	"graphics.gd/classdb/SplitContainer"
+	"graphics.gd/classdb/StyleBoxEmpty"
+	"graphics.gd/classdb/TextServer"
+	"graphics.gd/classdb/TextureRect"
 	"graphics.gd/classdb/Tree"
 	"graphics.gd/classdb/TreeItem"
 	"graphics.gd/classdb/VBoxContainer"
@@ -939,7 +939,7 @@ type SQLPanel struct {
 	OnRunQuery func(sql string)
 
 	// Autocomplete data
-	columns []db.Column   // current schema columns
+	columns []db.Column    // current schema columns
 	tables  []db.TableInfo // current database tables (for .duckdb files)
 }
 
@@ -1062,22 +1062,22 @@ type DataGrid struct {
 	OnRowSelected      func(rowIndex int)
 	OnRowsSelected     func(rowIndices []int)
 	OnSelectionCleared func()
-	columns          []string // track current column names
-	rows             [][]string
-	colTypes         []string // data types for alignment
-	colWidthCache    map[string][]int // query hash → column widths
-	dragging         bool
-	dragCol          int
-	dragStartX       float32
-	dragStartWidth   int
-	skipSort         bool              // set during resize to suppress column sort
-	selectedItem     TreeItem.Instance  // previously selected item (for clearing cell border)
-	selectedCol      int               // previously selected column
-	cellEdit         LineEdit.Instance  // overlay for copying cell text
-	contextMenu      PopupMenu.Instance // right-click context menu
-	selectedRows     map[int]bool       // set of selected row indices for multi-select
-	lastSelectedRow  int               // anchor for shift-click range selection
-	mouseHandled     bool              // suppress OnItemSelected after mouse click handling
+	columns            []string // track current column names
+	rows               [][]string
+	colTypes           []string         // data types for alignment
+	colWidthCache      map[string][]int // query hash → column widths
+	dragging           bool
+	dragCol            int
+	dragStartX         float32
+	dragStartWidth     int
+	skipSort           bool               // set during resize to suppress column sort
+	selectedItem       TreeItem.Instance  // previously selected item (for clearing cell border)
+	selectedCol        int                // previously selected column
+	cellEdit           LineEdit.Instance  // overlay for copying cell text
+	contextMenu        PopupMenu.Instance // right-click context menu
+	selectedRows       map[int]bool       // set of selected row indices for multi-select
+	lastSelectedRow    int                // anchor for shift-click range selection
+	mouseHandled       bool               // suppress OnItemSelected after mouse click handling
 }
 
 func (d *DataGrid) Ready() {
@@ -1385,7 +1385,7 @@ func (d *DataGrid) GuiInput(event InputEvent.Instance) {
 						d.dragStartX = mb.AsInputEventMouse().Position().X
 						d.dragStartWidth = d.Super().GetColumnWidth(col)
 					}
-					d.skipSort = true           // suppress the column-title-click sort
+					d.skipSort = true // suppress the column-title-click sort
 					d.AsControl().AcceptEvent()
 				} else {
 					// Cell click handling
@@ -1738,14 +1738,14 @@ func debugLog(msg string) {
 type RowDetailPanel struct {
 	VBoxContainer.Extension[RowDetailPanel] `gd:"RowDetail"`
 
-	searchBox    LineEdit.Instance
-	scrollBox    ScrollContainer.Instance
-	fieldsList   VBoxContainer.Instance
-	placeholder  VBoxContainer.Instance
-	columns      []string
-	colTypes     []string   // parallel to columns; drives the type chips
-	values       []string
-	multiRows    [][]string // all selected rows for multi-select display
+	searchBox   LineEdit.Instance
+	scrollBox   ScrollContainer.Instance
+	fieldsList  VBoxContainer.Instance
+	placeholder VBoxContainer.Instance
+	columns     []string
+	colTypes    []string // parallel to columns; drives the type chips
+	values      []string
+	multiRows   [][]string // all selected rows for multi-select display
 }
 
 func (p *RowDetailPanel) Ready() {
@@ -2133,7 +2133,7 @@ type tabState struct {
 	// Container nodes for show/hide on tab switch
 	sidebarWrap PanelContainer.Instance
 	outerWrap   HSplitContainer.Instance // content | detail
-	rightPanel  VSplitContainer.Instance  // SQL + data grid (resizable)
+	rightPanel  VSplitContainer.Instance // SQL + data grid (resizable)
 	detailWrap  PanelContainer.Instance
 }
 
@@ -2142,22 +2142,22 @@ type tabState struct {
 type App struct {
 	MarginContainer.Extension[App] `gd:"Bufflehead"`
 
-	Duck          *db.DB          `gd:"-"`
-	ControlServer *control.Server `gd:"-"`
+	Duck          *db.DB                `gd:"-"`
+	ControlServer *control.Server       `gd:"-"`
 	GatewayConfig *models.GatewayConfig `gd:"-"`
-	BookmarkStore *models.BookmarkStore  `gd:"-"`
+	BookmarkStore *models.BookmarkStore `gd:"-"`
 
 	// Legacy accessor — points to active window's active tab state
 	State *models.AppState `gd:"-"`
 
-	mainWin      *AppWindow              `gd:"-"`
-	secondWins   []*AppWindow             `gd:"-"`
-	appMenu      *AppMenu                 `gd:"-"`
-	history      *models.QueryHistory     `gd:"-"`
-	pendingInit  bool                     `gd:"-"`
-	prevKeys     map[Input.Key]bool       `gd:"-"`
-	escPrev      bool                     `gd:"-"` // Escape key state for the connection screen
-	cachedState  json.RawMessage          `gd:"-"` // updated on main thread each frame
+	mainWin     *AppWindow           `gd:"-"`
+	secondWins  []*AppWindow         `gd:"-"`
+	appMenu     *AppMenu             `gd:"-"`
+	history     *models.QueryHistory `gd:"-"`
+	pendingInit bool                 `gd:"-"`
+	prevKeys    map[Input.Key]bool   `gd:"-"`
+	escPrev     bool                 `gd:"-"` // Escape key state for the connection screen
+	cachedState json.RawMessage      `gd:"-"` // updated on main thread each frame
 }
 
 func (a *App) activeWindow() *AppWindow {
@@ -3216,7 +3216,9 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 		cmd.Respond(control.Result{OK: true})
 
 	case "search_detail":
-		var d struct{ Query string `json:"query"` }
+		var d struct {
+			Query string `json:"query"`
+		}
 		if err := json.Unmarshal(cmd.Data, &d); err != nil {
 			cmd.Respond(control.Result{Error: err.Error()})
 			return
@@ -3324,14 +3326,22 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 
 	case "create_test_bookmark":
 		// Test hook: write a dummy bookmark so persistence can be verified
-		// across restarts / platforms (esp. Windows). Idempotent — repeated
-		// calls update the same "dummy-bookmark" entry.
+		// across restarts / platforms (esp. Windows). Idempotent per label. An
+		// optional label lets a test seed several distinct AWS bookmarks (the
+		// many-card render path).
 		if a.BookmarkStore == nil {
 			cmd.Respond(control.Result{Error: "no bookmark store"})
 			return
 		}
+		label := "dummy-bookmark"
+		if len(cmd.Data) > 0 {
+			var d control.CreateTestBookmarkData
+			if err := json.Unmarshal(cmd.Data, &d); err == nil && d.Label != "" {
+				label = d.Label
+			}
+		}
 		bm := models.Bookmark{
-			Label:      "dummy-bookmark",
+			Label:      label,
 			Env:        "test",
 			AWSProfile: "test-profile",
 			AWSRegion:  "us-east-1",
@@ -3351,6 +3361,23 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 			"label": bm.Label,
 		})
 		cmd.Respond(control.Result{OK: true, Data: payload})
+
+	case "delete_test_bookmark":
+		// Test hook: remove a bookmark by label so seeded test bookmarks don't
+		// pollute the persistent store.
+		if a.BookmarkStore == nil {
+			cmd.Respond(control.Result{Error: "no bookmark store"})
+			return
+		}
+		var d control.CreateTestBookmarkData
+		if len(cmd.Data) > 0 {
+			_ = json.Unmarshal(cmd.Data, &d)
+		}
+		if d.Label == "" {
+			d.Label = "dummy-bookmark"
+		}
+		_ = a.BookmarkStore.Remove(d.Label)
+		cmd.Respond(control.Result{OK: true})
 
 	case "nav_back":
 		w.navBackWithCmd(cmd)
