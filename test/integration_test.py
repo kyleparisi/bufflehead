@@ -1220,6 +1220,56 @@ class TestConnectionControls:
 
         open_file(SAMPLE)
 
+    def test_gateway_screen_stress_100_bookmarks(self):
+        """Stress: seed 100 saved AWS bookmarks, open the connection screen, and
+        verify the app doesn't crash and every card renders. This exercises the
+        incremental (a-few-per-frame) card build far past the ~6-card boundary
+        that used to overflow graphics.gd's object-pool GC and blank/crash the
+        screen. Because cards build a couple per frame, allow generous time."""
+        close_all_connections()
+        close_all_tabs()
+        post("new-tab")
+        time.sleep(0.3)
+
+        labels = [f"stress-{i:03d}" for i in range(100)]
+        try:
+            for label in labels:
+                assert post("create-test-bookmark", {"label": label})["ok"] is True
+
+            assert post("open-gateway")["ok"] is True
+
+            # ~100 cards at a couple per frame take a while to finish building.
+            # Poll until all cards render (or time out), re-checking the app is
+            # alive each pass so a crash fails fast rather than on timeout.
+            deadline = time.time() + 15
+            rendered = 0
+            while time.time() < deadline:
+                assert state() is not None, "app crashed while gateway screen open"
+                tree = ui_tree()
+                assert find_node(tree, "GatewayScreen") is not None, (
+                    "gateway screen should render with 100 bookmarks present"
+                )
+                rendered = count_nodes_name_prefix(tree, "BookmarkCard_")
+                if rendered >= 100:
+                    break
+                time.sleep(0.5)
+
+            assert rendered >= 100, (
+                f"all 100 seeded bookmarks should render as cards (got {rendered})"
+            )
+
+            # A crash would have killed the control server.
+            assert state() is not None, "app crashed while gateway screen open"
+
+            assert post("close-gateway")["ok"] is True
+            time.sleep(0.3)
+            assert state() is not None, "app crashed during gateway teardown"
+        finally:
+            for label in labels:
+                post("delete-test-bookmark", {"label": label})
+
+        open_file(SAMPLE)
+
 
 class TestNewWindow:
     def test_new_window_increments_count(self):
