@@ -2309,10 +2309,43 @@ func (a *App) initMainWindow() {
 				rows = [][]string{}
 			}
 			return &control.SQLResult{
-				Columns: columns,
-				Rows:    rows,
-				Total:   res.Result.Total,
+				Columns:        columns,
+				Rows:           rows,
+				Total:          res.Result.Total,
+				BytesProcessed: res.Result.BytesProcessed,
 			}, nil
+		})
+
+		a.ControlServer.SetCancelExecutor(func(connName string) error {
+			w := a.activeWindow()
+			if w == nil {
+				return fmt.Errorf("no active window")
+			}
+			var conn *Connection
+			if connName == "" {
+				if w.activeConnIdx >= 0 && w.activeConnIdx < len(w.connections) {
+					conn = w.connections[w.activeConnIdx]
+				}
+			} else {
+				for _, c := range w.connections {
+					if c.Name == connName {
+						conn = c
+						break
+					}
+				}
+			}
+			if conn == nil {
+				return fmt.Errorf("connection %q not found", connName)
+			}
+			// Cancellation reaches the in-flight job out-of-band (the worker is
+			// blocked reading results). Only BigQuery supports explicit cancel;
+			// Postgres cancels via client disconnect.
+			bq, ok := conn.DB.(*db.BigQueryDB)
+			if !ok {
+				return fmt.Errorf("connection %q does not support query cancellation", conn.Name)
+			}
+			bq.CancelRunning()
+			return nil
 		})
 
 		a.ControlServer.SetS3Executor(func(req control.S3GetObjectRequest) (*control.S3GetObjectResult, error) {
@@ -2479,6 +2512,17 @@ func (a *App) showGatewayLoading(name string) {
 
 func (a *App) onGatewayConnected(entry models.GatewayEntry, auth *bfaws.AuthManager, tunnel *bfaws.TunnelManager) {
 	w := a.mainWin
+
+	if entry.IsBigQuery() {
+		// BigQuery: no tunnel or AWS auth. Auth is ADC (or a creds file).
+		RunOpenBigQuery(entry, nextTabID, 0, w.results, func(msg string) {
+			w.gatewayLoadingMsg = msg
+		})
+		nextTabID++
+		w.pendingGateway = &GatewayConnection{Config: entry}
+		return
+	}
+
 	password := entry.ResolvePassword()
 
 	if entry.IsDirect() {

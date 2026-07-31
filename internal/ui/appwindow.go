@@ -71,6 +71,34 @@ type GatewayConnection struct {
 	LastTunnelMsg string // tracks last displayed tunnel status to avoid redundant updates
 }
 
+// connDisplayKind returns the backend label shown in the title breadcrumb.
+func connDisplayKind(cfg models.GatewayEntry) string {
+	if cfg.IsBigQuery() {
+		return "BigQuery"
+	}
+	return "PostgreSQL"
+}
+
+// connDBSegment returns the breadcrumb's database/dataset segment text.
+func connDBSegment(cfg models.GatewayEntry) string {
+	if cfg.IsBigQuery() {
+		return cfg.DefaultDataset
+	}
+	return cfg.DBName
+}
+
+// connPathFor returns the display URI for a gateway connection.
+func connPathFor(cfg models.GatewayEntry) string {
+	switch {
+	case cfg.IsBigQuery():
+		return fmt.Sprintf("bigquery://%s/%s", cfg.GCPProject, cfg.DefaultDataset)
+	case cfg.IsDirect():
+		return fmt.Sprintf("postgresql://%s:%d/%s", cfg.RDSHost, cfg.RDSPort, cfg.DBName)
+	default:
+		return fmt.Sprintf("postgresql://localhost:%d/%s", cfg.LocalPort, cfg.DBName)
+	}
+}
+
 var nextTabID uint64
 
 // AppWindow represents a single viewer window (main or secondary).
@@ -994,7 +1022,7 @@ func (w *AppWindow) render() {
 	} else if active.connIdx > 0 && active.connIdx < len(w.connections) {
 		conn := w.connections[active.connIdx]
 		if conn.Gateway != nil {
-			w.titleBar.SetConnectionInfo("PostgreSQL", conn.Name, conn.Gateway.Config.DBName)
+			w.titleBar.SetConnectionInfo(connDisplayKind(conn.Gateway.Config), conn.Name, connDBSegment(conn.Gateway.Config))
 		} else {
 			w.titleBar.SetFileInfo(conn.Path)
 		}
@@ -1385,13 +1413,22 @@ func (w *AppWindow) bindTabToConnection(ts *tabState, idx int) {
 	conn := w.connections[idx]
 	ts.State.IsDatabase = true
 	ts.connIdx = idx
+	isBQ := conn.Gateway != nil && conn.Gateway.Config.IsBigQuery()
+	if isBQ {
+		ts.State.Dialect = models.DialectBigQuery
+	}
 	ts.schema.SetTables(conn.Tables)
 	ts.sqlPanel.SetCompletionTables(conn.Tables)
 	ts.schema.OnTableClicked = func(tableName string) {
 		ts.State.ActiveTable = tableName
 		// Quote each dotted segment separately so schema-qualified names become
-		// "schema"."table", not the invalid "schema.table".
-		ts.State.UserSQL = "SELECT * FROM " + db.QuoteQualifiedName(tableName)
+		// "schema"."table" (Postgres/DuckDB) or `dataset`.`table` (BigQuery),
+		// not the invalid single-quoted whole name.
+		quote := db.QuoteQualifiedName
+		if isBQ {
+			quote = db.QuoteBigQueryName
+		}
+		ts.State.UserSQL = "SELECT * FROM " + quote(tableName)
 		ts.State.PageOffset = 0
 		ts.State.SortColumn = ""
 		ts.State.SortDir = models.SortNone
@@ -1399,7 +1436,8 @@ func (w *AppWindow) bindTabToConnection(ts *tabState, idx int) {
 		w.runCurrentQuery(nil)
 	}
 	if conn.Gateway != nil {
-		w.titleBar.SetConnectionInfo("PostgreSQL", conn.Name, conn.Gateway.Config.DBName)
+		cfg := conn.Gateway.Config
+		w.titleBar.SetConnectionInfo(connDisplayKind(cfg), conn.Name, connDBSegment(cfg))
 	}
 }
 
@@ -1986,10 +2024,7 @@ func (w *AppWindow) handleOpenGatewayResult(res DBResult) {
 	pgWorker := NewConnWorker(pgConn, w.results)
 	pgWorker.Start()
 
-	connPath := fmt.Sprintf("postgresql://localhost:%d/%s", gw.Config.LocalPort, gw.Config.DBName)
-	if gw.Config.IsDirect() {
-		connPath = fmt.Sprintf("postgresql://%s:%d/%s", gw.Config.RDSHost, gw.Config.RDSPort, gw.Config.DBName)
-	}
+	connPath := connPathFor(gw.Config)
 	conn := &Connection{
 		Name:    name,
 		Path:    connPath,
@@ -2104,6 +2139,10 @@ func (w *AppWindow) handleRefreshResult(res DBResult) {
 }
 
 func buildAIPrompt(entry models.GatewayEntry, tables []db.TableInfo, controlAddr string) string {
+	if entry.IsBigQuery() {
+		return buildBigQueryAIPrompt(entry, tables, controlAddr)
+	}
+
 	connName := entry.Name
 
 	var b strings.Builder
@@ -2127,6 +2166,52 @@ func buildAIPrompt(entry models.GatewayEntry, tables []db.TableInfo, controlAddr
 	b.WriteString("  {\"connection\":\"...\",\"ok\":BOOL,\"tables\":N,\"steps\":[{\"step\":\"cancel_queries\",\"ok\":true},{\"step\":\"start_tunnel\",\"ok\":false,\"error\":\"...\"},...]}\n")
 	b.WriteString("Steps in order: cancel_queries, close_db, stop_tunnel, refresh_credentials (IAM only), start_tunnel, connect_db.\n")
 	b.WriteString("If \"refresh_credentials\" or a step mentions expired SSO, the user must log in again (aws sso login) before a reconnect can succeed.\n")
+
+	if len(tables) > 0 {
+		b.WriteString("\nSchema:\n")
+		for _, t := range tables {
+			var cols []string
+			for _, c := range t.Columns {
+				cols = append(cols, fmt.Sprintf("%s %s", c.Name, c.DataType))
+			}
+			prefix := "- " + t.Name
+			if t.Type == "view" {
+				prefix = "- " + t.Name + " (view)"
+			}
+			b.WriteString(fmt.Sprintf("%s (%s)\n", prefix, strings.Join(cols, ", ")))
+		}
+	}
+
+	return b.String()
+}
+
+// buildBigQueryAIPrompt produces an AI prompt for a BigQuery connection. Unlike
+// Postgres, cost-safety is central: the agent must write scan-minimizing SQL
+// because BigQuery bills by bytes scanned. There is no tunnel/S3/IAM machinery.
+func buildBigQueryAIPrompt(entry models.GatewayEntry, tables []db.TableInfo, controlAddr string) string {
+	connName := entry.Name
+	capGB := float64(entry.EffectiveMaxBytesBilled()) / (1 << 30)
+
+	var b strings.Builder
+	b.WriteString("I have a BigQuery dataset you can query (GoogleSQL dialect).\n")
+	b.WriteString(fmt.Sprintf("Project: %s\n", entry.GCPProject))
+	b.WriteString(fmt.Sprintf("Default dataset: %s (unqualified table names resolve here)\n", entry.DefaultDataset))
+	b.WriteString("Tables are backtick-quoted: `project.dataset.table` (or `dataset.table`).\n")
+
+	b.WriteString("\nRun queries via HTTP (no auth needed, Bufflehead manages credentials):\n")
+	b.WriteString(fmt.Sprintf("  curl -s -X POST http://%s/sql -d '{\"sql\":\"SELECT * FROM `%s.table` LIMIT 10\",\"connection\":\"%s\"}'\n",
+		controlAddr, entry.DefaultDataset, connName))
+	b.WriteString("\nResponse format: {\"columns\":[...],\"rows\":[[...],...],\"total\":N}\n")
+	b.WriteString("Results are limited to 100 rows by default (do NOT add your own LIMIT — pagination is applied automatically).\n")
+
+	b.WriteString(fmt.Sprintf("\nCOST — BigQuery bills by bytes SCANNED, not rows. Each query is capped at ~%.0f GB scanned; a query that would exceed the cap fails.\n", capGB))
+	b.WriteString("Write scan-minimizing SQL:\n")
+	b.WriteString("- Filter on the table's partition column (this is the biggest cost lever); a LIMIT does NOT reduce bytes scanned.\n")
+	b.WriteString("- Select only the columns you need; never SELECT * on large/wide tables.\n")
+	b.WriteString("- If a query is rejected for exceeding the byte cap, narrow it (add a partition filter, drop columns) and retry.\n")
+
+	b.WriteString("\nTo cancel a running/expensive query:\n")
+	b.WriteString(fmt.Sprintf("  curl -s -X POST http://%s/sql/cancel -d '{\"connection\":\"%s\"}'\n", controlAddr, connName))
 
 	if len(tables) > 0 {
 		b.WriteString("\nSchema:\n")

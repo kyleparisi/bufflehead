@@ -27,6 +27,9 @@ type QueryResult struct {
 	Columns []string
 	Rows    [][]string
 	Total   int64
+	// BytesProcessed is bytes scanned, reported by backends that bill by bytes
+	// (BigQuery). Zero for other backends.
+	BytesProcessed int64
 }
 
 // TableInfo describes a table or view in a database.

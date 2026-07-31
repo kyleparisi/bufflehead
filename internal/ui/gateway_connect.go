@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"time"
 
 	bfaws "bufflehead/internal/aws"
@@ -12,6 +13,7 @@ import (
 	"bufflehead/internal/models"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"google.golang.org/api/option"
 )
 
 // establishTunnel allocates a local port, resolves the bastion instance, and
@@ -173,6 +175,23 @@ func (w *AppWindow) reconnectConnection(idx int, cmd *control.Command) {
 		outcome := &ReconnectOutcome{ConnIdx: idx, Steps: steps}
 		finish := func() { w.results <- DBResult{Kind: ReqReconnect, ControlCmd: cmd, Reconnect: outcome} }
 
+		// BigQuery: no tunnel or AWS auth — just reopen the client.
+		if entry.IsBigQuery() {
+			bq, tables, err := openBigQueryDB(entry)
+			if err != nil {
+				outcome.Steps = append(outcome.Steps, control.ReconnectStep{
+					Step: "connect_db", OK: false, Error: err.Error(),
+				})
+				finish()
+				return
+			}
+			outcome.Steps = append(outcome.Steps, control.ReconnectStep{Step: "connect_db", OK: true})
+			outcome.Querier = bq
+			outcome.Tables = tables
+			finish()
+			return
+		}
+
 		// Direct Postgres: no tunnel or AWS auth — just reopen the DB.
 		if entry.IsDirect() {
 			pgConn, tables, err := openDirectPostgresDB(entry)
@@ -253,6 +272,9 @@ func (w *AppWindow) switchDatabase(idx int, dbName string) {
 	conn := w.connections[idx]
 	if conn.Gateway == nil {
 		return
+	}
+	if conn.Gateway.Config.IsBigQuery() {
+		return // BigQuery has no Postgres-style database switcher
 	}
 	if conn.Gateway.Config.DBName == dbName {
 		return // already on this database
@@ -392,6 +414,48 @@ func openDirectPostgresDB(entry models.GatewayEntry) (*db.PostgresDB, []db.Table
 	return pgConn, tables, nil
 }
 
+// openBigQueryDB opens a BigQuery connection (no tunnel, no AWS) and loads the
+// default dataset's tables and schemas synchronously. Mirrors openDirectPostgresDB.
+// Auth is ADC unless the entry names a credentials file.
+func openBigQueryDB(entry models.GatewayEntry) (*db.BigQueryDB, []db.TableInfo, error) {
+	cfg := db.BigQueryConfig{
+		Project:        entry.GCPProject,
+		DefaultDataset: entry.DefaultDataset,
+		MaxBytesBilled: entry.EffectiveMaxBytesBilled(),
+		Labels:         map[string]string{"source": "ui"},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	var opts []option.ClientOption
+	if entry.CredentialsPath != "" {
+		data, err := os.ReadFile(entry.CredentialsPath)
+		if err != nil {
+			return nil, nil, fmt.Errorf("read credentials: %w", err)
+		}
+		opt, err := db.CredentialsOption(ctx, data)
+		if err != nil {
+			return nil, nil, fmt.Errorf("parse credentials: %w", err)
+		}
+		opts = append(opts, opt)
+	}
+
+	bq, err := db.NewBigQuery(ctx, cfg, opts...)
+	if err != nil {
+		return nil, nil, err
+	}
+	tables, err := bq.Tables()
+	if err != nil {
+		bq.Close()
+		return nil, nil, fmt.Errorf("load tables: %w", err)
+	}
+	if err := bq.AllTableSchemas(tables); err != nil {
+		bq.Close()
+		return nil, nil, fmt.Errorf("load schemas: %w", err)
+	}
+	return bq, tables, nil
+}
+
 // handleReconnectResult swaps freshly-established resources into the Connection
 // on the main thread and answers any waiting control command with a
 // ReconnectResult describing every step.
@@ -443,15 +507,11 @@ func (w *AppWindow) handleReconnectResult(res DBResult) {
 				// (possibly changed) database name — a database switch reuses
 				// this handler with a new Config.DBName.
 				cfg := conn.Gateway.Config
-				if cfg.IsDirect() {
-					conn.Path = fmt.Sprintf("postgresql://%s:%d/%s", cfg.RDSHost, cfg.RDSPort, cfg.DBName)
-				} else {
-					conn.Path = fmt.Sprintf("postgresql://localhost:%d/%s", cfg.LocalPort, cfg.DBName)
-				}
+				conn.Path = connPathFor(cfg)
 				if idx == w.activeConnIdx {
 					w.titleBar.SetAIPrompt(buildAIPrompt(cfg, conn.Tables, w.controlAddr))
 					w.titleBar.SetReconnectVisible(true)
-					w.titleBar.SetConnectionInfo("PostgreSQL", conn.Name, cfg.DBName)
+					w.titleBar.SetConnectionInfo(connDisplayKind(cfg), conn.Name, connDBSegment(cfg))
 				}
 			}
 			applyConnTileTheme(conn.button.AsControl(), idx == w.activeConnIdx)
