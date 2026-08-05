@@ -9,6 +9,7 @@ import (
 	bfaws "bufflehead/internal/aws"
 	"bufflehead/internal/control"
 	"bufflehead/internal/db"
+	"bufflehead/internal/models"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 )
@@ -326,6 +327,15 @@ func (cw *ConnWorker) handleRefresh(req DBRequest) {
 			}
 			return
 		}
+	} else if bq, ok := cw.db.(*db.BigQueryDB); ok {
+		if err := bq.AllTableSchemas(tables); err != nil {
+			cw.results <- DBResult{
+				Kind:    ReqRefresh,
+				ConnIdx: req.ConnIdx,
+				Err:     fmt.Errorf("load schemas: %w", err),
+			}
+			return
+		}
 	} else if duck, ok := cw.db.(*db.DB); ok {
 		for i := range tables {
 			cols, _ := duck.TableSchema(tables[i].Name)
@@ -455,6 +465,30 @@ func runOpenDBWith(open func(string) (*db.DB, error), dbPath string, tabID, gene
 			Tables:     tables,
 			ControlCmd: cmd,
 			DBPath:     dbPath,
+		}
+	}()
+}
+
+// RunOpenBigQuery connects to BigQuery in a one-shot goroutine (no tunnel, no
+// AWS), listing tables and schemas for the default dataset, then sending the
+// result down the shared results channel. Mirrors RunOpenPostgres.
+func RunOpenBigQuery(entry models.GatewayEntry, tabID, generation uint64,
+	results chan DBResult, statusFunc func(string)) {
+	go func() {
+		if statusFunc != nil {
+			statusFunc("Connecting to BigQuery...")
+		}
+		bq, tables, err := openBigQueryDB(entry)
+		if err != nil {
+			results <- DBResult{Kind: ReqOpenGateway, TabID: tabID, Generation: generation, Err: err}
+			return
+		}
+		results <- DBResult{
+			Kind:       ReqOpenGateway,
+			TabID:      tabID,
+			Generation: generation,
+			Querier:    bq,
+			Tables:     tables,
 		}
 	}()
 }

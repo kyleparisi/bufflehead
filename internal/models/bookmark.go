@@ -43,8 +43,15 @@ type Bookmark struct {
 	AuthMode      string            `json:"auth_mode,omitempty"`
 	SSLMode       string            `json:"ssl_mode,omitempty"`
 	SecretKind    SecretKind        `json:"secret_kind,omitempty"`
-	CreatedAt     time.Time         `json:"created_at"`
-	UpdatedAt     time.Time         `json:"updated_at"`
+
+	// BigQuery (Kind == KindBigQuery).
+	GCPProject      string `json:"gcp_project,omitempty"`
+	DefaultDataset  string `json:"default_dataset,omitempty"`
+	CredentialsPath string `json:"credentials_path,omitempty"`
+	MaxBytesBilled  int64  `json:"max_bytes_billed,omitempty"`
+
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // ToGatewayEntry converts a bookmark to a GatewayEntry for the connection pipeline.
@@ -67,6 +74,11 @@ func (b *Bookmark) ToGatewayEntry(localPort int) GatewayEntry {
 		AuthMode:      b.AuthMode,
 		SSLMode:       b.SSLMode,
 		SecretKind:    b.SecretKind,
+
+		GCPProject:      b.GCPProject,
+		DefaultDataset:  b.DefaultDataset,
+		CredentialsPath: b.CredentialsPath,
+		MaxBytesBilled:  b.MaxBytesBilled,
 	}
 }
 

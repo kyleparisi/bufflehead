@@ -142,6 +142,17 @@ type GatewayScreen struct {
 	pgNoPass    bool // true = trust/no-password auth
 	pgPassBtn   Button.Instance
 	pgNoPassBtn Button.Instance
+
+	// BigQuery selector tile + form
+	typeBQBtn   Button.Instance
+	bqFormPanel PanelContainer.Instance
+	bqLabel     LineEdit.Instance
+	bqEnv       LineEdit.Instance
+	bqProject   LineEdit.Instance
+	bqDataset   LineEdit.Instance
+	bqCreds     LineEdit.Instance
+	bqMaxGB     LineEdit.Instance
+	bqStatus    Label.Instance
 }
 
 // pgSSLModes lists the sslmode options for the direct Postgres form dropdown,
@@ -246,6 +257,10 @@ func (g *GatewayScreen) Ready() {
 	g.pgFormPanel = g.buildPGForm()
 	leftCol.AsNode().AddChild(g.pgFormPanel.AsNode())
 
+	// BigQuery connection form
+	g.bqFormPanel = g.buildBQForm()
+	leftCol.AsNode().AddChild(g.bqFormPanel.AsNode())
+
 	// Project the initial connection-type state onto the panels.
 	g.renderConnKind()
 
@@ -335,6 +350,13 @@ func (g *GatewayScreen) buildTypeSelector() VBoxContainer.Instance {
 	})
 	row.AsNode().AddChild(g.typePGBtn.AsNode())
 
+	g.typeBQBtn = g.makeTypeTile("◆  BigQuery", "Google BigQuery via gcloud (ADC)", false)
+	g.typeBQBtn.AsBaseButton().OnPressed(func() {
+		g.connKind = models.KindBigQuery
+		g.renderConnKind()
+	})
+	row.AsNode().AddChild(g.typeBQBtn.AsNode())
+
 	g.typeSSHBtn = g.makeTypeTile("⌨  SSH + PostgreSQL", "Coming soon", true)
 	g.typeSSHBtn.AsBaseButton().SetDisabled(true)
 	row.AsNode().AddChild(g.typeSSHBtn.AsNode())
@@ -382,12 +404,17 @@ func applyTypeTileTheme(c Control.Instance, active bool) {
 // idempotent and must not mutate state.
 func (g *GatewayScreen) renderConnKind() {
 	aws := g.connKind == models.KindAWSGateway
+	pg := g.connKind == models.KindPostgres
+	bq := g.connKind == models.KindBigQuery
 
 	if g.typeAWSBtn != (Button.Instance{}) {
 		applyTypeTileTheme(g.typeAWSBtn.AsControl(), aws)
 	}
 	if g.typePGBtn != (Button.Instance{}) {
-		applyTypeTileTheme(g.typePGBtn.AsControl(), g.connKind == models.KindPostgres)
+		applyTypeTileTheme(g.typePGBtn.AsControl(), pg)
+	}
+	if g.typeBQBtn != (Button.Instance{}) {
+		applyTypeTileTheme(g.typeBQBtn.AsControl(), bq)
 	}
 	if g.typeSSHBtn != (Button.Instance{}) {
 		applyTypeTileTheme(g.typeSSHBtn.AsControl(), false)
@@ -400,7 +427,10 @@ func (g *GatewayScreen) renderConnKind() {
 		g.awsFormPanel.AsCanvasItem().SetVisible(aws)
 	}
 	if g.pgFormPanel != (PanelContainer.Instance{}) {
-		g.pgFormPanel.AsCanvasItem().SetVisible(!aws)
+		g.pgFormPanel.AsCanvasItem().SetVisible(pg)
+	}
+	if g.bqFormPanel != (PanelContainer.Instance{}) {
+		g.bqFormPanel.AsCanvasItem().SetVisible(bq)
 	}
 }
 
@@ -1305,6 +1335,156 @@ func (g *GatewayScreen) onPGConnect() {
 	}
 }
 
+// buildBQForm builds the BigQuery connection form. Auth defaults to Application
+// Default Credentials (the gcloud login); an optional credentials file overrides
+// it. Shown when connKind == KindBigQuery.
+func (g *GatewayScreen) buildBQForm() PanelContainer.Instance {
+	panel := PanelContainer.New()
+	border := makeStyleBox(colorBgPanel, 6, 1, colorBorderDim)
+	border.AsStyleBox().SetContentMarginAll(scaled(16))
+	panel.AsControl().AddThemeStyleboxOverride("panel", border.AsStyleBox())
+
+	vbox := VBoxContainer.New()
+	vbox.AsControl().AddThemeConstantOverride("separation", 8)
+
+	title := Label.New()
+	title.SetText("Connection Details")
+	title.AsControl().AddThemeFontSizeOverride("font_size", fontSize(14))
+	title.AsControl().AddThemeColorOverride("font_color", colorText)
+	vbox.AsNode().AddChild(title.AsNode())
+
+	g.bqLabel, g.bqEnv = g.makeFieldPair(vbox, "Label", "e.g. analytics-prod", 2, "Environment", "e.g. prod", 1)
+	g.bqProject = g.makeField(vbox, "GCP Project", "my-gcp-project")
+	g.bqDataset = g.makeField(vbox, "Default Dataset", "analytics")
+	g.bqCreds = g.makeField(vbox, "Credentials File (optional)", "blank = use gcloud ADC")
+	g.bqMaxGB = g.makeField(vbox, "Max GB Scanned / Query (optional)", "default ~21")
+
+	helper := Label.New()
+	helper.SetText("Uses your gcloud login (Application Default Credentials) — run `gcloud auth application-default login` if needed. BigQuery bills by bytes scanned; the GB cap fails any query that would exceed it.")
+	helper.AsControl().AddThemeFontSizeOverride("font_size", fontSize(10))
+	helper.AsControl().AddThemeColorOverride("font_color", colorTextDim)
+	helper.SetAutowrapMode(3)
+	vbox.AsNode().AddChild(helper.AsNode())
+
+	g.bqStatus = Label.New()
+	g.bqStatus.SetText("")
+	g.bqStatus.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
+	g.bqStatus.AsControl().AddThemeColorOverride("font_color", colorTextMuted)
+	g.bqStatus.SetAutowrapMode(3)
+	vbox.AsNode().AddChild(g.bqStatus.AsNode())
+
+	btnRow := HBoxContainer.New()
+	btnRow.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	btnRow.AsControl().AddThemeConstantOverride("separation", 8)
+
+	connectBtn := Button.New()
+	connectBtn.SetText("Connect")
+	connectBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(13))
+	applyButtonTheme(connectBtn.AsControl())
+	connectBtn.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	connectBtn.AsControl().SetSizeFlagsStretchRatio(2)
+	connectBtn.AsControl().SetCustomMinimumSize(Vector2.New(0, scaled(34)))
+	connectBtn.AsBaseButton().OnPressed(func() { g.onBQConnect() })
+
+	testBtn := Button.New()
+	testBtn.SetText("Test")
+	testBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(12))
+	applySecondaryButtonTheme(testBtn.AsControl())
+	testBtn.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	testBtn.AsControl().SetSizeFlagsStretchRatio(1)
+	testBtn.AsControl().SetCustomMinimumSize(Vector2.New(0, scaled(34)))
+	testBtn.AsControl().SetTooltipText("Validate the form fields without connecting")
+	testBtn.AsBaseButton().OnPressed(func() { g.onBQTest() })
+
+	btnRow.AsNode().AddChild(connectBtn.AsNode())
+	btnRow.AsNode().AddChild(testBtn.AsNode())
+	vbox.AsNode().AddChild(btnRow.AsNode())
+
+	panel.AsNode().AddChild(vbox.AsNode())
+	return panel
+}
+
+// validateBQ checks the required BigQuery fields, returning an error message or
+// "" when valid.
+func (g *GatewayScreen) validateBQ() string {
+	label := g.bqLabel.Text()
+	if label == "" {
+		return "Label is required"
+	}
+	if err := models.ValidateLabel(label); err != nil {
+		return err.Error()
+	}
+	if g.bqProject.Text() == "" {
+		return "GCP Project is required"
+	}
+	if g.bqDataset.Text() == "" {
+		return "Default Dataset is required"
+	}
+	return ""
+}
+
+// onBQTest validates the BigQuery form fields locally (no network).
+func (g *GatewayScreen) onBQTest() {
+	if msg := g.validateBQ(); msg != "" {
+		g.bqStatus.SetText(msg)
+		g.bqStatus.AsControl().AddThemeColorOverride("font_color", colorStatusRed)
+		return
+	}
+	g.bqStatus.SetText(fmt.Sprintf("✓ Ready — %s.%s via ADC", g.bqProject.Text(), g.bqDataset.Text()))
+	g.bqStatus.AsControl().AddThemeColorOverride("font_color", colorStatusGreen)
+}
+
+func (g *GatewayScreen) onBQConnect() {
+	if msg := g.validateBQ(); msg != "" {
+		g.bqStatus.SetText(msg)
+		g.bqStatus.AsControl().AddThemeColorOverride("font_color", colorStatusRed)
+		return
+	}
+
+	label := g.bqLabel.Text()
+	env := g.bqEnv.Text()
+	project := g.bqProject.Text()
+	dataset := g.bqDataset.Text()
+	creds := g.bqCreds.Text()
+
+	// Optional GB cap → bytes. Blank/invalid ⇒ 0, which uses the built-in default.
+	var maxBytes int64
+	if s := g.bqMaxGB.Text(); s != "" {
+		if gb, err := strconv.ParseFloat(s, 64); err == nil && gb > 0 {
+			maxBytes = int64(gb * (1 << 30))
+		}
+	}
+
+	entry := models.GatewayEntry{
+		Name:            label,
+		Kind:            models.KindBigQuery,
+		GCPProject:      project,
+		DefaultDataset:  dataset,
+		CredentialsPath: creds,
+		MaxBytesBilled:  maxBytes,
+	}
+
+	if g.bookmarks != nil {
+		g.bookmarks.Add(models.Bookmark{
+			Label:           label,
+			Kind:            models.KindBigQuery,
+			Env:             env,
+			GCPProject:      project,
+			DefaultDataset:  dataset,
+			CredentialsPath: creds,
+			MaxBytesBilled:  maxBytes,
+		})
+	}
+
+	g.bqStatus.SetText("Connecting...")
+	g.bqStatus.AsControl().AddThemeColorOverride("font_color", colorStatusYellow)
+
+	// BigQuery has no AWS auth/tunnel — hand straight to OnConnect.
+	if g.OnConnect != nil {
+		g.OnConnect(entry, nil, nil)
+	}
+}
+
 // makeFieldCol builds a labeled input column (label above input) that expands
 // horizontally so it can sit in a two-column row.
 func (g *GatewayScreen) makeFieldCol(label, placeholder string) (VBoxContainer.Instance, LineEdit.Instance) {
@@ -1801,13 +1981,20 @@ func (g *GatewayScreen) buildBookmarkCard(bm models.Bookmark) PanelContainer.Ins
 	}
 
 	isDirect := bm.Kind == models.KindPostgres
+	isBQ := bm.Kind == models.KindBigQuery
+	// noAWS connections (direct Postgres, BigQuery) have no SSO/tunnel — they
+	// connect immediately without an AuthManager.
+	noAWS := isDirect || isBQ
 
 	// Detail rows — wrap so a long endpoint fits the card width instead of
 	// forcing the card wider than the column (which pushed the buttons off-screen).
 	hostLabel := Label.New()
-	if isDirect {
+	switch {
+	case isBQ:
+		hostLabel.SetText(fmt.Sprintf("%s · dataset %s", bm.GCPProject, bm.DefaultDataset))
+	case isDirect:
 		hostLabel.SetText(fmt.Sprintf("%s/%s @ %s:%d", bm.DBName, bm.DBUser, bm.RDSHost, bm.RDSPort))
-	} else {
+	default:
 		hostLabel.SetText(fmt.Sprintf("%s/%s @ %s", bm.DBName, bm.DBUser, bm.RDSHost))
 	}
 	hostLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
@@ -1815,9 +2002,16 @@ func (g *GatewayScreen) buildBookmarkCard(bm models.Bookmark) PanelContainer.Ins
 	hostLabel.SetAutowrapMode(3)
 
 	profileLabel := Label.New()
-	if isDirect {
+	switch {
+	case isBQ:
+		if bm.CredentialsPath != "" {
+			profileLabel.SetText("BigQuery · credentials file")
+		} else {
+			profileLabel.SetText("BigQuery · gcloud ADC")
+		}
+	case isDirect:
 		profileLabel.SetText("Direct PostgreSQL · SSL: " + bm.SSLMode)
-	} else {
+	default:
 		profileLabel.SetText("AWS Profile: " + bm.AWSProfile)
 	}
 	profileLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
@@ -1829,7 +2023,7 @@ func (g *GatewayScreen) buildBookmarkCard(bm models.Bookmark) PanelContainer.Ins
 	row4.AsControl().AddThemeConstantOverride("separation", 8)
 
 	statusLabel := Label.New()
-	if isDirect {
+	if noAWS {
 		statusLabel.SetText("Ready")
 	} else {
 		statusLabel.SetText("Checking credentials...")
@@ -1875,16 +2069,16 @@ func (g *GatewayScreen) buildBookmarkCard(bm models.Bookmark) PanelContainer.Ins
 		logLbl:    logLabel,
 		actionBtn: actionBtn,
 		statusDot: statusDot,
-		direct:    isDirect,
+		direct:    noAWS,
 	}
-	if !isDirect {
+	if !noAWS {
 		card.auth = bfaws.NewAuthManager(bm.AWSProfile, bm.AWSRegion)
 	}
 	g.cards = append(g.cards, card)
 	cardIdx := len(g.cards) - 1
 
-	if isDirect {
-		// Direct connections have no credentials to check — mark ready now.
+	if noAWS {
+		// No-AWS connections have no credentials to check — mark ready now.
 		statusDot.SetText("●")
 		statusDot.AsControl().AddThemeColorOverride("font_color", colorStatusGreen)
 	} else {

@@ -14,6 +14,24 @@ const (
 	SortDesc
 )
 
+// SQLDialect selects identifier-quoting rules for generated SQL.
+type SQLDialect string
+
+const (
+	// DialectDefault uses double-quoted identifiers (Postgres, DuckDB).
+	DialectDefault SQLDialect = ""
+	// DialectBigQuery uses backtick-quoted identifiers (GoogleSQL).
+	DialectBigQuery SQLDialect = "bigquery"
+)
+
+// quoteIdent quotes a single identifier per the state's dialect.
+func (s *AppState) quoteIdent(name string) string {
+	if s.Dialect == DialectBigQuery {
+		return "`" + name + "`"
+	}
+	return "\"" + name + "\""
+}
+
 // AppState is the central shared state passed between UI components.
 type AppState struct {
 	FilePath   string
@@ -36,6 +54,10 @@ type AppState struct {
 	// Database mode (for .duckdb files)
 	IsDatabase  bool
 	ActiveTable string
+
+	// Dialect selects identifier quoting in VirtualSQL. Empty is the default
+	// (Postgres/DuckDB double-quotes); DialectBigQuery uses backticks.
+	Dialect SQLDialect
 
 	// Navigation stack (back/forward)
 	navStack []NavEntry
@@ -163,7 +185,7 @@ func (s *AppState) VirtualSQL() string {
 	if len(s.SelectedCols) > 0 && (len(s.Schema) == 0 || len(s.SelectedCols) < len(s.Schema)) {
 		quoted := make([]string, len(s.SelectedCols))
 		for i, c := range s.SelectedCols {
-			quoted[i] = "\"" + c + "\""
+			quoted[i] = s.quoteIdent(c)
 		}
 		cols = strings.Join(quoted, ", ")
 	}
@@ -173,7 +195,7 @@ func (s *AppState) VirtualSQL() string {
 		if s.SortDir == SortDesc {
 			dir = "DESC"
 		}
-		q += " ORDER BY \"" + s.SortColumn + "\" " + dir
+		q += " ORDER BY " + s.quoteIdent(s.SortColumn) + " " + dir
 	}
 	return q
 }

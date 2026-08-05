@@ -9,6 +9,69 @@ import (
 	"testing"
 )
 
+func TestCancelEndpoint_NoExecutor(t *testing.T) {
+	s := New(0)
+	handler := buildMux(s)
+
+	req := httptest.NewRequest("POST", "/sql/cancel", strings.NewReader(`{"connection":"bq"}`))
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != 500 {
+		t.Fatalf("expected 500, got %d", w.Code)
+	}
+}
+
+func TestCancelEndpoint_RoutesConnection(t *testing.T) {
+	s := New(0)
+	var got string
+	s.SetCancelExecutor(func(connName string) error {
+		got = connName
+		return nil
+	})
+	handler := buildMux(s)
+
+	req := httptest.NewRequest("POST", "/sql/cancel", strings.NewReader(`{"connection":"analytics"}`))
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if got != "analytics" {
+		t.Errorf("expected executor to receive %q, got %q", "analytics", got)
+	}
+	var resp map[string]any
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp["ok"] != true {
+		t.Errorf("expected ok=true, got %v", resp["ok"])
+	}
+}
+
+func TestCancelEndpoint_ExecutorError(t *testing.T) {
+	s := New(0)
+	s.SetCancelExecutor(func(connName string) error {
+		return fmt.Errorf("connection %q does not support query cancellation", connName)
+	})
+	handler := buildMux(s)
+
+	req := httptest.NewRequest("POST", "/sql/cancel", strings.NewReader(`{"connection":"pg"}`))
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != 400 {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+	var resp map[string]any
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp["ok"] != false {
+		t.Errorf("expected ok=false, got %v", resp["ok"])
+	}
+	if s, _ := resp["error"].(string); !strings.Contains(s, "does not support") {
+		t.Errorf("expected cancellation error, got %q", s)
+	}
+}
+
 func TestSQLEndpoint_NoExecutor(t *testing.T) {
 	s := New(0)
 	handler := buildMux(s)

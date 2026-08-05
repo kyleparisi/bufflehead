@@ -23,7 +23,16 @@ const (
 	// KindSSHPostgres reaches a Postgres host through an SSH tunnel. Reserved
 	// for a future release.
 	KindSSHPostgres ConnKind = "ssh_postgres"
+	// KindBigQuery queries Google BigQuery via the native client. No tunnel and
+	// no AWS; auth is Application Default Credentials (the file gcloud wrote).
+	KindBigQuery ConnKind = "bigquery"
 )
+
+// DefaultBQMaxBytesBilled caps bytes scanned per BigQuery query when a
+// connection doesn't set its own limit (~21.5 GB). BigQuery bills by bytes
+// scanned, so this is the primary spend guardrail — a job that would exceed it
+// fails before scanning, and a failed job isn't billed.
+const DefaultBQMaxBytesBilled int64 = 20 << 30
 
 // GatewayConfig is the top-level gateway configuration file structure.
 type GatewayConfig struct {
@@ -52,6 +61,26 @@ type GatewayEntry struct {
 	AuthMode      string            `yaml:"auth_mode,omitempty"` // "password" (default) or "iam"
 	SSLMode       string            `yaml:"ssl_mode,omitempty"`  // direct Postgres: prefer|require|disable
 	SecretKind    SecretKind        `yaml:"secret_kind,omitempty"`
+
+	// BigQuery (Kind == KindBigQuery).
+	GCPProject      string `yaml:"gcp_project,omitempty"`
+	DefaultDataset  string `yaml:"default_dataset,omitempty"`
+	CredentialsPath string `yaml:"credentials_path,omitempty"` // empty ⇒ ADC
+	MaxBytesBilled  int64  `yaml:"max_bytes_billed,omitempty"` // 0 ⇒ DefaultBQMaxBytesBilled
+}
+
+// IsBigQuery reports whether this entry is a BigQuery connection.
+func (g *GatewayEntry) IsBigQuery() bool {
+	return g.Kind == KindBigQuery
+}
+
+// EffectiveMaxBytesBilled returns the per-query bytes-scanned cap, falling back
+// to DefaultBQMaxBytesBilled when unset.
+func (g *GatewayEntry) EffectiveMaxBytesBilled() int64 {
+	if g.MaxBytesBilled > 0 {
+		return g.MaxBytesBilled
+	}
+	return DefaultBQMaxBytesBilled
 }
 
 // IsDirect reports whether this entry is a direct Postgres connection (no AWS

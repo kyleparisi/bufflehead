@@ -24,11 +24,13 @@ import (
 	"graphics.gd/classdb/InputEvent"
 	"graphics.gd/classdb/InputEventMouseButton"
 	"graphics.gd/classdb/Label"
+	"graphics.gd/classdb/LineEdit"
 	"graphics.gd/classdb/MarginContainer"
 	"graphics.gd/classdb/PanelContainer"
 	"graphics.gd/classdb/PopupMenu"
 	"graphics.gd/classdb/GUI"
 	"graphics.gd/classdb/PopupPanel"
+	"graphics.gd/classdb/ScrollContainer"
 	"graphics.gd/classdb/TabBar"
 	"graphics.gd/classdb/VBoxContainer"
 	"graphics.gd/classdb/VSplitContainer"
@@ -69,6 +71,34 @@ type GatewayConnection struct {
 	Auth          *bfaws.AuthManager
 	Tunnel        *bfaws.TunnelManager
 	LastTunnelMsg string // tracks last displayed tunnel status to avoid redundant updates
+}
+
+// connDisplayKind returns the backend label shown in the title breadcrumb.
+func connDisplayKind(cfg models.GatewayEntry) string {
+	if cfg.IsBigQuery() {
+		return "BigQuery"
+	}
+	return "PostgreSQL"
+}
+
+// connDBSegment returns the breadcrumb's database/dataset segment text.
+func connDBSegment(cfg models.GatewayEntry) string {
+	if cfg.IsBigQuery() {
+		return cfg.DefaultDataset
+	}
+	return cfg.DBName
+}
+
+// connPathFor returns the display URI for a gateway connection.
+func connPathFor(cfg models.GatewayEntry) string {
+	switch {
+	case cfg.IsBigQuery():
+		return fmt.Sprintf("bigquery://%s/%s", cfg.GCPProject, cfg.DefaultDataset)
+	case cfg.IsDirect():
+		return fmt.Sprintf("postgresql://%s:%d/%s", cfg.RDSHost, cfg.RDSPort, cfg.DBName)
+	default:
+		return fmt.Sprintf("postgresql://localhost:%d/%s", cfg.LocalPort, cfg.DBName)
+	}
 }
 
 var nextTabID uint64
@@ -994,7 +1024,7 @@ func (w *AppWindow) render() {
 	} else if active.connIdx > 0 && active.connIdx < len(w.connections) {
 		conn := w.connections[active.connIdx]
 		if conn.Gateway != nil {
-			w.titleBar.SetConnectionInfo("PostgreSQL", conn.Name, conn.Gateway.Config.DBName)
+			w.titleBar.SetConnectionInfo(connDisplayKind(conn.Gateway.Config), conn.Name, connDBSegment(conn.Gateway.Config))
 		} else {
 			w.titleBar.SetFileInfo(conn.Path)
 		}
@@ -1385,13 +1415,22 @@ func (w *AppWindow) bindTabToConnection(ts *tabState, idx int) {
 	conn := w.connections[idx]
 	ts.State.IsDatabase = true
 	ts.connIdx = idx
+	isBQ := conn.Gateway != nil && conn.Gateway.Config.IsBigQuery()
+	if isBQ {
+		ts.State.Dialect = models.DialectBigQuery
+	}
 	ts.schema.SetTables(conn.Tables)
 	ts.sqlPanel.SetCompletionTables(conn.Tables)
 	ts.schema.OnTableClicked = func(tableName string) {
 		ts.State.ActiveTable = tableName
 		// Quote each dotted segment separately so schema-qualified names become
-		// "schema"."table", not the invalid "schema.table".
-		ts.State.UserSQL = "SELECT * FROM " + db.QuoteQualifiedName(tableName)
+		// "schema"."table" (Postgres/DuckDB) or `dataset`.`table` (BigQuery),
+		// not the invalid single-quoted whole name.
+		quote := db.QuoteQualifiedName
+		if isBQ {
+			quote = db.QuoteBigQueryName
+		}
+		ts.State.UserSQL = "SELECT * FROM " + quote(tableName)
 		ts.State.PageOffset = 0
 		ts.State.SortColumn = ""
 		ts.State.SortDir = models.SortNone
@@ -1399,7 +1438,8 @@ func (w *AppWindow) bindTabToConnection(ts *tabState, idx int) {
 		w.runCurrentQuery(nil)
 	}
 	if conn.Gateway != nil {
-		w.titleBar.SetConnectionInfo("PostgreSQL", conn.Name, conn.Gateway.Config.DBName)
+		cfg := conn.Gateway.Config
+		w.titleBar.SetConnectionInfo(connDisplayKind(cfg), conn.Name, connDBSegment(cfg))
 	}
 }
 
@@ -1591,10 +1631,11 @@ func (w *AppWindow) showConnContextMenu(idx int) {
 // dbListResult carries the outcome of a background database-list query back to
 // the main thread, where the switcher popup is built.
 type dbListResult struct {
-	connIdx int
-	current string
-	dbs     []db.DatabaseInfo
-	err     error
+	connIdx   int
+	current   string
+	dbs       []db.DatabaseInfo
+	err       error
+	isDataset bool // true for BigQuery (label the switcher "dataset" not "database")
 }
 
 // showDatabaseSwitcher fetches the list of databases on the given connection's
@@ -1609,6 +1650,23 @@ func (w *AppWindow) showDatabaseSwitcher(idx int) {
 	if conn.Gateway == nil {
 		return
 	}
+
+	// BigQuery: the "database" switcher lists datasets. This can be a very long
+	// list, which the popover handles with a filter box + capped rendering.
+	if bq, ok := conn.DB.(*db.BigQueryDB); ok {
+		current := conn.Gateway.Config.DefaultDataset
+		w.statusBar.SetStatus("Loading datasets…")
+		go func() {
+			names, err := bq.Datasets()
+			dbs := make([]db.DatabaseInfo, len(names))
+			for i, n := range names {
+				dbs[i] = db.DatabaseInfo{Name: n}
+			}
+			w.dbListMsg = &dbListResult{connIdx: idx, current: current, dbs: dbs, err: err, isDataset: true}
+		}()
+		return
+	}
+
 	pg, ok := conn.DB.(*db.PostgresDB)
 	if !ok {
 		return
@@ -1624,13 +1682,20 @@ func (w *AppWindow) showDatabaseSwitcher(idx int) {
 // presentDatabaseSwitcher builds and shows the switcher PopupMenu from a
 // completed database list. Runs on the main thread (called from Process).
 func (w *AppWindow) presentDatabaseSwitcher(res *dbListResult) {
+	entity := "database"
+	title := "SWITCH DATABASE"
+	if res.isDataset {
+		entity = "dataset"
+		title = "SWITCH DATASET"
+	}
+
 	if res.err != nil {
-		w.statusBar.SetStatus(statusLine("Database list error: " + res.err.Error()))
-		w.logConsole("Database list error: " + res.err.Error())
+		w.statusBar.SetStatus(statusLine(entity + " list error: " + res.err.Error()))
+		w.logConsole(entity + " list error: " + res.err.Error())
 		return
 	}
 	if len(res.dbs) == 0 {
-		w.statusBar.SetStatus("No databases found")
+		w.statusBar.SetStatus("No " + entity + "s found")
 		return
 	}
 
@@ -1648,7 +1713,7 @@ func (w *AppWindow) presentDatabaseSwitcher(res *dbListResult) {
 		popup.AsNode().QueueFree()
 	})
 
-	content := buildDatabaseSwitcher(res.dbs, res.current,
+	content := buildDatabaseSwitcher(title, res.dbs, res.current,
 		func(name string) {
 			w.switchDatabase(connIdx, name)
 			popup.AsNode().QueueFree()
@@ -1666,22 +1731,40 @@ func (w *AppWindow) presentDatabaseSwitcher(res *dbListResult) {
 	w.statusBar.SetStatus("")
 }
 
-// buildDatabaseSwitcher builds the "Switch Database" popover content (header +
-// count badge, dividers, database rows, and a refresh footer) from a database
-// list. It is decoupled from any window/connection so both the live app popover
-// and the UI lab can render it. onSwitch is called with the chosen database name
-// when a switchable row is pressed; onRefresh when the footer is pressed.
-func buildDatabaseSwitcher(dbs []db.DatabaseInfo, current string, onSwitch func(name string), onRefresh func()) VBoxContainer.Instance {
+// dbSwitcherFilterThreshold is the list size above which the switcher shows a
+// filter box + fixed-height scroll instead of an inline list. BigQuery projects
+// can have thousands of datasets; Postgres servers a handful of databases.
+const dbSwitcherFilterThreshold = 12
+
+// dbSwitcherMaxRows caps how many rows are rendered at once. Building too many
+// Godot nodes in a single frame trips graphics.gd's object-pool GC (see the
+// saved-connection cards note), so we cap and let the filter narrow the rest.
+const dbSwitcherMaxRows = 40
+
+// buildDatabaseSwitcher builds the switcher popover content (header + count
+// badge, dividers, rows, and a refresh footer) from an entity list. For large
+// lists it adds a filter box and a fixed-height scroll, rendering at most
+// dbSwitcherMaxRows matches at a time. It is decoupled from any
+// window/connection so both the live app popover and the UI lab can render it.
+// title is the header text ("SWITCH DATABASE" / "SWITCH DATASET"). onSwitch is
+// called with the chosen name when a switchable row is pressed; onRefresh when
+// the footer is pressed.
+func buildDatabaseSwitcher(titleText string, dbs []db.DatabaseInfo, current string, onSwitch func(name string), onRefresh func()) VBoxContainer.Instance {
 	content := VBoxContainer.New()
 	content.AsControl().AddThemeConstantOverride("separation", 0)
 	content.AsControl().SetCustomMinimumSize(Vector2.New(scaled(232), 0))
 
-	// ── Header: "SWITCH DATABASE" + count badge ─────────────────────────
+	entity := "database"
+	if strings.Contains(titleText, "DATASET") {
+		entity = "dataset"
+	}
+
+	// ── Header: title + count badge ─────────────────────────────────────
 	header := HBoxContainer.New()
 	header.AsControl().AddThemeConstantOverride("separation", 8)
 
 	title := Label.New()
-	title.SetText("SWITCH DATABASE")
+	title.SetText(titleText)
 	title.AsControl().AddThemeColorOverride("font_color", colorTextMuted)
 	title.AsControl().AddThemeFontSizeOverride("font_size", fontSize(popoverHeaderFont))
 	title.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
@@ -1718,10 +1801,10 @@ func buildDatabaseSwitcher(dbs []db.DatabaseInfo, current string, onSwitch func(
 		return d
 	}
 
-	// ── Database rows ───────────────────────────────────────────────────
-	rows := VBoxContainer.New()
-	rows.AsControl().AddThemeConstantOverride("separation", 0)
-	for _, d := range dbs {
+	// makeRow builds a single entity row button with the current/system/selectable
+	// styling. Factored so both the inline (small list) and filtered (large list)
+	// paths render rows identically.
+	makeRow := func(d db.DatabaseInfo) Button.Instance {
 		btn := Button.New()
 		btn.SetText(d.Name)
 		btn.SetAlignment(GUI.HorizontalAlignmentLeft)
@@ -1732,12 +1815,12 @@ func buildDatabaseSwitcher(dbs []db.DatabaseInfo, current string, onSwitch func(
 			btn.SetIcon(loadSVGTexture(svgCheckCircle))
 			applyDbRowCurrent(btn.AsControl())
 			btn.AsBaseButton().SetDisabled(true)
-			btn.AsControl().SetTooltipText("Current database")
+			btn.AsControl().SetTooltipText("Current " + entity)
 		case d.IsSystem:
 			btn.SetIcon(loadSVGTexture(svgLock))
 			applyDbRowSystem(btn.AsControl())
 			btn.AsBaseButton().SetDisabled(true)
-			btn.AsControl().SetTooltipText("System database")
+			btn.AsControl().SetTooltipText("System " + entity)
 		default:
 			applyDbRowSelectable(btn.AsControl())
 			dbName := d.Name
@@ -1747,13 +1830,90 @@ func buildDatabaseSwitcher(dbs []db.DatabaseInfo, current string, onSwitch func(
 				}
 			})
 		}
-		rows.AsNode().AddChild(btn.AsNode())
+		return btn
+	}
+
+	noteRow := func(text string) Label.Instance {
+		note := Label.New()
+		note.SetText(text)
+		note.AsControl().AddThemeColorOverride("font_color", colorTextMuted)
+		note.AsControl().AddThemeFontSizeOverride("font_size", fontSize(popoverBadgeFont))
+		return note
+	}
+
+	// ── Rows ────────────────────────────────────────────────────────────
+	rows := VBoxContainer.New()
+	rows.AsControl().AddThemeConstantOverride("separation", 0)
+	rows.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+
+	large := len(dbs) > dbSwitcherFilterThreshold
+
+	// renderRows fills the rows box with up to dbSwitcherMaxRows entries matching
+	// the (case-insensitive) filter, plus a note when results are truncated or
+	// empty. Rebuilt on each keystroke — capped so no frame overflows the pool.
+	renderRows := func(filter string) {
+		for rows.AsNode().GetChildCount() > 0 {
+			c := rows.AsNode().GetChild(0)
+			rows.AsNode().RemoveChild(c)
+			c.QueueFree()
+		}
+		f := strings.ToLower(strings.TrimSpace(filter))
+		shown, matched := 0, 0
+		for _, d := range dbs {
+			if f != "" && !strings.Contains(strings.ToLower(d.Name), f) {
+				continue
+			}
+			matched++
+			if shown >= dbSwitcherMaxRows {
+				continue
+			}
+			rows.AsNode().AddChild(makeRow(d).AsNode())
+			shown++
+		}
+		switch {
+		case matched == 0:
+			rows.AsNode().AddChild(noteRow("  No matches").AsNode())
+		case matched > shown:
+			rows.AsNode().AddChild(noteRow(fmt.Sprintf("  Showing %d of %d — type to filter", shown, matched)).AsNode())
+		}
 	}
 
 	rowsMargin := MarginContainer.New()
 	rowsMargin.AsControl().AddThemeConstantOverride("margin_top", 4)
 	rowsMargin.AsControl().AddThemeConstantOverride("margin_bottom", 4)
 	rowsMargin.AsNode().AddChild(rows.AsNode())
+
+	// Filter box + fixed-height scroll for large lists; inline for small ones.
+	var rowsSection Control.Instance
+	if large {
+		filter := LineEdit.New()
+		filter.SetPlaceholderText("Filter " + entity + "s…")
+		applyInputTheme(filter.AsControl())
+		filter.AsControl().AddThemeFontSizeOverride("font_size", fontSize(popoverFooterFont))
+		filter.OnTextChanged(func(text string) { renderRows(text) })
+
+		filterMargin := MarginContainer.New()
+		filterMargin.AsControl().AddThemeConstantOverride("margin_left", 8)
+		filterMargin.AsControl().AddThemeConstantOverride("margin_right", 8)
+		filterMargin.AsControl().AddThemeConstantOverride("margin_top", 6)
+		filterMargin.AsControl().AddThemeConstantOverride("margin_bottom", 2)
+		filterMargin.AsNode().AddChild(filter.AsNode())
+
+		scroll := ScrollContainer.New()
+		scroll.SetHorizontalScrollMode(ScrollContainer.ScrollModeDisabled)
+		scroll.AsControl().SetCustomMinimumSize(Vector2.New(0, scaled(300)))
+		scroll.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+		scroll.AsNode().AddChild(rowsMargin.AsNode())
+
+		wrap := VBoxContainer.New()
+		wrap.AsControl().AddThemeConstantOverride("separation", 0)
+		wrap.AsNode().AddChild(filterMargin.AsNode())
+		wrap.AsNode().AddChild(scroll.AsNode())
+		rowsSection = wrap.AsControl()
+	} else {
+		rowsSection = rowsMargin.AsControl()
+	}
+	renderRows("")
 
 	// ── Footer: refresh list ────────────────────────────────────────────
 	refresh := Button.New()
@@ -1778,7 +1938,7 @@ func buildDatabaseSwitcher(dbs []db.DatabaseInfo, current string, onSwitch func(
 	// ── Assemble ────────────────────────────────────────────────────────
 	content.AsNode().AddChild(headerMargin.AsNode())
 	content.AsNode().AddChild(hDivider().AsNode())
-	content.AsNode().AddChild(rowsMargin.AsNode())
+	content.AsNode().AddChild(rowsSection.AsNode())
 	content.AsNode().AddChild(hDivider().AsNode())
 	content.AsNode().AddChild(footerMargin.AsNode())
 	return content
@@ -1986,10 +2146,7 @@ func (w *AppWindow) handleOpenGatewayResult(res DBResult) {
 	pgWorker := NewConnWorker(pgConn, w.results)
 	pgWorker.Start()
 
-	connPath := fmt.Sprintf("postgresql://localhost:%d/%s", gw.Config.LocalPort, gw.Config.DBName)
-	if gw.Config.IsDirect() {
-		connPath = fmt.Sprintf("postgresql://%s:%d/%s", gw.Config.RDSHost, gw.Config.RDSPort, gw.Config.DBName)
-	}
+	connPath := connPathFor(gw.Config)
 	conn := &Connection{
 		Name:    name,
 		Path:    connPath,
@@ -2104,6 +2261,10 @@ func (w *AppWindow) handleRefreshResult(res DBResult) {
 }
 
 func buildAIPrompt(entry models.GatewayEntry, tables []db.TableInfo, controlAddr string) string {
+	if entry.IsBigQuery() {
+		return buildBigQueryAIPrompt(entry, tables, controlAddr)
+	}
+
 	connName := entry.Name
 
 	var b strings.Builder
@@ -2130,6 +2291,57 @@ func buildAIPrompt(entry models.GatewayEntry, tables []db.TableInfo, controlAddr
 
 	if len(tables) > 0 {
 		b.WriteString("\nSchema:\n")
+		for _, t := range tables {
+			var cols []string
+			for _, c := range t.Columns {
+				cols = append(cols, fmt.Sprintf("%s %s", c.Name, c.DataType))
+			}
+			prefix := "- " + t.Name
+			if t.Type == "view" {
+				prefix = "- " + t.Name + " (view)"
+			}
+			b.WriteString(fmt.Sprintf("%s (%s)\n", prefix, strings.Join(cols, ", ")))
+		}
+	}
+
+	return b.String()
+}
+
+// buildBigQueryAIPrompt produces an AI prompt for a BigQuery connection. Unlike
+// Postgres, cost-safety is central: the agent must write scan-minimizing SQL
+// because BigQuery bills by bytes scanned. There is no tunnel/S3/IAM machinery.
+func buildBigQueryAIPrompt(entry models.GatewayEntry, tables []db.TableInfo, controlAddr string) string {
+	connName := entry.Name
+	capGB := float64(entry.EffectiveMaxBytesBilled()) / (1 << 30)
+
+	var b strings.Builder
+	b.WriteString("I have a BigQuery connection you can query (GoogleSQL dialect).\n")
+	b.WriteString(fmt.Sprintf("Project: %s\n", entry.GCPProject))
+	b.WriteString(fmt.Sprintf("Default dataset: %s (only where unqualified table names resolve — you are NOT limited to it)\n", entry.DefaultDataset))
+	b.WriteString("Tables are backtick-quoted: `project.dataset.table` (or `dataset.table`).\n")
+
+	b.WriteString("\nRun queries via HTTP (no auth needed, Bufflehead manages credentials):\n")
+	b.WriteString(fmt.Sprintf("  curl -s -X POST http://%s/sql -d '{\"sql\":\"SELECT * FROM `%s.table` LIMIT 10\",\"connection\":\"%s\"}'\n",
+		controlAddr, entry.DefaultDataset, connName))
+	b.WriteString("\nResponse format: {\"columns\":[...],\"rows\":[[...],...],\"total\":N}\n")
+	b.WriteString("Results are limited to 100 rows by default (do NOT add your own LIMIT — pagination is applied automatically).\n")
+
+	b.WriteString(fmt.Sprintf("\nCOST — BigQuery bills by bytes SCANNED, not rows. Each query is capped at ~%.0f GB scanned; a query that would exceed the cap fails.\n", capGB))
+	b.WriteString("Write scan-minimizing SQL:\n")
+	b.WriteString("- Filter on the table's partition column (this is the biggest cost lever); a LIMIT does NOT reduce bytes scanned.\n")
+	b.WriteString("- Select only the columns you need; never SELECT * on large/wide tables.\n")
+	b.WriteString("- If a query is rejected for exceeding the byte cap, narrow it (add a partition filter, drop columns) and retry.\n")
+
+	b.WriteString("\nTo cancel a running/expensive query:\n")
+	b.WriteString(fmt.Sprintf("  curl -s -X POST http://%s/sql/cancel -d '{\"connection\":\"%s\"}'\n", controlAddr, connName))
+
+	b.WriteString("\nDISCOVERY — the project has other datasets; query any table by fully qualifying `project.dataset.table`. To switch what you work on, just qualify a different dataset (there's no \"use dataset\" — the default only affects unqualified names). Enumerate what exists with INFORMATION_SCHEMA (metadata queries scan almost nothing, so they're effectively free):\n")
+	b.WriteString(fmt.Sprintf("- List datasets:  SELECT schema_name FROM `%s`.INFORMATION_SCHEMA.SCHEMATA ORDER BY schema_name\n", entry.GCPProject))
+	b.WriteString(fmt.Sprintf("- List tables in a dataset:  SELECT table_name FROM `%s.DATASET`.INFORMATION_SCHEMA.TABLES ORDER BY table_name\n", entry.GCPProject))
+	b.WriteString(fmt.Sprintf("- List a table's columns:  SELECT column_name, data_type FROM `%s.DATASET`.INFORMATION_SCHEMA.COLUMNS WHERE table_name = 'TABLE'\n", entry.GCPProject))
+
+	if len(tables) > 0 {
+		b.WriteString(fmt.Sprintf("\nDefault dataset (%s) schema:\n", entry.DefaultDataset))
 		for _, t := range tables {
 			var cols []string
 			for _, c := range t.Columns {

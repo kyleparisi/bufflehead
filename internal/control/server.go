@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"strconv"
@@ -106,12 +107,25 @@ type SQLResult struct {
 	Columns []string   `json:"columns"`
 	Rows    [][]string `json:"rows"`
 	Total   int64      `json:"total"`
-	Error   string     `json:"error,omitempty"`
+	// BytesProcessed is the bytes scanned by the query, when the backend reports
+	// it (BigQuery). Lets a cost-aware agent see what each query cost. Omitted
+	// (0) for backends that don't bill by bytes.
+	BytesProcessed int64  `json:"bytes_processed,omitempty"`
+	Error          string `json:"error,omitempty"`
 }
 
 // SQLExecutor runs a SQL query against a named connection and returns results.
 // The context is derived from the HTTP request so the query cancels if the client disconnects.
 type SQLExecutor func(ctx context.Context, connName, sql string, limit int) (*SQLResult, error)
+
+// CancelRequest is the payload for the /sql/cancel endpoint.
+type CancelRequest struct {
+	Connection string `json:"connection,omitempty"` // connection name (default: active)
+}
+
+// CancelExecutor cancels the in-flight query on a named connection. Returns an
+// error if the connection doesn't exist or doesn't support cancellation.
+type CancelExecutor func(connName string) error
 
 // S3GetObjectRequest is the payload for the /s3/get-object endpoint.
 type S3GetObjectRequest struct {
@@ -139,13 +153,14 @@ type StateProvider func() (json.RawMessage, error)
 
 // Server is the HTTP control server.
 type Server struct {
-	commands      chan *Command
-	stateProvider StateProvider
-	sqlExecutor   SQLExecutor
-	s3Executor    S3Executor
-	port          int
-	addr          string
-	mu            sync.Mutex
+	commands       chan *Command
+	stateProvider  StateProvider
+	sqlExecutor    SQLExecutor
+	cancelExecutor CancelExecutor
+	s3Executor     S3Executor
+	port           int
+	addr           string
+	mu             sync.Mutex
 }
 
 // New creates a control server on the given port. Use 0 for a random available port.
@@ -174,6 +189,13 @@ func (s *Server) SetSQLExecutor(fn SQLExecutor) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sqlExecutor = fn
+}
+
+// SetCancelExecutor sets the callback for POST /sql/cancel.
+func (s *Server) SetCancelExecutor(fn CancelExecutor) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cancelExecutor = fn
 }
 
 // SetS3Executor sets the callback for POST /s3/get-object.
@@ -484,6 +506,33 @@ func buildMux(s *Server) *http.ServeMux {
 			return
 		}
 		json.NewEncoder(w).Encode(result)
+	})
+
+	mux.HandleFunc("POST /sql/cancel", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		s.mu.Lock()
+		cancel := s.cancelExecutor
+		s.mu.Unlock()
+		if cancel == nil {
+			w.WriteHeader(500)
+			json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": "no cancel executor configured"})
+			return
+		}
+
+		var req CancelRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
+			w.WriteHeader(400)
+			json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": "bad json: " + err.Error()})
+			return
+		}
+
+		if err := cancel(req.Connection); err != nil {
+			w.WriteHeader(400)
+			json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": err.Error()})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"ok": true})
 	})
 
 	return mux
