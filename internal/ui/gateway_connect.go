@@ -260,11 +260,12 @@ func (w *AppWindow) reconnectConnection(idx int, cmd *control.Command) {
 	}()
 }
 
-// switchDatabase re-points a Postgres connection at a different database on the
-// same server. It reuses the reconnect teardown+rebuild plumbing but KEEPS the
-// SSM tunnel (host:port is database-agnostic) — only the DB pool is swapped for
-// one bound to the new dbname. The new schema/tables repopulate via the shared
-// ReqReconnect result handler.
+// switchDatabase re-points a connection at a different database on the same
+// server. For Postgres it reuses the reconnect teardown+rebuild plumbing but
+// KEEPS the SSM tunnel (host:port is database-agnostic) — only the DB pool is
+// swapped for one bound to the new dbname. For BigQuery it swaps the default
+// dataset and reopens the client. The new schema/tables repopulate via the
+// shared ReqReconnect result handler (which reads the updated Config).
 func (w *AppWindow) switchDatabase(idx int, dbName string) {
 	if idx <= 0 || idx >= len(w.connections) {
 		return
@@ -273,18 +274,23 @@ func (w *AppWindow) switchDatabase(idx int, dbName string) {
 	if conn.Gateway == nil {
 		return
 	}
-	if conn.Gateway.Config.IsBigQuery() {
-		return // BigQuery has no Postgres-style database switcher
-	}
-	if conn.Gateway.Config.DBName == dbName {
-		return // already on this database
-	}
+	isBQ := conn.Gateway.Config.IsBigQuery()
 
-	// ── State change: point the config at the new database. ──
-	conn.Gateway.Config.DBName = dbName
+	// ── State change: point the config at the new database/dataset. ──
+	if isBQ {
+		if conn.Gateway.Config.DefaultDataset == dbName {
+			return // already on this dataset
+		}
+		conn.Gateway.Config.DefaultDataset = dbName
+		w.statusBar.SetStatus(fmt.Sprintf("Switching %s to dataset %q...", conn.Name, dbName))
+	} else {
+		if conn.Gateway.Config.DBName == dbName {
+			return // already on this database
+		}
+		conn.Gateway.Config.DBName = dbName
+		w.statusBar.SetStatus(fmt.Sprintf("Switching %s to database %q...", conn.Name, dbName))
+	}
 	entry := conn.Gateway.Config
-
-	w.statusBar.SetStatus(fmt.Sprintf("Switching %s to database %q...", conn.Name, dbName))
 
 	// ── Teardown (main thread): stop worker + close DB pool, keep the tunnel. ──
 	if conn.worker != nil {
@@ -298,10 +304,24 @@ func (w *AppWindow) switchDatabase(idx int, dbName string) {
 
 	steps := []control.ReconnectStep{{Step: "cancel_queries", OK: true}, {Step: "close_db", OK: true}}
 
-	// ── Rebuild (goroutine): open a new pool bound to dbName over the same tunnel. ──
+	// ── Rebuild (goroutine): open a new pool/client for the new target. ──
 	go func() {
 		outcome := &ReconnectOutcome{ConnIdx: idx, Steps: steps, Tunnel: conn.Gateway.Tunnel}
 		finish := func() { w.results <- DBResult{Kind: ReqReconnect, Reconnect: outcome} }
+
+		if isBQ {
+			bq, tables, err := openBigQueryDB(entry)
+			if err != nil {
+				outcome.Steps = append(outcome.Steps, control.ReconnectStep{Step: "connect_db", OK: false, Error: err.Error()})
+				finish()
+				return
+			}
+			outcome.Steps = append(outcome.Steps, control.ReconnectStep{Step: "connect_db", OK: true})
+			outcome.Querier = bq
+			outcome.Tables = tables
+			finish()
+			return
+		}
 
 		var pgConn *db.PostgresDB
 		var tables []db.TableInfo

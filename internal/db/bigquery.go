@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/big"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -118,6 +119,29 @@ func (b *BigQueryDB) Ping(ctx context.Context) error {
 // Close releases the client.
 func (b *BigQueryDB) Close() error {
 	return b.client.Close()
+}
+
+// Datasets lists dataset IDs in the project, sorted. Used by the dataset
+// switcher. A project can have a very large number of datasets, so the caller
+// (UI) is responsible for filtering/capping how many it renders.
+func (b *BigQueryDB) Datasets() ([]string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	it := b.client.Datasets(ctx)
+	var out []string
+	for {
+		ds, err := it.Next()
+		if err == iterator.Done {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("list datasets: %w", err)
+		}
+		out = append(out, ds.DatasetID)
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 // Tables lists tables and views in the default dataset via INFORMATION_SCHEMA.

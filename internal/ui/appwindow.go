@@ -24,11 +24,13 @@ import (
 	"graphics.gd/classdb/InputEvent"
 	"graphics.gd/classdb/InputEventMouseButton"
 	"graphics.gd/classdb/Label"
+	"graphics.gd/classdb/LineEdit"
 	"graphics.gd/classdb/MarginContainer"
 	"graphics.gd/classdb/PanelContainer"
 	"graphics.gd/classdb/PopupMenu"
 	"graphics.gd/classdb/GUI"
 	"graphics.gd/classdb/PopupPanel"
+	"graphics.gd/classdb/ScrollContainer"
 	"graphics.gd/classdb/TabBar"
 	"graphics.gd/classdb/VBoxContainer"
 	"graphics.gd/classdb/VSplitContainer"
@@ -1629,10 +1631,11 @@ func (w *AppWindow) showConnContextMenu(idx int) {
 // dbListResult carries the outcome of a background database-list query back to
 // the main thread, where the switcher popup is built.
 type dbListResult struct {
-	connIdx int
-	current string
-	dbs     []db.DatabaseInfo
-	err     error
+	connIdx   int
+	current   string
+	dbs       []db.DatabaseInfo
+	err       error
+	isDataset bool // true for BigQuery (label the switcher "dataset" not "database")
 }
 
 // showDatabaseSwitcher fetches the list of databases on the given connection's
@@ -1647,6 +1650,23 @@ func (w *AppWindow) showDatabaseSwitcher(idx int) {
 	if conn.Gateway == nil {
 		return
 	}
+
+	// BigQuery: the "database" switcher lists datasets. This can be a very long
+	// list, which the popover handles with a filter box + capped rendering.
+	if bq, ok := conn.DB.(*db.BigQueryDB); ok {
+		current := conn.Gateway.Config.DefaultDataset
+		w.statusBar.SetStatus("Loading datasets…")
+		go func() {
+			names, err := bq.Datasets()
+			dbs := make([]db.DatabaseInfo, len(names))
+			for i, n := range names {
+				dbs[i] = db.DatabaseInfo{Name: n}
+			}
+			w.dbListMsg = &dbListResult{connIdx: idx, current: current, dbs: dbs, err: err, isDataset: true}
+		}()
+		return
+	}
+
 	pg, ok := conn.DB.(*db.PostgresDB)
 	if !ok {
 		return
@@ -1662,13 +1682,20 @@ func (w *AppWindow) showDatabaseSwitcher(idx int) {
 // presentDatabaseSwitcher builds and shows the switcher PopupMenu from a
 // completed database list. Runs on the main thread (called from Process).
 func (w *AppWindow) presentDatabaseSwitcher(res *dbListResult) {
+	entity := "database"
+	title := "SWITCH DATABASE"
+	if res.isDataset {
+		entity = "dataset"
+		title = "SWITCH DATASET"
+	}
+
 	if res.err != nil {
-		w.statusBar.SetStatus(statusLine("Database list error: " + res.err.Error()))
-		w.logConsole("Database list error: " + res.err.Error())
+		w.statusBar.SetStatus(statusLine(entity + " list error: " + res.err.Error()))
+		w.logConsole(entity + " list error: " + res.err.Error())
 		return
 	}
 	if len(res.dbs) == 0 {
-		w.statusBar.SetStatus("No databases found")
+		w.statusBar.SetStatus("No " + entity + "s found")
 		return
 	}
 
@@ -1686,7 +1713,7 @@ func (w *AppWindow) presentDatabaseSwitcher(res *dbListResult) {
 		popup.AsNode().QueueFree()
 	})
 
-	content := buildDatabaseSwitcher(res.dbs, res.current,
+	content := buildDatabaseSwitcher(title, res.dbs, res.current,
 		func(name string) {
 			w.switchDatabase(connIdx, name)
 			popup.AsNode().QueueFree()
@@ -1704,22 +1731,40 @@ func (w *AppWindow) presentDatabaseSwitcher(res *dbListResult) {
 	w.statusBar.SetStatus("")
 }
 
-// buildDatabaseSwitcher builds the "Switch Database" popover content (header +
-// count badge, dividers, database rows, and a refresh footer) from a database
-// list. It is decoupled from any window/connection so both the live app popover
-// and the UI lab can render it. onSwitch is called with the chosen database name
-// when a switchable row is pressed; onRefresh when the footer is pressed.
-func buildDatabaseSwitcher(dbs []db.DatabaseInfo, current string, onSwitch func(name string), onRefresh func()) VBoxContainer.Instance {
+// dbSwitcherFilterThreshold is the list size above which the switcher shows a
+// filter box + fixed-height scroll instead of an inline list. BigQuery projects
+// can have thousands of datasets; Postgres servers a handful of databases.
+const dbSwitcherFilterThreshold = 12
+
+// dbSwitcherMaxRows caps how many rows are rendered at once. Building too many
+// Godot nodes in a single frame trips graphics.gd's object-pool GC (see the
+// saved-connection cards note), so we cap and let the filter narrow the rest.
+const dbSwitcherMaxRows = 40
+
+// buildDatabaseSwitcher builds the switcher popover content (header + count
+// badge, dividers, rows, and a refresh footer) from an entity list. For large
+// lists it adds a filter box and a fixed-height scroll, rendering at most
+// dbSwitcherMaxRows matches at a time. It is decoupled from any
+// window/connection so both the live app popover and the UI lab can render it.
+// title is the header text ("SWITCH DATABASE" / "SWITCH DATASET"). onSwitch is
+// called with the chosen name when a switchable row is pressed; onRefresh when
+// the footer is pressed.
+func buildDatabaseSwitcher(titleText string, dbs []db.DatabaseInfo, current string, onSwitch func(name string), onRefresh func()) VBoxContainer.Instance {
 	content := VBoxContainer.New()
 	content.AsControl().AddThemeConstantOverride("separation", 0)
 	content.AsControl().SetCustomMinimumSize(Vector2.New(scaled(232), 0))
 
-	// ── Header: "SWITCH DATABASE" + count badge ─────────────────────────
+	entity := "database"
+	if strings.Contains(titleText, "DATASET") {
+		entity = "dataset"
+	}
+
+	// ── Header: title + count badge ─────────────────────────────────────
 	header := HBoxContainer.New()
 	header.AsControl().AddThemeConstantOverride("separation", 8)
 
 	title := Label.New()
-	title.SetText("SWITCH DATABASE")
+	title.SetText(titleText)
 	title.AsControl().AddThemeColorOverride("font_color", colorTextMuted)
 	title.AsControl().AddThemeFontSizeOverride("font_size", fontSize(popoverHeaderFont))
 	title.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
@@ -1756,10 +1801,10 @@ func buildDatabaseSwitcher(dbs []db.DatabaseInfo, current string, onSwitch func(
 		return d
 	}
 
-	// ── Database rows ───────────────────────────────────────────────────
-	rows := VBoxContainer.New()
-	rows.AsControl().AddThemeConstantOverride("separation", 0)
-	for _, d := range dbs {
+	// makeRow builds a single entity row button with the current/system/selectable
+	// styling. Factored so both the inline (small list) and filtered (large list)
+	// paths render rows identically.
+	makeRow := func(d db.DatabaseInfo) Button.Instance {
 		btn := Button.New()
 		btn.SetText(d.Name)
 		btn.SetAlignment(GUI.HorizontalAlignmentLeft)
@@ -1770,12 +1815,12 @@ func buildDatabaseSwitcher(dbs []db.DatabaseInfo, current string, onSwitch func(
 			btn.SetIcon(loadSVGTexture(svgCheckCircle))
 			applyDbRowCurrent(btn.AsControl())
 			btn.AsBaseButton().SetDisabled(true)
-			btn.AsControl().SetTooltipText("Current database")
+			btn.AsControl().SetTooltipText("Current " + entity)
 		case d.IsSystem:
 			btn.SetIcon(loadSVGTexture(svgLock))
 			applyDbRowSystem(btn.AsControl())
 			btn.AsBaseButton().SetDisabled(true)
-			btn.AsControl().SetTooltipText("System database")
+			btn.AsControl().SetTooltipText("System " + entity)
 		default:
 			applyDbRowSelectable(btn.AsControl())
 			dbName := d.Name
@@ -1785,13 +1830,90 @@ func buildDatabaseSwitcher(dbs []db.DatabaseInfo, current string, onSwitch func(
 				}
 			})
 		}
-		rows.AsNode().AddChild(btn.AsNode())
+		return btn
+	}
+
+	noteRow := func(text string) Label.Instance {
+		note := Label.New()
+		note.SetText(text)
+		note.AsControl().AddThemeColorOverride("font_color", colorTextMuted)
+		note.AsControl().AddThemeFontSizeOverride("font_size", fontSize(popoverBadgeFont))
+		return note
+	}
+
+	// ── Rows ────────────────────────────────────────────────────────────
+	rows := VBoxContainer.New()
+	rows.AsControl().AddThemeConstantOverride("separation", 0)
+	rows.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+
+	large := len(dbs) > dbSwitcherFilterThreshold
+
+	// renderRows fills the rows box with up to dbSwitcherMaxRows entries matching
+	// the (case-insensitive) filter, plus a note when results are truncated or
+	// empty. Rebuilt on each keystroke — capped so no frame overflows the pool.
+	renderRows := func(filter string) {
+		for rows.AsNode().GetChildCount() > 0 {
+			c := rows.AsNode().GetChild(0)
+			rows.AsNode().RemoveChild(c)
+			c.QueueFree()
+		}
+		f := strings.ToLower(strings.TrimSpace(filter))
+		shown, matched := 0, 0
+		for _, d := range dbs {
+			if f != "" && !strings.Contains(strings.ToLower(d.Name), f) {
+				continue
+			}
+			matched++
+			if shown >= dbSwitcherMaxRows {
+				continue
+			}
+			rows.AsNode().AddChild(makeRow(d).AsNode())
+			shown++
+		}
+		switch {
+		case matched == 0:
+			rows.AsNode().AddChild(noteRow("  No matches").AsNode())
+		case matched > shown:
+			rows.AsNode().AddChild(noteRow(fmt.Sprintf("  Showing %d of %d — type to filter", shown, matched)).AsNode())
+		}
 	}
 
 	rowsMargin := MarginContainer.New()
 	rowsMargin.AsControl().AddThemeConstantOverride("margin_top", 4)
 	rowsMargin.AsControl().AddThemeConstantOverride("margin_bottom", 4)
 	rowsMargin.AsNode().AddChild(rows.AsNode())
+
+	// Filter box + fixed-height scroll for large lists; inline for small ones.
+	var rowsSection Control.Instance
+	if large {
+		filter := LineEdit.New()
+		filter.SetPlaceholderText("Filter " + entity + "s…")
+		applyInputTheme(filter.AsControl())
+		filter.AsControl().AddThemeFontSizeOverride("font_size", fontSize(popoverFooterFont))
+		filter.OnTextChanged(func(text string) { renderRows(text) })
+
+		filterMargin := MarginContainer.New()
+		filterMargin.AsControl().AddThemeConstantOverride("margin_left", 8)
+		filterMargin.AsControl().AddThemeConstantOverride("margin_right", 8)
+		filterMargin.AsControl().AddThemeConstantOverride("margin_top", 6)
+		filterMargin.AsControl().AddThemeConstantOverride("margin_bottom", 2)
+		filterMargin.AsNode().AddChild(filter.AsNode())
+
+		scroll := ScrollContainer.New()
+		scroll.SetHorizontalScrollMode(ScrollContainer.ScrollModeDisabled)
+		scroll.AsControl().SetCustomMinimumSize(Vector2.New(0, scaled(300)))
+		scroll.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+		scroll.AsNode().AddChild(rowsMargin.AsNode())
+
+		wrap := VBoxContainer.New()
+		wrap.AsControl().AddThemeConstantOverride("separation", 0)
+		wrap.AsNode().AddChild(filterMargin.AsNode())
+		wrap.AsNode().AddChild(scroll.AsNode())
+		rowsSection = wrap.AsControl()
+	} else {
+		rowsSection = rowsMargin.AsControl()
+	}
+	renderRows("")
 
 	// ── Footer: refresh list ────────────────────────────────────────────
 	refresh := Button.New()
@@ -1816,7 +1938,7 @@ func buildDatabaseSwitcher(dbs []db.DatabaseInfo, current string, onSwitch func(
 	// ── Assemble ────────────────────────────────────────────────────────
 	content.AsNode().AddChild(headerMargin.AsNode())
 	content.AsNode().AddChild(hDivider().AsNode())
-	content.AsNode().AddChild(rowsMargin.AsNode())
+	content.AsNode().AddChild(rowsSection.AsNode())
 	content.AsNode().AddChild(hDivider().AsNode())
 	content.AsNode().AddChild(footerMargin.AsNode())
 	return content
