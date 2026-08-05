@@ -2315,9 +2315,9 @@ func buildBigQueryAIPrompt(entry models.GatewayEntry, tables []db.TableInfo, con
 	capGB := float64(entry.EffectiveMaxBytesBilled()) / (1 << 30)
 
 	var b strings.Builder
-	b.WriteString("I have a BigQuery dataset you can query (GoogleSQL dialect).\n")
+	b.WriteString("I have a BigQuery connection you can query (GoogleSQL dialect).\n")
 	b.WriteString(fmt.Sprintf("Project: %s\n", entry.GCPProject))
-	b.WriteString(fmt.Sprintf("Default dataset: %s (unqualified table names resolve here)\n", entry.DefaultDataset))
+	b.WriteString(fmt.Sprintf("Default dataset: %s (only where unqualified table names resolve — you are NOT limited to it)\n", entry.DefaultDataset))
 	b.WriteString("Tables are backtick-quoted: `project.dataset.table` (or `dataset.table`).\n")
 
 	b.WriteString("\nRun queries via HTTP (no auth needed, Bufflehead manages credentials):\n")
@@ -2335,8 +2335,13 @@ func buildBigQueryAIPrompt(entry models.GatewayEntry, tables []db.TableInfo, con
 	b.WriteString("\nTo cancel a running/expensive query:\n")
 	b.WriteString(fmt.Sprintf("  curl -s -X POST http://%s/sql/cancel -d '{\"connection\":\"%s\"}'\n", controlAddr, connName))
 
+	b.WriteString("\nDISCOVERY — the project has other datasets; query any table by fully qualifying `project.dataset.table`. To switch what you work on, just qualify a different dataset (there's no \"use dataset\" — the default only affects unqualified names). Enumerate what exists with INFORMATION_SCHEMA (metadata queries scan almost nothing, so they're effectively free):\n")
+	b.WriteString(fmt.Sprintf("- List datasets:  SELECT schema_name FROM `%s`.INFORMATION_SCHEMA.SCHEMATA ORDER BY schema_name\n", entry.GCPProject))
+	b.WriteString(fmt.Sprintf("- List tables in a dataset:  SELECT table_name FROM `%s.DATASET`.INFORMATION_SCHEMA.TABLES ORDER BY table_name\n", entry.GCPProject))
+	b.WriteString(fmt.Sprintf("- List a table's columns:  SELECT column_name, data_type FROM `%s.DATASET`.INFORMATION_SCHEMA.COLUMNS WHERE table_name = 'TABLE'\n", entry.GCPProject))
+
 	if len(tables) > 0 {
-		b.WriteString("\nSchema:\n")
+		b.WriteString(fmt.Sprintf("\nDefault dataset (%s) schema:\n", entry.DefaultDataset))
 		for _, t := range tables {
 			var cols []string
 			for _, c := range t.Columns {
