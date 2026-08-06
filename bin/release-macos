@@ -1,0 +1,147 @@
+#!/bin/bash
+# Build a single-architecture, trimmed macOS .app.
+#
+# Why this exists instead of plain `gd build`:
+#   `gd build` on macOS ALWAYS produces a universal (arm64+x86_64) Go+DuckDB
+#   dylib and exports with whatever the "macOS" preset says. That's how we end up
+#   with a ~394 MB universal .app. To ship smaller, arch-specific DMGs we:
+#     1. Build the Go+DuckDB extension for ONE architecture only.
+#     2. Place it at graphics/darwin_universal.dylib — the path Godot's generated
+#        library.gdextension points `macos.release` at. (The filename says
+#        "universal" but it is really single-arch here; the name is just a label.)
+#     3. Point the "macOS" export preset at our trimmed template + this arch,
+#        then run Godot's exporter directly.
+#     4. Output to releases/darwin/<arch>/Bufflehead.app
+#
+# This reproduces the relevant parts of graphics.gd's own macOS builder
+# (cmd/gd/internal/builder/macos.go) minus the forced lipo-to-universal step.
+#
+# Usage:
+#   ./bin/release-macos arm64      # Apple Silicon
+#   ./bin/release-macos x86_64     # Intel
+#
+# Env:
+#   SKIP_TEMPLATE=1   don't (re)build the trimmed Godot template; use whatever
+#                     is already at graphics/templates/ (errors if missing)
+#
+# After this, sign/notarize + DMG with:
+#   ARCH=<arch> ... ./bin/sign-notarize
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+
+GRAPHICS="$ROOT/graphics"
+PRESETS="$GRAPHICS/export_presets.cfg"
+
+ARCH="${1:-}"
+case "$ARCH" in
+    arm64|x86_64) ;;
+    *)
+        echo "Usage: $0 <arm64|x86_64>" >&2
+        exit 2
+        ;;
+esac
+
+# Godot's export presets use "x86_64" as the arch token (matches the cfg).
+GODOT_ARCH="$ARCH"
+# Go uses "amd64" for Intel.
+case "$ARCH" in
+    x86_64) GOARCH="amd64" ;;
+    arm64)  GOARCH="arm64" ;;
+esac
+
+TEMPLATE="$GRAPHICS/templates/godot.macos.template_release.$ARCH"
+OUT_APP="$ROOT/releases/darwin/$ARCH/Bufflehead.app"
+GODOT_BIN="$HOME/gd/bin/Godot.app/Contents/MacOS/Godot"
+
+# --- 0. Sanity checks -------------------------------------------------------
+[ -x "$GODOT_BIN" ] || {
+    echo "Error: Godot editor not found at $GODOT_BIN" >&2
+    echo "       Run 'gd run ./cmd/viewer' once to let gd install Godot." >&2
+    exit 1
+}
+
+# --- 1. Trimmed engine template ---------------------------------------------
+if [ "${SKIP_TEMPLATE:-0}" = "1" ]; then
+    echo "==> Skipping template build (SKIP_TEMPLATE=1)"
+    [ -f "$TEMPLATE" ] || { echo "Error: template missing: $TEMPLATE" >&2; exit 1; }
+else
+    "$ROOT/bin/build-godot-template" "$ARCH"
+fi
+
+# --- 2. Build the Go + DuckDB extension for THIS arch only ------------------
+# Mirrors macos.go: CGO on, -buildmode=c-shared. We write directly to
+# darwin_universal.dylib (single-arch despite the name) so the generated
+# library.gdextension (macos.release = darwin_universal.dylib) loads it.
+echo "==> Building Go+DuckDB extension (GOARCH=$GOARCH, single-arch)..."
+export CGO_ENABLED=1
+GOARCH="$GOARCH" go build -buildmode=c-shared \
+    -o "$GRAPHICS/darwin_universal.dylib" ./cmd/viewer
+# Keep the arch-specific copy too, for clarity / debugging.
+cp "$GRAPHICS/darwin_universal.dylib" "$GRAPHICS/darwin_$GOARCH.dylib"
+
+echo "    extension arch: $(lipo -archs "$GRAPHICS/darwin_universal.dylib")"
+
+# --- 3. Point the macOS preset at this arch + our trimmed template ----------
+# We edit export_presets.cfg IN PLACE for the [preset.2.options] (name="macOS")
+# block, then restore it afterward so the committed default (universal / stock
+# template, used by the `gd run` dev flow) is never left mutated.
+BACKUP="$(mktemp)"
+cp "$PRESETS" "$BACKUP"
+restore_presets() { cp "$BACKUP" "$PRESETS"; rm -f "$BACKUP"; }
+trap restore_presets EXIT
+
+# Absolute path is safest; Godot resolves custom_template relative to the project
+# (graphics/) dir, so a path relative to graphics/ also works. Use project-relative
+# to keep it portable across machines/checkouts.
+REL_TEMPLATE="templates/godot.macos.template_release.$ARCH"
+
+python3 - "$PRESETS" "$GODOT_ARCH" "$REL_TEMPLATE" <<'PY'
+import re, sys
+path, arch, template = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(path) as f:
+    text = f.read()
+
+# Operate only within the [preset.2.options] section (the macOS preset).
+start = text.index("[preset.2.options]")
+end = text.find("\n[preset.", start + 1)
+end = len(text) if end == -1 else end
+head, body, tail = text[:start], text[start:end], text[end:]
+
+def set_key(block, key, value):
+    pat = re.compile(rf'^{re.escape(key)}=.*$', re.M)
+    line = f'{key}={value}'
+    if pat.search(block):
+        return pat.sub(line, block, count=1)
+    return block.rstrip() + "\n" + line + "\n"
+
+body = set_key(body, "binary_format/architecture", f'"{arch}"')
+body = set_key(body, "custom_template/release", f'"{template}"')
+
+with open(path, "w") as f:
+    f.write(head + body + tail)
+print(f"    preset: architecture={arch}, custom_template/release={template}")
+PY
+
+# --- 4. Export via Godot directly -------------------------------------------
+echo "==> Exporting macOS app ($ARCH)..."
+rm -rf "$OUT_APP"
+mkdir -p "$(dirname "$OUT_APP")"
+
+# Godot resolves export_path relative to the project (graphics/) dir; the preset's
+# export_path is ../releases/darwin/universal/Bufflehead.app. We override it to the
+# arch-specific path via --export-release <preset> <path>.
+( cd "$GRAPHICS" && "$GODOT_BIN" --headless \
+    --export-release "macOS" "$OUT_APP" )
+
+[ -d "$OUT_APP" ] || { echo "Error: export did not produce $OUT_APP" >&2; exit 1; }
+
+# --- 5. Report --------------------------------------------------------------
+echo
+echo "==> Done: ${OUT_APP#"$ROOT"/}"
+du -sh "$OUT_APP"
+echo "    engine:    $(lipo -archs "$OUT_APP/Contents/MacOS/Bufflehead" 2>/dev/null)"
+echo "    extension: $(lipo -archs "$OUT_APP/Contents/Frameworks/darwin_universal.dylib" 2>/dev/null)"
+echo
+echo "Next: ARCH=$ARCH SIGN_IDENTITY=... NOTARY_PROFILE=... ./bin/sign-notarize"

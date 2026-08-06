@@ -119,3 +119,60 @@ is required so the hardened runtime can load DuckDB's downloaded extension dylib
 ```bash
 ./bin/release-dmg
 ```
+
+### Slim per-architecture builds (smaller downloads)
+
+The default `gd build` produces a **universal** `.app` (~394 MB): Intel + Apple
+Silicon slices of both the Godot engine (`Contents/MacOS/Bufflehead`) and the
+Go+DuckDB extension (`Contents/Frameworks/darwin_universal.dylib`). To ship
+smaller, arch-specific DMGs (~150–170 MB each) there are two levers:
+
+1. **Single architecture** — halves everything (the x86_64/arm64 duplication is
+   the biggest cost). `gd build` on macOS *always* builds universal and ignores
+   `GOARCH`, so `bin/release-macos` builds the Go dylib for one arch itself and
+   drives Godot's exporter directly.
+2. **Trimmed Godot template** — `bin/build-godot-template` compiles a
+   size-optimized engine template with unused subsystems disabled (3D, OpenXR,
+   navigation, WebRTC, multiplayer, CSG, GridMap, Theora). This shrinks only the
+   engine binary; the DuckDB dylib is unaffected (arch-slicing is its only lever).
+
+The Go+DuckDB dylib (~100 MB/arch) is the size floor — dominated by statically
+linked DuckDB, not Godot.
+
+```bash
+# One-time per machine: install scons (needed to compile the template)
+brew install scons          # or: pip install scons
+
+# Build + sign + notarize each arch (produces Bufflehead-<arch>.dmg):
+for a in arm64 x86_64; do
+  ./bin/release-macos "$a"                        # trimmed, single-arch .app
+  ARCH="$a" \
+    SIGN_IDENTITY="Developer ID Application: Kyle Parisi (63GMD6U4J2)" \
+    NOTARY_PROFILE="bufflehead-notary" \
+    ./bin/sign-notarize
+done
+
+gh release create vX.Y.Z \
+  releases/Bufflehead-arm64.dmg releases/Bufflehead-x86_64.dmg \
+  --title "vX.Y.Z" --notes "..."
+```
+
+Details:
+- **`bin/build-godot-template <arm64|x86_64>`** — clones Godot `4.6.2-stable`
+  once into `.godot-src/` (gitignored), compiles, and writes
+  `graphics/templates/godot.macos.template_release.<arch>` (also gitignored;
+  the script is the source of truth). Skips recompiling if the output exists
+  (`REBUILD=1` to force). Bump `GODOT_VERSION`/`GODOT_GIT_TAG` in the script
+  when upgrading Godot.
+- **`bin/release-macos <arch>`** — builds the single-arch Go dylib, temporarily
+  points the `macOS` preset at the trimmed template + arch (restored on exit, so
+  the committed cfg stays universal/stock for the `gd run` dev flow), and exports
+  to `releases/darwin/<arch>/Bufflehead.app`. `SKIP_TEMPLATE=1` reuses an
+  existing template.
+- **`ARCH=<arch> ./bin/sign-notarize`** signs the arch-specific `.app` and emits
+  `releases/Bufflehead-<arch>.dmg`. `ARCH=<arch> ./bin/release-dmg` does the
+  unsigned equivalent. With no `ARCH`, both behave as before (universal).
+
+To shrink the trim further, edit the `module_*_enabled`/`disable_*` flags in
+`bin/build-godot-template`, then re-run with `REBUILD=1` and verify the app
+launches and `./test/integration_test.sh` passes.

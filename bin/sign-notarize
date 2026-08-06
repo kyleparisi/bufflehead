@@ -14,14 +14,33 @@
 #     ./bin/sign-notarize
 #
 # Flags / env:
+#   ARCH=arm64|x86_64  sign/notarize a single-arch build produced by
+#                      bin/release-macos (uses releases/darwin/<ARCH>/ and names
+#                      the DMG Bufflehead-<ARCH>.dmg). Also sets SKIP_BUILD, since
+#                      bin/release-macos already built the arch-specific .app.
+#                      If unset, operates on the universal build from `gd build`.
 #   SKIP_BUILD=1     reuse the existing .app instead of rebuilding
 #   SKIP_NOTARIZE=1  sign only (fast local check; app will NOT pass Gatekeeper
 #                    on other Macs without notarization)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-APP="$ROOT/releases/darwin/universal/Bufflehead.app"
-DMG="$ROOT/releases/Bufflehead.dmg"
+
+# Per-arch (from bin/release-macos) vs universal (from `gd build`) layout.
+if [ -n "${ARCH:-}" ]; then
+    case "$ARCH" in
+        arm64|x86_64) ;;
+        *) echo "Error: ARCH must be 'arm64' or 'x86_64' (got '$ARCH')" >&2; exit 2 ;;
+    esac
+    APP="$ROOT/releases/darwin/$ARCH/Bufflehead.app"
+    DMG="$ROOT/releases/Bufflehead-$ARCH.dmg"
+    # release-macos already produced the arch .app; don't rebuild universally.
+    : "${SKIP_BUILD:=1}"
+else
+    APP="$ROOT/releases/darwin/universal/Bufflehead.app"
+    DMG="$ROOT/releases/Bufflehead.dmg"
+fi
+
 ENTITLEMENTS="$ROOT/packaging/macos/entitlements.plist"
 DMG_SETTINGS="$ROOT/packaging/dmg/settings.py"
 
@@ -94,7 +113,7 @@ if ! python3 -c 'import dmgbuild' >/dev/null 2>&1; then
 fi
 echo "==> Building styled DMG..."
 rm -f "$DMG"
-python3 -m dmgbuild -s "$DMG_SETTINGS" "Bufflehead" "$DMG"
+DMGBUILD_APP="$APP" python3 -m dmgbuild -s "$DMG_SETTINGS" "Bufflehead" "$DMG"
 echo "==> Signing DMG..."
 codesign --force --timestamp --sign "$SIGN_IDENTITY" "$DMG"
 

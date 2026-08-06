@@ -3,3 +3,8 @@ viewer
 releases/
 __pycache__/
 bufflehead
+
+# Trimmed Godot export template + its source checkout.
+# Rebuild with: ./bin/build-godot-template <arm64|x86_64>
+.godot-src/
+graphics/templates/

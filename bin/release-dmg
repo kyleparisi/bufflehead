@@ -1,17 +1,32 @@
 #!/bin/bash
-# Build the macOS app and package it as a styled DMG.
-# Usage: ./bin/release-dmg
+# Build the macOS app and package it as a styled DMG (unsigned; dev/local only).
+#
+# Usage:
+#   ./bin/release-dmg                 # universal build via `gd build`
+#   ARCH=arm64  ./bin/release-dmg     # single-arch, trimmed build (bin/release-macos)
+#   ARCH=x86_64 ./bin/release-dmg
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-APP="$ROOT/releases/darwin/universal/Bufflehead.app"
-DMG="$ROOT/releases/Bufflehead.dmg"
 SETTINGS="$ROOT/packaging/dmg/settings.py"
 
 cd "$ROOT"
 
-echo "Building macOS app..."
-GOOS=macos gd build ./cmd/viewer
+if [ -n "${ARCH:-}" ]; then
+    case "$ARCH" in
+        arm64|x86_64) ;;
+        *) echo "Error: ARCH must be 'arm64' or 'x86_64' (got '$ARCH')" >&2; exit 2 ;;
+    esac
+    APP="$ROOT/releases/darwin/$ARCH/Bufflehead.app"
+    DMG="$ROOT/releases/Bufflehead-$ARCH.dmg"
+    echo "Building single-arch ($ARCH) macOS app..."
+    "$ROOT/bin/release-macos" "$ARCH"
+else
+    APP="$ROOT/releases/darwin/universal/Bufflehead.app"
+    DMG="$ROOT/releases/Bufflehead.dmg"
+    echo "Building universal macOS app..."
+    GOOS=macos gd build ./cmd/viewer
+fi
 
 if [ ! -d "$APP" ]; then
     echo "Error: $APP not found after build" >&2
@@ -26,7 +41,7 @@ fi
 
 echo "Creating styled DMG..."
 rm -f "$DMG"
-python3 -m dmgbuild -s "$SETTINGS" "Bufflehead" "$DMG"
+DMGBUILD_APP="$APP" python3 -m dmgbuild -s "$SETTINGS" "Bufflehead" "$DMG"
 
 echo "Done: $DMG"
 ls -lh "$DMG"

@@ -2,7 +2,11 @@ import os
 from pathlib import Path
 
 root = Path(os.environ.get("DMGBUILD_ROOT", Path.cwd()))
-app_path = root / "releases/darwin/universal/Bufflehead.app"
+# DMGBUILD_APP lets per-arch builds (bin/release-macos) point at
+# releases/darwin/<arch>/Bufflehead.app instead of the universal build.
+app_path = Path(
+    os.environ.get("DMGBUILD_APP", root / "releases/darwin/universal/Bufflehead.app")
+)
 bg_path = root / "packaging/dmg/background.jpg"
 
 format = "UDBZ"

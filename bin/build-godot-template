@@ -1,0 +1,128 @@
+#!/bin/bash
+# Build a size-optimized ("trimmed") Godot export template for macOS.
+#
+# The stock Godot export template ships the entire engine — 3D renderer, physics,
+# XR, navigation, WebRTC, video codecs, etc. Bufflehead is a 2D/Control-only app
+# and uses none of that. Compiling our own template with those modules disabled
+# cuts the main app executable (Contents/MacOS/Bufflehead) from ~89 MB/arch to
+# roughly ~45-65 MB/arch.
+#
+# This ONLY affects the Godot engine binary. It does NOT shrink the Go+DuckDB
+# extension dylib (Contents/Frameworks/darwin_universal.dylib) — that is trimmed
+# separately by building a single architecture (see bin/release-macos).
+#
+# Usage:
+#   ./bin/build-godot-template arm64      # Apple Silicon
+#   ./bin/build-godot-template x86_64     # Intel
+#
+# Env:
+#   REBUILD=1    force a recompile even if the output already exists
+#   JOBS=N       parallelism for scons (default: number of CPUs)
+#
+# Output:
+#   graphics/templates/godot.macos.template_release.<arch>
+#
+# The Godot source is cloned once into .godot-src/ (gitignored) and reused.
+# Requires: git, scons, and a C++ toolchain (Xcode command line tools).
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+
+# --- Config -----------------------------------------------------------------
+# Pin the exact Godot version. Must match the export template version that `gd`
+# downloaded (see ~/Library/Application Support/Godot/export_templates/) and be
+# >= the compatibility_minimum in graphics/library.gdextension.
+GODOT_VERSION="4.6.2-stable"
+GODOT_GIT_TAG="4.6.2-stable"
+GODOT_REPO="https://github.com/godotengine/godot.git"
+
+SRC_DIR="$ROOT/.godot-src"
+OUT_DIR="$ROOT/graphics/templates"
+
+ARCH="${1:-}"
+case "$ARCH" in
+    arm64|x86_64) ;;
+    *)
+        echo "Usage: $0 <arm64|x86_64>" >&2
+        exit 2
+        ;;
+esac
+
+OUT_FILE="$OUT_DIR/godot.macos.template_release.$ARCH"
+JOBS="${JOBS:-$(sysctl -n hw.ncpu 2>/dev/null || echo 4)}"
+
+# --- Skip if already built --------------------------------------------------
+if [ -f "$OUT_FILE" ] && [ "${REBUILD:-0}" != "1" ]; then
+    echo "==> Template already exists: ${OUT_FILE#"$ROOT"/}"
+    echo "    (set REBUILD=1 to force a rebuild)"
+    ls -lh "$OUT_FILE"
+    exit 0
+fi
+
+# --- Prerequisites ----------------------------------------------------------
+command -v scons >/dev/null 2>&1 || {
+    echo "Error: 'scons' not found. Install it (e.g. 'brew install scons' or 'pip install scons')." >&2
+    exit 1
+}
+command -v git >/dev/null 2>&1 || { echo "Error: 'git' not found." >&2; exit 1; }
+
+# --- Clone / update the pinned Godot source ---------------------------------
+if [ ! -d "$SRC_DIR/.git" ]; then
+    echo "==> Cloning Godot $GODOT_GIT_TAG (shallow) into ${SRC_DIR#"$ROOT"/} ..."
+    git clone --depth 1 --branch "$GODOT_GIT_TAG" "$GODOT_REPO" "$SRC_DIR"
+else
+    current="$(git -C "$SRC_DIR" describe --tags --exact-match 2>/dev/null || echo unknown)"
+    if [ "$current" != "$GODOT_GIT_TAG" ]; then
+        echo "==> Checking out Godot $GODOT_GIT_TAG (source was at: $current) ..."
+        git -C "$SRC_DIR" fetch --depth 1 origin "refs/tags/$GODOT_GIT_TAG:refs/tags/$GODOT_GIT_TAG"
+        git -C "$SRC_DIR" checkout -f "$GODOT_GIT_TAG"
+    fi
+fi
+
+# --- Compile a size-optimized template_release ------------------------------
+# CONSERVATIVE trim: disable only clearly-unused, low-risk subsystems. If the
+# app or integration tests break, this list is the first place to look.
+#
+#   disable_3d=yes                -> drops the entire 3D renderer/scene/import
+#   module_*_enabled=no          -> drops unused engine modules
+#   optimize=size / production    -> compiler tuned for size, release-grade
+#   deprecated=no                 -> drops legacy compatibility code
+#
+# NOTE: We intentionally KEEP 2D, text/font rendering, theme, GUI, svg (icons),
+# freetype, and the mobile renderer that project.godot selects.
+echo "==> Building trimmed Godot template_release for macos/$ARCH (jobs=$JOBS)..."
+echo "    Godot version: $GODOT_VERSION"
+
+scons -C "$SRC_DIR" -j"$JOBS" \
+    platform=macos \
+    target=template_release \
+    arch="$ARCH" \
+    production=yes \
+    optimize=size \
+    deprecated=no \
+    disable_3d=yes \
+    module_openxr_enabled=no \
+    module_navigation_enabled=no \
+    module_webrtc_enabled=no \
+    module_multiplayer_enabled=no \
+    module_csg_enabled=no \
+    module_gridmap_enabled=no \
+    module_theora_enabled=no
+
+# scons writes the binary to bin/godot.macos.template_release.<arch>
+BUILT="$SRC_DIR/bin/godot.macos.template_release.$ARCH"
+if [ ! -f "$BUILT" ]; then
+    echo "Error: expected build output not found: $BUILT" >&2
+    echo "       (check the scons output above for the actual filename)" >&2
+    ls -la "$SRC_DIR/bin/" >&2 || true
+    exit 1
+fi
+
+mkdir -p "$OUT_DIR"
+cp "$BUILT" "$OUT_FILE"
+chmod +x "$OUT_FILE"
+
+echo
+echo "==> Done. Trimmed template:"
+ls -lh "$OUT_FILE"
