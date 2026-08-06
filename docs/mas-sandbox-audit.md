@@ -68,10 +68,12 @@ silently stops sharing state with the user's actual AWS CLI.
 
 That is the whole premise of the feature. "Log in with your existing SSO
 session" becomes "log in again, separately, in a private copy the `aws` CLI
-cannot see." There is no entitlement for arbitrary `~/.aws` access. The options
-are a security-scoped bookmark the user grants once via powerbox (workable but
-awkward, and it is a hidden directory that is painful to select), or dropping
-AWS SSO from the MAS build.
+cannot see." There is no entitlement for arbitrary `~/.aws` access.
+
+The workable route is a **security-scoped bookmark**: the user picks `~/.aws`
+once through an `NSOpenPanel`, and the app persists a bookmark it can re-resolve
+on later launches. See the DarwinKit section below — this is reachable from Go,
+so B2 is an awkward-UX problem rather than an impossible one.
 
 ### B3. BigQuery via gcloud ADC breaks the same way
 
@@ -147,7 +149,10 @@ DNS rebinding defeats the response-reading restriction too, making
 `CLAUDE.md` describes this as binding "to a random available port" — that is not
 what the code does.
 
-Suggested fix, independent of the MAS decision:
+### Status: OPEN — deferred by decision, not fixed
+
+Filed for later on 2026-08-06. No code change has been made; the behaviour
+described above is what ships today. When it is picked up, the fix is:
 
 1. Start the control server only when explicitly enabled
    (`BUFFLEHEAD_CONTROL=1`), off in release builds.
@@ -156,20 +161,71 @@ Suggested fix, independent of the MAS decision:
 4. Reject requests carrying an `Origin` header.
 
 `test/integration_test.sh:63` already parses the port from stdout, so the
-harness only needs the env var and the token.
+harness only needs the env var and the token — the test infrastructure is
+already port-agnostic and will not need restructuring.
+
+Separately, `CLAUDE.md`'s "Testing" section should be corrected: it states the
+control server "binds to a random available port", which does not match
+`cmd/viewer/main.go:37`.
+
+---
+
+## E. Would DarwinKit help?
+
+[DarwinKit](https://github.com/progrium/darwinkit) (formerly MacDriver) gives Go
+cgo bindings to macOS Objective-C frameworks. Evaluated against v0.5.0, the
+latest release. Coverage checked directly against the module source:
+
+| Need | DarwinKit v0.5.0 | Verdict |
+|---|---|---|
+| Security-scoped bookmarks (B2, B3) | `foundation.URL.StartAccessingSecurityScopedResource`, `StopAccessingSecurityScopedResource`, `BookmarkDataWithOptions…` (`macos/foundation/url.gen.go`) | **Solves it** |
+| File picker to grant that access | `appkit.OpenPanel` (`macos/appkit/open_panel.gen.go`) | **Solves it** |
+| Open a URL in the browser (B4) | `appkit.Workspace` (`macos/appkit/workspace.gen.go`) | Solves it, but Godot's `OS.shell_open` already does |
+| Keychain Services (B1) | **Absent.** No `SecItemAdd`, `SecItemCopyMatching` or `kSecClassGenericPassword` anywhere in the module. The bundled `securityinterface` package is SecurityInterface.framework (auth/certificate *panels*), not Security.framework | Use `keybase/go-keychain` instead |
+| StoreKit | **Absent** — no `storekit` package | Not needed; exit(173) covers receipt refresh |
+| DuckDB extension download + `dlopen` (A1) | Not applicable | **Solves nothing** |
+
+So DarwinKit is a real answer to the hardest *API* problem — it turns "the app
+can never see the user's real `~/.aws`" into "the user grants it once through a
+file picker." That is a genuine improvement over the earlier assessment, and cgo
+is already required (`go-duckdb` is a cgo package), so it adds no new build
+constraint.
+
+Three caveats worth weighing:
+
+1. **It does nothing for A1**, which is the fatal blocker. Downloading and
+   loading a dylib is banned by review policy, not by an API Go cannot reach.
+   No binding library can change that.
+2. **v0.5.0 is dated June 2024** with no newer release — roughly two years stale.
+   That is a maintenance risk for code sitting in the credential path.
+3. **Godot owns the `NSApplication` and the main run loop.** Driving an
+   `NSOpenPanel` through DarwinKit alongside graphics.gd needs main-thread care
+   and may contend with Godot's event loop. Untested here, and a real
+   integration risk.
+
+Also worth noting: even with a working bookmark flow, asking a reviewer to
+approve an app that requests access to a hidden credentials directory is a
+plausible point of friction. Not an automatic rejection, but not free either.
 
 ---
 
 ## Recommendation
 
-**Don't ship to the Mac App Store.**
+**Don't ship to the Mac App Store** — but for a narrower reason than the first
+draft of this audit claimed.
 
-A sandboxed Bufflehead is a materially different, weaker product. Taken
-together, A1 + B2 + B3 mean the App Store build would lose SQLite file support,
-lose shared AWS SSO sessions, and lose ADC-based BigQuery — that is, most of the
-cloud-database functionality that distinguishes the app from a plain Parquet
-viewer. Getting there still costs a custom static DuckDB build, a cgo keychain
-rewrite, and a powerbox flow for `~/.aws`.
+DarwinKit (section E) genuinely defuses B2 and B3: the security-scoped bookmark
+API is right there, so shared AWS SSO and gcloud ADC are recoverable at the cost
+of a one-time "pick your `~/.aws` folder" step. B1 is a dependency swap. B4 is a
+one-liner. None of those are the problem.
+
+**A1 is the problem, and nothing fixes it.** DuckDB downloading and loading
+extensions is banned by App Store review policy, not by a macOS API that a Go
+binding could reach. It is on the default path — opening any SQLite file calls
+`INSTALL sqlite` — so SQLite support dies unless DuckDB is rebuilt with every
+extension statically linked, the extensions UI is removed, and remote extension
+installation is disabled. That is a custom DuckDB toolchain to maintain
+indefinitely, and it permanently caps which extensions users can ever have.
 
 The other three channels have none of these constraints:
 
