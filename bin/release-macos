@@ -1,31 +1,22 @@
 #!/bin/bash
-# Build a SINGLE-ARCHITECTURE macOS app (slimmer than the universal build).
+# Build BOTH single-architecture macOS apps (arm64 + x86_64), each ~half the size
+# of the universal build (~190-210M vs ~394M). Output:
+#   releases/darwin/arm64/Bufflehead.app
+#   releases/darwin/x86_64/Bufflehead.app
 #
-# The default `gd build` / `bin/release-dmg` produce a *universal* (fat) app:
-# every Mach-O carries both an arm64 and an x86_64 slice, so the .app is ~394M
-# (a ~217M fat Go/DuckDB dylib + a ~176M fat Godot engine binary). Slicing to a
-# single arch roughly halves that (~190-210M).
+# How it works, per arch:
+#   1. A single-arch Go/DuckDB dylib is compiled (both are built up front; the
+#      x86_64 slice cross-compiles natively via Apple clang).
+#   2. Godot's *universal* export template is lipo-thinned to the target arch --
+#      the official template only ships godot_macos_*.universal, so a single-arch
+#      export would otherwise fail looking for godot_macos_*.<arch>. No scons.
+#   3. binary_format/architecture is pinned and the app exported.
 #
-# What this script does, for the requested arch:
-#   1. Compiles a single-arch Go/DuckDB dylib.
-#   2. Thins Godot's *universal* export template down to that arch with `lipo`
-#      (the official template only ships godot_macos_*.universal, so a single-arch
-#      export would otherwise fail looking for godot_macos_*.<arch>).
-#   3. Rewrites library.gdextension to precise per-arch entries so the exported
-#      app bundles just the target-arch dylib -- while the native Godot *editor*
-#      still loads its own-arch dylib during export (loading a foreign-arch dylib
-#      into the editor is SIGKILLed by the kernel as "Code Signature Invalid").
-#   4. Exports with binary_format/architecture pinned to that arch.
-#
-# Because the native editor must load an own-arch extension to export, building a
-# cross-arch app (e.g. x86_64 on Apple Silicon) also (re)builds the host-arch
-# dylib. The x86_64 slice cross-compiles natively via Apple clang; no scons or
-# extra toolchain is required -- we thin the prebuilt template instead of building
-# engine templates from source.
-#
-# Usage:
-#   ./bin/release-macos arm64      # Apple Silicon   (aliases: aarch64)
-#   ./bin/release-macos x86_64     # Intel           (aliases: amd64, intel)
+# library.gdextension is rewritten to precise per-arch entries so the exported
+# app bundles just the target-arch dylib -- while the native (arm64) Godot editor
+# still loads its own-arch dylib during export (loading a foreign-arch dylib into
+# the editor is SIGKILLed by the kernel as "Code Signature Invalid"). Both the
+# preset and the gdextension are restored on exit, even on failure.
 #
 # Env overrides:
 #   GODOT=/path/to/Godot   Godot 4.6 editor binary (default: ~/gd/bin/Godot.app/...)
@@ -38,82 +29,31 @@ GDEXT="$GRAPHICS/library.gdextension"
 PRESET="macOS"
 GODOT="${GODOT:-$HOME/gd/bin/Godot.app/Contents/MacOS/Godot}"
 
-# arch <arch-tag> -> Go GOARCH
-goarch_for() { case "$1" in arm64) echo arm64 ;; x86_64) echo amd64 ;; esac; }
-
-# --- parse arch arg ---------------------------------------------------------
-arch="${1:-}"
-case "$arch" in
-    arm64|aarch64)      ARCH=arm64 ;;
-    x86_64|amd64|intel) ARCH=x86_64 ;;
-    "") echo "Usage: $0 <arm64|x86_64>" >&2; exit 2 ;;
-    *)  echo "Error: unknown arch '$arch' (use arm64 or x86_64)" >&2; exit 2 ;;
-esac
-GOARCH="$(goarch_for "$ARCH")"
-
-# The Godot editor is a native binary; it must load an own-arch extension dylib
-# during export, so we also need the host arch built.
-case "$(uname -m)" in
-    arm64)         HOST_ARCH=arm64 ;;
-    x86_64|amd64)  HOST_ARCH=x86_64 ;;
-    *) echo "Error: unsupported host arch $(uname -m)" >&2; exit 1 ;;
-esac
-
 [ -x "$GODOT" ] || {
     echo "Error: Godot binary not found at $GODOT" >&2
     echo "       Run 'gd run ./cmd/viewer' once to download it, or set GODOT=..." >&2
     exit 1
 }
 
-OUT="$ROOT/releases/darwin/$ARCH"
-APP="$OUT/Bufflehead.app"
-mkdir -p "$OUT"
 cd "$ROOT"
 
-# --- 1. Build the Go/DuckDB dylib(s) ----------------------------------------
-build_dylib() {
-    local goarch="$1"
+# --- 1. Build both Go/DuckDB dylibs -----------------------------------------
+for goarch in arm64 amd64; do
     echo "==> Building Go dylib (GOARCH=$goarch)..."
     CGO_ENABLED=1 GOARCH="$goarch" \
         go build -buildmode=c-shared \
         -o "$GRAPHICS/darwin_${goarch}.dylib" ./cmd/viewer
-}
-build_dylib "$GOARCH"
-if [ "$ARCH" != "$HOST_ARCH" ]; then
-    # Needed only so the native editor can load the extension while exporting.
-    build_dylib "$(goarch_for "$HOST_ARCH")"
-fi
+done
 
-# --- 2. Thin the universal export template to a single arch ------------------
-# Godot names the engine binary godot_macos_<cfg>.<arch>; the official template
-# only ships the *.universal slice, so we lipo-thin it into a custom template.
+# --- 2. Locate the source export template -----------------------------------
 GODOT_VERSION="$("$GODOT" --version 2>/dev/null | tr -d '\r' | head -1)"
 TPL_DIR="${GODOT_VERSION%%.official*}"   # e.g. "4.6.1.stable"
 SRC_TPL="$HOME/Library/Application Support/Godot/export_templates/$TPL_DIR/macos.zip"
 [ -f "$SRC_TPL" ] || { echo "Error: template not found: $SRC_TPL" >&2; exit 1; }
-
 TPL_OUT="$ROOT/releases/darwin/templates"
-THIN_TPL="$TPL_OUT/macos_$ARCH.zip"
 mkdir -p "$TPL_OUT"
 
-echo "==> Thinning export template to $ARCH..."
-TWORK="$(mktemp -d)"
-(
-    cd "$TWORK"
-    unzip -q "$SRC_TPL"
-    macos="macos_template.app/Contents/MacOS"
-    for cfg in release debug; do
-        lipo -thin "$ARCH" "$macos/godot_macos_${cfg}.universal" \
-            -output "$macos/godot_macos_${cfg}.$ARCH"
-        rm "$macos/godot_macos_${cfg}.universal"
-    done
-    rm -f "$THIN_TPL"
-    zip -q -r -X "$THIN_TPL" macos_template.app
-)
-rm -rf "$TWORK"
-
-# --- 3. Patch config + gdextension, then export -----------------------------
-# Both files are restored on exit (even on failure).
+# --- 3. Patch config + gdextension (restored on exit) -----------------------
 BK_CFG="$(mktemp)";   cp "$CFG" "$BK_CFG"
 BK_GDEXT="$(mktemp)"; cp "$GDEXT" "$BK_GDEXT"
 restore() {
@@ -122,53 +62,70 @@ restore() {
 }
 trap restore EXIT
 
-# 3a. gdextension: precise per-arch entries only. The editor (HOST_ARCH) loads
-#     its own dylib; the export bundles the target-arch dylib. Emit an entry only
-#     for each dylib that actually exists.
-{
-    macos_lines=""
-    [ -f "$GRAPHICS/darwin_arm64.dylib" ] && macos_lines+='macos.arm64    = "darwin_arm64.dylib"\n'
-    [ -f "$GRAPHICS/darwin_amd64.dylib" ] && macos_lines+='macos.x86_64   = "darwin_amd64.dylib"\n'
-    awk -v repl="$macos_lines" '
-        /^macos\./ { if (!done) { printf "%s", repl; done = 1 } next }
-        { print }
-    ' "$BK_GDEXT" | sed 's/\\n/\n/g' > "$GDEXT"
-}
+# gdextension: precise per-arch entries. The editor (arm64) loads darwin_arm64;
+# each export bundles the matching-arch dylib. Both dylibs exist (built above).
+awk '
+    /^macos\./ { if (!done) { print "macos.arm64    = \"darwin_arm64.dylib\"";
+                              print "macos.x86_64   = \"darwin_amd64.dylib\"";
+                              done = 1 } next }
+    { print }
+' "$BK_GDEXT" > "$GDEXT"
 
-# 3b. Patch ONLY the macOS preset options block (found by platform, resilient to
-#     preset reordering): pin the architecture and point release/debug at the
-#     thinned template.
+# The macOS preset options block is found by platform (resilient to reordering).
 PRESET_IDX="$(awk '
     /^\[preset\.[0-9]+\]/ { match($0, /[0-9]+/); idx = substr($0, RSTART, RLENGTH) }
     /^platform="macOS"/   { print idx; exit }
-' "$CFG")"
+' "$BK_CFG")"
 [ -n "$PRESET_IDX" ] || { echo "Error: could not find macOS preset in $CFG" >&2; exit 1; }
 
-awk -v arch="$ARCH" -v tzip="$THIN_TPL" -v sect="[preset.${PRESET_IDX}.options]" '
-    $0 == sect { inblk = 1; print; next }
-    /^\[/      { inblk = 0 }
-    inblk && /^binary_format\/architecture=/ { print "binary_format/architecture=\"" arch "\""; next }
-    inblk && /^custom_template\/release=/     { print "custom_template/release=\"" tzip "\""; next }
-    inblk && /^custom_template\/debug=/       { print "custom_template/debug=\"" tzip "\""; next }
-    { print }
-' "$CFG" > "$CFG.tmp" && mv "$CFG.tmp" "$CFG"
+# --- 4. Thin the template + export, once per arch ---------------------------
+for ARCH in arm64 x86_64; do
+    echo "==> Thinning export template to $ARCH..."
+    THIN_TPL="$TPL_OUT/macos_$ARCH.zip"
+    TWORK="$(mktemp -d)"
+    (
+        cd "$TWORK"
+        unzip -q "$SRC_TPL"
+        macos="macos_template.app/Contents/MacOS"
+        for cfg in release debug; do
+            lipo -thin "$ARCH" "$macos/godot_macos_${cfg}.universal" \
+                -output "$macos/godot_macos_${cfg}.$ARCH"
+            rm "$macos/godot_macos_${cfg}.universal"
+        done
+        rm -f "$THIN_TPL"
+        zip -q -r -X "$THIN_TPL" macos_template.app
+    )
+    rm -rf "$TWORK"
 
-echo "==> Exporting $ARCH app via Godot..."
-rm -rf "$APP"
-"$GODOT" --headless --path "$GRAPHICS" --export-release "$PRESET" "$APP"
+    # Pin the arch + point release/debug at the thinned template (from pristine).
+    awk -v arch="$ARCH" -v tzip="$THIN_TPL" -v sect="[preset.${PRESET_IDX}.options]" '
+        $0 == sect { inblk = 1; print; next }
+        /^\[/      { inblk = 0 }
+        inblk && /^binary_format\/architecture=/ { print "binary_format/architecture=\"" arch "\""; next }
+        inblk && /^custom_template\/release=/     { print "custom_template/release=\"" tzip "\""; next }
+        inblk && /^custom_template\/debug=/       { print "custom_template/debug=\"" tzip "\""; next }
+        { print }
+    ' "$BK_CFG" > "$CFG"
+
+    APP="$ROOT/releases/darwin/$ARCH/Bufflehead.app"
+    mkdir -p "$(dirname "$APP")"
+    echo "==> Exporting $ARCH app via Godot..."
+    rm -rf "$APP"
+    "$GODOT" --headless --path "$GRAPHICS" --export-release "$PRESET" "$APP"
+    [ -d "$APP" ] || { echo "Error: $APP not produced" >&2; exit 1; }
+done
 
 restore
 trap - EXIT
 
-[ -d "$APP" ] || { echo "Error: $APP not produced" >&2; exit 1; }
-
-# --- 4. Report --------------------------------------------------------------
+# --- 5. Report --------------------------------------------------------------
 echo
-echo "Done: $APP"
-du -sh "$APP"
-echo "-- main binary --"
-lipo -info "$APP/Contents/MacOS/Bufflehead" 2>&1 || true
-echo "-- dylib --"
-for d in "$APP"/Contents/Frameworks/*.dylib; do
-    [ -e "$d" ] && lipo -info "$d" 2>&1 || true
+for ARCH in arm64 x86_64; do
+    APP="$ROOT/releases/darwin/$ARCH/Bufflehead.app"
+    echo "Done: $APP"
+    du -sh "$APP"
+    lipo -info "$APP/Contents/MacOS/Bufflehead" 2>&1 | sed 's/^/  /' || true
+    for d in "$APP"/Contents/Frameworks/*.dylib; do
+        [ -e "$d" ] && lipo -info "$d" 2>&1 | sed 's/^/  /' || true
+    done
 done

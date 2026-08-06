@@ -102,22 +102,21 @@ If the `gopls` and `godoc` MCP servers are available, use them for Go workspace 
 Bump the version in `graphics/export_presets.cfg` (macOS `application/short_version`
 + `application/version`, and the Windows presets' `file_version`/`product_version`).
 
-macOS ships **per-arch**: a slim single-architecture `.app` per arch (~190–210M
-each, ~half the size of a universal/fat build), packaged into `Bufflehead-<arch>.dmg`.
-`bin/release-macos <arch>` does the arch-specific build (see its header for how it
-thins the Godot template and rewrites the gdextension so the native editor doesn't
-choke on a foreign-arch dylib); `release-dmg`/`sign-notarize` call it for you.
+macOS ships **per-arch**: a slim single-architecture `.app` for each of arm64 and
+x86_64 (~190–210M each, ~half the size of a universal/fat build), packaged into
+`Bufflehead-<arch>.dmg`. `bin/release-macos` builds *both* arches sequentially (see
+its header for how it thins the Godot template and rewrites the gdextension so the
+native editor doesn't choke on a foreign-arch dylib); `release-dmg`/`sign-notarize`
+call it for you and loop over both arches.
 
 **Signed + notarized DMGs (Developer ID — this is what ships to users):** builds
-the single-arch app, deep-signs every nested Mach-O with the hardened runtime,
-builds the styled DMG, then notarizes and staples it. Run once per arch. Requires
-a "Developer ID Application" cert in the keychain and notary credentials saved as
-a keychain profile (see the header comment in `bin/sign-notarize`).
+both single-arch apps, deep-signs every nested Mach-O with the hardened runtime,
+builds each styled DMG, then notarizes and staples it — once per arch. Requires a
+"Developer ID Application" cert in the keychain and notary credentials saved as a
+keychain profile (see the header comment in `bin/sign-notarize`).
 ```bash
 SIGN_IDENTITY="Developer ID Application: Kyle Parisi (63GMD6U4J2)" \
-NOTARY_PROFILE="bufflehead-notary" ./bin/sign-notarize arm64
-SIGN_IDENTITY="Developer ID Application: Kyle Parisi (63GMD6U4J2)" \
-NOTARY_PROFILE="bufflehead-notary" ./bin/sign-notarize x86_64
+NOTARY_PROFILE="bufflehead-notary" ./bin/sign-notarize
 gh release create vX.Y.Z \
   releases/Bufflehead-arm64.dmg releases/Bufflehead-x86_64.dmg \
   --title "vX.Y.Z" --notes "..."
@@ -125,7 +124,7 @@ gh release create vX.Y.Z \
 Entitlements live in `packaging/macos/entitlements.plist`; `disable-library-validation`
 is required so the hardened runtime can load DuckDB's downloaded extension dylibs.
 
-**Unsigned DMG (local/dev only — Gatekeeper will block it on other Macs):**
+**Unsigned DMGs (local/dev only — Gatekeeper will block them on other Macs):**
 ```bash
-./bin/release-dmg arm64      # or x86_64
+./bin/release-dmg
 ```
