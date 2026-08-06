@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+#
+# Fetch the Apple Inc. Root certificate used as the pinned trust anchor for Mac
+# App Store receipt validation, and install it into internal/license/anchors/.
+#
+# The certificate is NOT checked into the repo. A trust anchor is the single
+# thing that makes receipt verification mean anything, so it gets fetched from
+# Apple and confirmed by a human rather than copied from a mirror, a gist, or a
+# model's memory.
+#
+# Usage:
+#   ./bin/fetch-apple-root            # fetch, show fingerprint, ask to confirm
+#   ./bin/fetch-apple-root --print    # show what is already installed
+#
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ANCHOR_DIR="$REPO_ROOT/internal/license/anchors"
+ANCHOR_FILE="$ANCHOR_DIR/AppleIncRootCertificate.cer"
+
+# Apple publishes its CA certificates here; the root is linked from this page.
+CERT_URL="https://www.apple.com/appleca/AppleIncRootCertificate.cer"
+CA_PAGE="https://www.apple.com/certificateauthority/"
+
+describe() {
+  local file="$1"
+  openssl x509 -inform DER -in "$file" -noout \
+    -subject -issuer -serial -dates -fingerprint -sha256
+}
+
+if [[ "${1:-}" == "--print" ]]; then
+  if [[ ! -f "$ANCHOR_FILE" ]]; then
+    echo "No anchor installed at $ANCHOR_FILE" >&2
+    exit 1
+  fi
+  describe "$ANCHOR_FILE"
+  exit 0
+fi
+
+for tool in curl openssl; do
+  command -v "$tool" >/dev/null || { echo "error: $tool is required" >&2; exit 1; }
+done
+
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+DOWNLOAD="$TMP/root.cer"
+
+echo "Downloading $CERT_URL"
+if ! curl -fsSL --proto '=https' --tlsv1.2 -o "$DOWNLOAD" "$CERT_URL"; then
+  cat >&2 <<EOF
+
+error: download failed.
+
+If this machine cannot reach apple.com, fetch the certificate from a machine
+that can, then install it by hand:
+
+    cp AppleIncRootCertificate.cer $ANCHOR_FILE
+    ./bin/fetch-apple-root --print
+
+EOF
+  exit 1
+fi
+
+# Reject anything that is not a parseable DER certificate before it goes near
+# the anchor directory — a captive-portal HTML page would otherwise land there.
+if ! openssl x509 -inform DER -in "$DOWNLOAD" -noout 2>/dev/null; then
+  echo "error: downloaded file is not a DER certificate" >&2
+  exit 1
+fi
+
+# A trust anchor must be self-signed; if this one is not, something is wrong.
+SUBJECT="$(openssl x509 -inform DER -in "$DOWNLOAD" -noout -subject)"
+ISSUER="$(openssl x509 -inform DER -in "$DOWNLOAD" -noout -issuer)"
+if [[ "${SUBJECT#subject=}" != "${ISSUER#issuer=}" ]]; then
+  echo "error: certificate is not self-signed, so it is not a root" >&2
+  echo "  $SUBJECT" >&2
+  echo "  $ISSUER" >&2
+  exit 1
+fi
+
+echo
+describe "$DOWNLOAD"
+echo
+cat <<EOF
+------------------------------------------------------------------------
+Compare the SHA-256 fingerprint above against the value Apple publishes at
+
+    $CA_PAGE
+
+Do this by eye. That comparison is the entire security value of pinning —
+if the fingerprint does not match, answer "n".
+------------------------------------------------------------------------
+EOF
+
+read -r -p "Fingerprint matches Apple's published value? [y/N] " reply
+case "$reply" in
+  [yY]|[yY][eE][sS]) ;;
+  *) echo "Aborted; nothing was installed." >&2; exit 1 ;;
+esac
+
+mkdir -p "$ANCHOR_DIR"
+cp "$DOWNLOAD" "$ANCHOR_FILE"
+echo
+echo "Installed $ANCHOR_FILE"
+echo "Next: go test ./internal/license/    (TestAppleAnchorPresent will stop skipping)"
