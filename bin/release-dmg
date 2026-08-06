@@ -1,17 +1,32 @@
 #!/bin/bash
-# Build the macOS app and package it as a styled DMG.
-# Usage: ./bin/release-dmg
+# Build a single-arch macOS app and package it as a styled per-arch DMG.
+# Usage: ./bin/release-dmg <arm64|x86_64>
+#   SKIP_BUILD=1   reuse the existing .app instead of rebuilding
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-APP="$ROOT/releases/darwin/universal/Bufflehead.app"
-DMG="$ROOT/releases/Bufflehead.dmg"
 SETTINGS="$ROOT/packaging/dmg/settings.py"
+
+arch="${1:-}"
+case "$arch" in
+    arm64|aarch64)      ARCH=arm64 ;;
+    x86_64|amd64|intel) ARCH=x86_64 ;;
+    "") echo "Usage: $0 <arm64|x86_64>" >&2; exit 2 ;;
+    *)  echo "Error: unknown arch '$arch' (use arm64 or x86_64)" >&2; exit 2 ;;
+esac
+
+APP="$ROOT/releases/darwin/$ARCH/Bufflehead.app"
+DMG="$ROOT/releases/Bufflehead-$ARCH.dmg"
+: "${SKIP_BUILD:=0}"
 
 cd "$ROOT"
 
-echo "Building macOS app..."
-GOOS=macos gd build ./cmd/viewer
+if [ "$SKIP_BUILD" = "1" ]; then
+    echo "Skipping build (SKIP_BUILD=1)"
+else
+    echo "Building $ARCH macOS app..."
+    ./bin/release-macos "$ARCH"
+fi
 
 if [ ! -d "$APP" ]; then
     echo "Error: $APP not found after build" >&2
@@ -26,7 +41,7 @@ fi
 
 echo "Creating styled DMG..."
 rm -f "$DMG"
-python3 -m dmgbuild -s "$SETTINGS" "Bufflehead" "$DMG"
+BUFFLEHEAD_ARCH="$ARCH" python3 -m dmgbuild -s "$SETTINGS" "Bufflehead" "$DMG"
 
 echo "Done: $DMG"
 ls -lh "$DMG"

@@ -11,7 +11,11 @@
 # Usage:
 #   SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" \
 #   NOTARY_PROFILE="bufflehead-notary" \
-#     ./bin/sign-notarize
+#     ./bin/sign-notarize <arm64|x86_64>
+#
+# Ships per-arch: run once per arch to produce Bufflehead-<arch>.dmg, e.g.
+#   ./bin/sign-notarize arm64  &&  ./bin/sign-notarize x86_64
+#   gh release create vX.Y.Z releases/Bufflehead-arm64.dmg releases/Bufflehead-x86_64.dmg
 #
 # Flags / env:
 #   SKIP_BUILD=1     reuse the existing .app instead of rebuilding
@@ -20,8 +24,17 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-APP="$ROOT/releases/darwin/universal/Bufflehead.app"
-DMG="$ROOT/releases/Bufflehead.dmg"
+
+arch="${1:-}"
+case "$arch" in
+    arm64|aarch64)      ARCH=arm64 ;;
+    x86_64|amd64|intel) ARCH=x86_64 ;;
+    "") echo "Usage: $0 <arm64|x86_64>" >&2; exit 2 ;;
+    *)  echo "Error: unknown arch '$arch' (use arm64 or x86_64)" >&2; exit 2 ;;
+esac
+
+APP="$ROOT/releases/darwin/$ARCH/Bufflehead.app"
+DMG="$ROOT/releases/Bufflehead-$ARCH.dmg"
 ENTITLEMENTS="$ROOT/packaging/macos/entitlements.plist"
 DMG_SETTINGS="$ROOT/packaging/dmg/settings.py"
 
@@ -38,8 +51,8 @@ cd "$ROOT"
 if [ "$SKIP_BUILD" = "1" ]; then
     echo "==> Skipping build (SKIP_BUILD=1)"
 else
-    echo "==> Building macOS app..."
-    GOOS=macos gd build ./cmd/viewer
+    echo "==> Building $ARCH macOS app..."
+    ./bin/release-macos "$ARCH"
 fi
 [ -d "$APP" ] || { echo "Error: $APP not found" >&2; exit 1; }
 
@@ -94,7 +107,7 @@ if ! python3 -c 'import dmgbuild' >/dev/null 2>&1; then
 fi
 echo "==> Building styled DMG..."
 rm -f "$DMG"
-python3 -m dmgbuild -s "$DMG_SETTINGS" "Bufflehead" "$DMG"
+BUFFLEHEAD_ARCH="$ARCH" python3 -m dmgbuild -s "$DMG_SETTINGS" "Bufflehead" "$DMG"
 echo "==> Signing DMG..."
 codesign --force --timestamp --sign "$SIGN_IDENTITY" "$DMG"
 
