@@ -25,14 +25,51 @@ App Store Review Guideline **2.5.2** forbids downloading and executing code.
 Separately, `com.apple.security.cs.disable-library-validation` is a Developer ID
 hardened-runtime exception and is not available to App Store builds.
 
-There is no entitlement that makes this legal. The only route is to build DuckDB
-with every needed extension **statically linked**, remove the extensions UI, and
-disable remote extension installation. That means producing a custom DuckDB
-build rather than using `go-duckdb`'s prebuilt static libraries — real work, and
-it permanently caps which extensions users can have.
+There is no entitlement that makes this legal.
 
-Immediate casualty: **SQLite file support breaks**, because `OpenSQLite` installs
-the extension on demand.
+### Removing the extensions UI is not sufficient
+
+Bufflehead is a **SQL client**. Even with `internal/ui/extensions.go` deleted and
+`OpenSQLite` rewritten, a user can type `INSTALL httpfs` straight into the SQL
+panel and DuckDB will download and load a dylib. The capability has to be gone
+from the engine, not just from the UI.
+
+### Runtime lockdown does not work — verified
+
+Measured against the DuckDB build currently vendored by `go-duckdb` v1.8.5:
+
+| Setting | INSTALL/LOAD | Local file reading |
+|---|---|---|
+| `autoinstall_known_extensions=false` + `autoload_known_extensions=false` | **Still works** — these govern only *automatic* install/load, not an explicit `INSTALL` | fine |
+| `enable_external_access=false` | Blocked: *"Installing extensions is disabled through configuration"* | **Also blocked**: *"Scanning read_parquet files is disabled through configuration"*, same for `read_csv_auto` |
+
+`enable_external_access=false` is therefore unusable — it disables the app's core
+function along with the extension loader.
+
+### The build-time route works, and needs no fork — verified
+
+DuckDB's own `CMakeLists.txt` (checked at `v1.1.3`) already has the options:
+
+- `DISABLE_EXTENSION_LOAD` — *"Disable support for loading and installing extensions"* (line 380)
+- `EXTENSION_STATIC_BUILD` (line 362) and `BUILD_EXTENSIONS` — link chosen extensions in
+
+And `go-duckdb` v1.8.5 already supports linking against a libduckdb you supply:
+`cgo_static_lib.go` is gated on `//go:build duckdb_use_static_lib`, so
+`go build -tags duckdb_use_static_lib` with `CGO_CFLAGS`/`CGO_LDFLAGS` pointing
+at your own build replaces the vendored 61 MB `deps/darwin_arm64/libduckdb.a`.
+
+**No fork of either project is required.** The MAS build is:
+
+1. Build DuckDB from an upstream release tag with `-DDISABLE_EXTENSION_LOAD=1`,
+   `-DEXTENSION_STATIC_BUILD=1`, and `BUILD_EXTENSIONS` listing what ships
+   (`json;parquet;sqlite_scanner;httpfs` — trim to taste).
+2. Build Bufflehead with `-tags duckdb_use_static_lib` against it.
+3. Remove `internal/ui/extensions.go` and the `INSTALL sqlite` in
+   `internal/db/duck.go:78` from the MAS build (both become dead weight once
+   `sqlite_scanner` is linked in).
+
+The permanent cost is real but bounded: a pinned DuckDB toolchain to rebuild on
+every DuckDB upgrade, and a fixed extension set users can never extend.
 
 ---
 
@@ -209,32 +246,45 @@ plausible point of friction. Not an automatic rejection, but not free either.
 
 ---
 
-## Recommendation
+## Decision: pursue full MAS parity
 
-**Don't ship to the Mac App Store** — but for a narrower reason than the first
-draft of this audit claimed.
+Decided 2026-08-06, after the DarwinKit and DuckDB findings above. Every
+blocker now has a verified route:
 
-DarwinKit (section E) genuinely defuses B2 and B3: the security-scoped bookmark
-API is right there, so shared AWS SSO and gcloud ADC are recoverable at the cost
-of a one-time "pick your `~/.aws` folder" step. B1 is a dependency swap. B4 is a
-one-liner. None of those are the problem.
+| Blocker | Route | Fork needed? |
+|---|---|---|
+| A1 DuckDB extensions | `-DDISABLE_EXTENSION_LOAD=1` + `EXTENSION_STATIC_BUILD` + `-tags duckdb_use_static_lib` | **No** — upstream options |
+| B1 Keychain | `keybase/go-keychain` (Security.framework) + `keychain-access-groups` | No |
+| B2/B3 `~/.aws`, gcloud ADC | DarwinKit security-scoped bookmarks + `NSOpenPanel` | No |
+| B4 Browser launch | Godot `OS.shell_open` | No |
+| C Entitlements | sandbox + `network.client` + `network.server` | No |
 
-**A1 is the problem, and nothing fixes it.** DuckDB downloading and loading
-extensions is banned by App Store review policy, not by a macOS API that a Go
-binding could reach. It is on the default path — opening any SQLite file calls
-`INSTALL sqlite` — so SQLite support dies unless DuckDB is rebuilt with every
-extension statically linked, the extensions UI is removed, and remote extension
-installation is disabled. That is a custom DuckDB toolchain to maintain
-indefinitely, and it permanently caps which extensions users can ever have.
+The earlier recommendation to drop the channel is superseded. It rested on the
+static DuckDB build being an open-ended custom toolchain; `DISABLE_EXTENSION_LOAD`
+and `duckdb_use_static_lib` make it a bounded, supported build configuration.
 
-The other three channels have none of these constraints:
+Residual risks, carried knowingly:
 
-- **Developer ID self-distribution** already works and is what ships today.
-- **Setapp** distributes Developer ID-signed apps — no sandbox requirement.
-- **Corporate MDM**, the channel you wanted next, explicitly does not involve
-  the App Store.
+1. **Godot owns the `NSApplication` and main run loop.** Driving `NSOpenPanel`
+   through DarwinKit alongside graphics.gd is unproven and must be spiked on
+   real hardware before the rest of B2 is built out.
+2. **DarwinKit v0.5.0 is ~2 years stale** and sits in the credential path.
+3. **App Review may still balk** at an app requesting access to a hidden
+   credentials directory.
+4. **Pinned DuckDB toolchain** to rebuild on every DuckDB upgrade, with a fixed
+   extension set users cannot extend.
 
-If the App Store is strategically necessary, the viable shape is a deliberately
-reduced MAS build: local files only (Parquet/CSV/JSON/DuckDB), no AWS, no
-BigQuery, no extension management. That is a product decision, not a packaging
-one — and worth making before any more licensing work targets that channel.
+### Build/verification constraint
+
+None of the macOS-specific work can be compiled in the Linux dev container.
+Measured:
+
+```
+GOOS=darwin CGO_ENABLED=0 go build ./...   # go-duckdb needs cgo: "undefined: Conn"
+GOOS=darwin CGO_ENABLED=1 go build ./...   # clang: unsupported option '-arch'
+```
+
+There is no macOS cross-toolchain here, and `go vet`/type-check cannot stand in
+because `go-duckdb` fails without cgo. So DarwinKit and `go-keychain` code is
+**write-here, compile-on-a-Mac**. Platform-independent scaffolding, interfaces
+and their non-darwin fallbacks can and should still be tested in CI on Linux.
