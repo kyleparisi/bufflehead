@@ -28,12 +28,13 @@ go test ./...
 ./test/integration_test.sh
 ```
 
-Integration tests use an HTTP control API to drive the app programmatically. The control server binds to a random available port (printed to stdout on startup as `Control server: http://127.0.0.1:<port>`). The test suite is in `test/integration_test.py` (pytest). You can also interact with the control API manually — check stdout for the port:
+Integration tests use an HTTP control API to drive the app programmatically. The control server binds to a random available port (printed to stdout on startup as `Control server: http://127.0.0.1:<port>`). It also mints a temporary bearer key — printed as `Control key: <key>` and required on **every** request as an `Authorization: Bearer <key>` header — so other local software can't drive the control server by blindly POSTing to the port. The key is ephemeral (rotates each launch, never written to disk) and is baked into the AI prompt Bufflehead copies to the clipboard. Set `BUFFLEHEAD_CONTROL_KEY` to pin a known key (the integration harness does this so the app and pytest share one). The test suite is in `test/integration_test.py` (pytest). You can also interact with the control API manually — check stdout for the port and key:
 
 ```bash
-# port is printed to stdout, e.g. "Control server: http://127.0.0.1:54321"
-curl -X POST http://localhost:<port>/open -d '{"path":"testdata/sample.parquet"}'
-curl http://localhost:<port>/state
+# stdout prints e.g. "Control server: http://127.0.0.1:54321" and "Control key: <key>"
+curl -X POST http://localhost:<port>/open \
+  -H "Authorization: Bearer <key>" -d '{"path":"testdata/sample.parquet"}'
+curl -H "Authorization: Bearer <key>" http://localhost:<port>/state
 ```
 
 Test data lives in `testdata/` (parquet, CSV, JSON, TSV, .duckdb files).
@@ -47,7 +48,7 @@ Test data lives in `testdata/` (parquet, CSV, JSON, TSV, .duckdb files).
 - `internal/db/` — DuckDB wrapper. `New()` creates in-memory DB, `OpenDB()` opens .duckdb files read-only. Handles schema inspection, paginated queries, and parquet metadata extraction.
 - `internal/models/` — `AppState` is the single source of truth per tab. Holds query text, schema, results, sort/pagination params, and a navigation stack (back/forward). `QueryHistory` persists query history to JSON in the user config dir.
 - `internal/ui/` — All Godot UI nodes implemented as Go extensions. `app.go` is the root node managing windows, menus, and keyboard shortcuts. `appwindow.go` manages tabs, sidebar, SQL panel, data grid, and row detail panel.
-- `internal/control/` — HTTP server (dynamic port, printed to stdout) exposing endpoints for programmatic control (`/open`, `/query`, `/sort`, `/page`, `/state`, `/screenshot`, `/ui-tree`, etc.). Primarily used by integration tests.
+- `internal/control/` — HTTP server (dynamic port, printed to stdout) exposing endpoints for programmatic control (`/open`, `/query`, `/sort`, `/page`, `/state`, `/screenshot`, `/ui-tree`, etc.). Every request is gated by a temporary bearer key minted in `control.New` (`Authorization: Bearer <key>`); `requireAuth` wraps the mux in `Start`. Primarily used by integration tests and the copy-to-clipboard AI prompt.
 
 **UI extension pattern** (graphics.gd):
 ```go

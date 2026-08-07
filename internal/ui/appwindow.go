@@ -170,8 +170,9 @@ type AppWindow struct {
 	// result here; Process drains it on the main thread to show the popup.
 	dbListMsg *dbListResult
 
-	// Control server address for AI prompt
+	// Control server address + temporary bearer key for the AI prompt
 	controlAddr string
+	controlKey  string
 
 	// Callbacks
 	onNewWindow     func()
@@ -1036,7 +1037,7 @@ func (w *AppWindow) render() {
 	if w.activeConnIdx >= 0 && w.activeConnIdx < len(w.connections) {
 		conn := w.connections[w.activeConnIdx]
 		if conn.Gateway != nil {
-			w.titleBar.SetAIPrompt(buildAIPrompt(conn.Gateway.Config, conn.Tables, w.controlAddr))
+			w.titleBar.SetAIPrompt(buildAIPrompt(conn.Gateway.Config, conn.Tables, w.controlAddr, w.controlKey))
 			w.titleBar.SetReconnectVisible(true)
 		} else {
 			// Local connection: a loaded file or database gets a prompt describing
@@ -1046,11 +1047,11 @@ func (w *AppWindow) render() {
 			case active.State.FilePath != "":
 				// A flat data file (CSV/Parquet/…) in the in-memory connection:
 				// queried by its single-quoted path.
-				w.titleBar.SetAIPrompt(buildFileAIPrompt(active.State.FilePath, conn.Name, active.State.Schema, w.controlAddr))
+				w.titleBar.SetAIPrompt(buildFileAIPrompt(active.State.FilePath, conn.Name, active.State.Schema, w.controlAddr, w.controlKey))
 			case conn.Path != "" && conn.Path != ":memory:":
 				// A database file (DuckDB/SQLite) opened as its own connection:
 				// queried by table name.
-				w.titleBar.SetAIPrompt(buildDBAIPrompt(conn.Name, conn.Path, conn.Tables, w.controlAddr))
+				w.titleBar.SetAIPrompt(buildDBAIPrompt(conn.Name, conn.Path, conn.Tables, w.controlAddr, w.controlKey))
 			default:
 				w.titleBar.SetAIPrompt("")
 			}
@@ -2253,37 +2254,57 @@ func (w *AppWindow) handleRefreshResult(res DBResult) {
 
 	// Update AI prompt if this is the active connection
 	if idx == w.activeConnIdx && conn.Gateway != nil {
-		w.titleBar.SetAIPrompt(buildAIPrompt(conn.Gateway.Config, conn.Tables, w.controlAddr))
+		w.titleBar.SetAIPrompt(buildAIPrompt(conn.Gateway.Config, conn.Tables, w.controlAddr, w.controlKey))
 		w.titleBar.SetReconnectVisible(true)
 	}
 
 	w.statusBar.SetStatus(fmt.Sprintf("Refreshed: %s (%d tables/views)", conn.Name, len(conn.Tables)))
 }
 
-func buildAIPrompt(entry models.GatewayEntry, tables []db.TableInfo, controlAddr string) string {
+// bearerFlag renders the curl flag that carries the control server's temporary
+// key. It returns "" when no key is set (auth-disabled dev/test runs) so the
+// snippets degrade to their old keyless form.
+func bearerFlag(key string) string {
+	if key == "" {
+		return ""
+	}
+	return fmt.Sprintf(" -H 'Authorization: Bearer %s'", key)
+}
+
+// authNote explains the required key so the agent knows why a bare request 401s.
+// Empty when auth is disabled.
+func authNote(key string) string {
+	if key == "" {
+		return "\nRun queries via HTTP (no auth needed, Bufflehead manages the connection).\n"
+	}
+	return "\nEvery request must send the temporary key shown below as an `Authorization: Bearer` header — it's minted fresh each launch and known only to you and Bufflehead, so other local software can't drive this server. Bufflehead still manages the underlying connection/credentials.\n"
+}
+
+func buildAIPrompt(entry models.GatewayEntry, tables []db.TableInfo, controlAddr, controlKey string) string {
 	if entry.IsBigQuery() {
-		return buildBigQueryAIPrompt(entry, tables, controlAddr)
+		return buildBigQueryAIPrompt(entry, tables, controlAddr, controlKey)
 	}
 
 	connName := entry.Name
+	auth := bearerFlag(controlKey)
 
 	var b strings.Builder
 	b.WriteString("I have a PostgreSQL database you can query.\n")
 	b.WriteString(fmt.Sprintf("Database: %s\n", entry.DBName))
-	b.WriteString(fmt.Sprintf("\nRun queries via HTTP (no auth needed, Bufflehead manages the connection):\n"))
-	b.WriteString(fmt.Sprintf("  curl -s -X POST http://%s/sql -d '{\"sql\":\"SELECT * FROM table LIMIT 10\",\"connection\":\"%s\"}'\n", controlAddr, connName))
+	b.WriteString(authNote(controlKey))
+	b.WriteString(fmt.Sprintf("  curl -s%s -X POST http://%s/sql -d '{\"sql\":\"SELECT * FROM table LIMIT 10\",\"connection\":\"%s\"}'\n", auth, controlAddr, connName))
 	b.WriteString("\nResults are limited to 100 rows by default. Queries time out after 30 seconds.\n")
 	b.WriteString("Use indexed columns in WHERE clauses, avoid full table scans, and keep queries targeted.\n")
 	b.WriteString("\nResponse format: {\"columns\":[...],\"rows\":[[...],...],\"total\":N}\n")
 
 	b.WriteString("\nYou can also fetch S3 objects via HTTP:\n")
-	b.WriteString(fmt.Sprintf("  curl -s -X POST http://%s/s3/get-object -d '{\"bucket\":\"BUCKET\",\"key\":\"KEY\",\"connection\":\"%s\"}'\n", controlAddr, connName))
+	b.WriteString(fmt.Sprintf("  curl -s%s -X POST http://%s/s3/get-object -d '{\"bucket\":\"BUCKET\",\"key\":\"KEY\",\"connection\":\"%s\"}'\n", auth, controlAddr, connName))
 	b.WriteString("\nResponse format: {\"content\":\"...\",\"content_type\":\"...\",\"size\":N,\"truncated\":BOOL}\n")
 	b.WriteString("\nSome columns may contain JSON with S3 pointers (e.g. {\"s3_key\": \"...\", \"s3_bucket\": \"...\"}).\n")
 	b.WriteString("When you encounter these, extract s3_bucket and s3_key from the JSON and use the S3 endpoint to fetch the object contents.\n")
 
 	b.WriteString("\nIf queries start failing with connection errors (timeouts, health check failures, expired credentials, or a broken SSM tunnel), you can force a full reconnect. This cancels any running queries, tears down the tunnel and database pool, and re-establishes them from scratch:\n")
-	b.WriteString(fmt.Sprintf("  curl -s -X POST http://%s/reconnect -d '{\"connection\":\"%s\"}'\n", controlAddr, connName))
+	b.WriteString(fmt.Sprintf("  curl -s%s -X POST http://%s/reconnect -d '{\"connection\":\"%s\"}'\n", auth, controlAddr, connName))
 	b.WriteString("\nThe response reports each step so you can see where it failed:\n")
 	b.WriteString("  {\"connection\":\"...\",\"ok\":BOOL,\"tables\":N,\"steps\":[{\"step\":\"cancel_queries\",\"ok\":true},{\"step\":\"start_tunnel\",\"ok\":false,\"error\":\"...\"},...]}\n")
 	b.WriteString("Steps in order: cancel_queries, close_db, stop_tunnel, refresh_credentials (IAM only), start_tunnel, connect_db.\n")
@@ -2310,8 +2331,9 @@ func buildAIPrompt(entry models.GatewayEntry, tables []db.TableInfo, controlAddr
 // buildBigQueryAIPrompt produces an AI prompt for a BigQuery connection. Unlike
 // Postgres, cost-safety is central: the agent must write scan-minimizing SQL
 // because BigQuery bills by bytes scanned. There is no tunnel/S3/IAM machinery.
-func buildBigQueryAIPrompt(entry models.GatewayEntry, tables []db.TableInfo, controlAddr string) string {
+func buildBigQueryAIPrompt(entry models.GatewayEntry, tables []db.TableInfo, controlAddr, controlKey string) string {
 	connName := entry.Name
+	auth := bearerFlag(controlKey)
 	capGB := float64(entry.EffectiveMaxBytesBilled()) / (1 << 30)
 
 	var b strings.Builder
@@ -2320,9 +2342,9 @@ func buildBigQueryAIPrompt(entry models.GatewayEntry, tables []db.TableInfo, con
 	b.WriteString(fmt.Sprintf("Default dataset: %s (only where unqualified table names resolve — you are NOT limited to it)\n", entry.DefaultDataset))
 	b.WriteString("Tables are backtick-quoted: `project.dataset.table` (or `dataset.table`).\n")
 
-	b.WriteString("\nRun queries via HTTP (no auth needed, Bufflehead manages credentials):\n")
-	b.WriteString(fmt.Sprintf("  curl -s -X POST http://%s/sql -d '{\"sql\":\"SELECT * FROM `%s.table` LIMIT 10\",\"connection\":\"%s\"}'\n",
-		controlAddr, entry.DefaultDataset, connName))
+	b.WriteString(authNote(controlKey))
+	b.WriteString(fmt.Sprintf("  curl -s%s -X POST http://%s/sql -d '{\"sql\":\"SELECT * FROM `%s.table` LIMIT 10\",\"connection\":\"%s\"}'\n",
+		auth, controlAddr, entry.DefaultDataset, connName))
 	b.WriteString("\nResponse format: {\"columns\":[...],\"rows\":[[...],...],\"total\":N}\n")
 	b.WriteString("Results are limited to 100 rows by default (do NOT add your own LIMIT — pagination is applied automatically).\n")
 
@@ -2361,13 +2383,14 @@ func buildBigQueryAIPrompt(entry models.GatewayEntry, tables []db.TableInfo, con
 // buildFileAIPrompt produces an AI prompt for a local data file (CSV, Parquet,
 // JSON, TSV, …) opened in the in-memory DuckDB connection. The agent queries the
 // file by its single-quoted path via the /sql control endpoint.
-func buildFileAIPrompt(filePath, connName string, schema []db.Column, controlAddr string) string {
+func buildFileAIPrompt(filePath, connName string, schema []db.Column, controlAddr, controlKey string) string {
+	auth := bearerFlag(controlKey)
 	var b strings.Builder
 	b.WriteString("I have a local data file open in Bufflehead that you can query with SQL (DuckDB).\n")
 	b.WriteString(fmt.Sprintf("File: %s\n", filePath))
-	b.WriteString("\nRun queries via HTTP (no auth needed, Bufflehead manages the connection).\n")
+	b.WriteString(authNote(controlKey))
 	b.WriteString("Reference the file by its single-quoted path in the FROM clause:\n")
-	b.WriteString(fmt.Sprintf("  curl -s -X POST http://%s/sql --data-raw \"{\\\"sql\\\":\\\"SELECT * FROM '%s' LIMIT 10\\\",\\\"connection\\\":\\\"%s\\\"}\"\n", controlAddr, filePath, connName))
+	b.WriteString(fmt.Sprintf("  curl -s%s -X POST http://%s/sql --data-raw \"{\\\"sql\\\":\\\"SELECT * FROM '%s' LIMIT 10\\\",\\\"connection\\\":\\\"%s\\\"}\"\n", auth, controlAddr, filePath, connName))
 	b.WriteString("\nResults are limited to 100 rows by default. Queries time out after 30 seconds.\n")
 	b.WriteString("Response format: {\"columns\":[...],\"rows\":[[...],...],\"total\":N}\n")
 
@@ -2385,13 +2408,14 @@ func buildFileAIPrompt(filePath, connName string, schema []db.Column, controlAdd
 // SQLite) opened as its own connection. Unlike a flat data file, it's queried by
 // table name through the /sql control endpoint (naming the connection), so the
 // prompt lists the connection's tables/views and their columns.
-func buildDBAIPrompt(connName, dbPath string, tables []db.TableInfo, controlAddr string) string {
+func buildDBAIPrompt(connName, dbPath string, tables []db.TableInfo, controlAddr, controlKey string) string {
+	auth := bearerFlag(controlKey)
 	var b strings.Builder
 	b.WriteString("I have a local database open in Bufflehead that you can query with SQL (DuckDB engine).\n")
 	b.WriteString(fmt.Sprintf("Database file: %s\n", dbPath))
-	b.WriteString("\nRun queries via HTTP (no auth needed, Bufflehead manages the connection).\n")
+	b.WriteString(authNote(controlKey))
 	b.WriteString(fmt.Sprintf("Query tables by name, naming the connection in the request:\n"))
-	b.WriteString(fmt.Sprintf("  curl -s -X POST http://%s/sql --data-raw \"{\\\"sql\\\":\\\"SELECT * FROM <table> LIMIT 10\\\",\\\"connection\\\":\\\"%s\\\"}\"\n", controlAddr, connName))
+	b.WriteString(fmt.Sprintf("  curl -s%s -X POST http://%s/sql --data-raw \"{\\\"sql\\\":\\\"SELECT * FROM <table> LIMIT 10\\\",\\\"connection\\\":\\\"%s\\\"}\"\n", auth, controlAddr, connName))
 	b.WriteString("\nResults are limited to 100 rows by default. Queries time out after 30 seconds.\n")
 	b.WriteString("Response format: {\"columns\":[...],\"rows\":[[...],...],\"total\":N}\n")
 

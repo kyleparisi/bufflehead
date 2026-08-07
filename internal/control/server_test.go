@@ -4,10 +4,90 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 )
+
+// TestAuth_RejectsMissingKey verifies the auth wrapper (as installed by Start)
+// blocks a request that carries no bearer token, so unauthorized local software
+// can't drive the control server.
+func TestAuth_RejectsMissingKey(t *testing.T) {
+	s := New(0)
+	handler := s.requireAuth(buildMux(s))
+
+	req := httptest.NewRequest("GET", "/state", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
+	}
+	var resp map[string]any
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp["ok"] != false {
+		t.Errorf("expected ok=false, got %v", resp["ok"])
+	}
+}
+
+// TestAuth_RejectsWrongKey verifies a request with the wrong bearer token is
+// rejected — the whole point of the temporary key.
+func TestAuth_RejectsWrongKey(t *testing.T) {
+	s := New(0)
+	handler := s.requireAuth(buildMux(s))
+
+	req := httptest.NewRequest("GET", "/state", nil)
+	req.Header.Set("Authorization", "Bearer not-the-real-key")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
+	}
+}
+
+// TestAuth_AcceptsCorrectKey verifies the correct bearer token passes the auth
+// wrapper and reaches the handler (here, /sql with no executor → 500, proving it
+// got past auth rather than being 401'd).
+func TestAuth_AcceptsCorrectKey(t *testing.T) {
+	s := New(0)
+	handler := s.requireAuth(buildMux(s))
+
+	req := httptest.NewRequest("POST", "/sql", strings.NewReader(`{"sql":"SELECT 1"}`))
+	req.Header.Set("Authorization", "Bearer "+s.APIKey())
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code == http.StatusUnauthorized {
+		t.Fatalf("correct key was rejected (401)")
+	}
+	if w.Code != 500 {
+		t.Fatalf("expected 500 (no executor), got %d", w.Code)
+	}
+}
+
+// TestAPIKey_EnvOverride verifies BUFFLEHEAD_CONTROL_KEY pins the key, which is
+// how the integration harness shares a known key with the app.
+func TestAPIKey_EnvOverride(t *testing.T) {
+	t.Setenv("BUFFLEHEAD_CONTROL_KEY", "pinned-test-key")
+	s := New(0)
+	if s.APIKey() != "pinned-test-key" {
+		t.Fatalf("expected pinned key, got %q", s.APIKey())
+	}
+}
+
+// TestAPIKey_RandomByDefault verifies each server mints its own non-empty key
+// when no override is set.
+func TestAPIKey_RandomByDefault(t *testing.T) {
+	a, b := New(0), New(0)
+	if a.APIKey() == "" || b.APIKey() == "" {
+		t.Fatal("expected non-empty keys")
+	}
+	if a.APIKey() == b.APIKey() {
+		t.Fatal("expected distinct random keys")
+	}
+}
 
 func TestCancelEndpoint_NoExecutor(t *testing.T) {
 	s := New(0)

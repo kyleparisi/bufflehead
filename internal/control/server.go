@@ -2,12 +2,17 @@ package control
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
+	"strings"
 	"sync"
 )
 
@@ -160,15 +165,73 @@ type Server struct {
 	s3Executor     S3Executor
 	port           int
 	addr           string
+	apiKey         string
 	mu             sync.Mutex
 }
 
 // New creates a control server on the given port. Use 0 for a random available port.
+//
+// It also mints a random, in-memory API key (the "temporary key") that every
+// request must present as `Authorization: Bearer <key>`. The key never touches
+// disk; it lives only in this process and in the AI prompt Bufflehead copies to
+// the clipboard, so other local software can't drive the control server by
+// blindly POSTing to the port. Set BUFFLEHEAD_CONTROL_KEY to pin a known key
+// (used by the integration test harness).
 func New(port int) *Server {
 	return &Server{
 		commands: make(chan *Command, 16),
 		port:     port,
+		apiKey:   generateKey(),
 	}
+}
+
+// generateKey returns the API key to guard the control server with: the
+// BUFFLEHEAD_CONTROL_KEY override if set, otherwise a fresh 32-byte random hex
+// string. crypto/rand can't realistically fail here; if it ever does we fall
+// back to a fixed sentinel so the server still boots (and still rejects the
+// empty/absent header).
+func generateKey() string {
+	if k := os.Getenv("BUFFLEHEAD_CONTROL_KEY"); k != "" {
+		return k
+	}
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "bufflehead-control-key-unavailable"
+	}
+	return hex.EncodeToString(buf)
+}
+
+// APIKey returns the temporary key required on every control request. Used to
+// embed the key in the AI prompt.
+func (s *Server) APIKey() string {
+	return s.apiKey
+}
+
+// authorized reports whether r carries the correct bearer token. The comparison
+// is constant-time so a caller can't probe the key byte-by-byte via timing.
+func (s *Server) authorized(r *http.Request) bool {
+	const prefix = "Bearer "
+	h := r.Header.Get("Authorization")
+	if !strings.HasPrefix(h, prefix) {
+		return false
+	}
+	got := strings.TrimSpace(h[len(prefix):])
+	return subtle.ConstantTimeCompare([]byte(got), []byte(s.apiKey)) == 1
+}
+
+// requireAuth wraps a mux so every request must present the bearer token before
+// any handler runs. Rejected requests get 401 and never reach the app.
+func (s *Server) requireAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !s.authorized(r) {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("WWW-Authenticate", "Bearer")
+			w.WriteHeader(http.StatusUnauthorized)
+			json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": "unauthorized: missing or invalid control key"})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // Addr returns the address the server is listening on (e.g. "127.0.0.1:54321").
@@ -548,8 +611,13 @@ func (s *Server) Start() {
 	}
 	s.addr = ln.Addr().String()
 	fmt.Printf("Control server: http://%s\n", s.addr)
+	// Every request must carry the bearer token minted in New(). Printing the
+	// key here lets a human (or the integration harness, when it didn't pin one)
+	// drive the server from this process's own console.
+	fmt.Printf("Control key: %s\n", s.apiKey)
+	handler := s.requireAuth(mux)
 	go func() {
-		if err := http.Serve(ln, mux); err != nil {
+		if err := http.Serve(ln, handler); err != nil {
 			fmt.Printf("Control server error: %v\n", err)
 		}
 	}()
