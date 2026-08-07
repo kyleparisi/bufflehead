@@ -24,6 +24,7 @@ type GatewayInfoPanel struct {
 	entry        models.GatewayEntry
 	tables       []db.TableInfo
 	controlAddr  string
+	controlKey   string
 	statusLabel  Label.Instance
 	uptimeLabel  Label.Instance
 	aiSnippetBox VBoxContainer.Instance // container for AI prompt snippet, populated after tables load
@@ -163,7 +164,7 @@ func (p *GatewayInfoPanel) Ready() {
 }
 
 func (p *GatewayInfoPanel) buildAIPrompt() string {
-	return buildAIPrompt(p.entry, p.tables, p.controlAddr)
+	return buildAIPrompt(p.entry, p.tables, p.controlAddr, p.controlKey)
 }
 
 func (p *GatewayInfoPanel) SetStatus(status string) {

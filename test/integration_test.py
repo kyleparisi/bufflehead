@@ -1,7 +1,9 @@
 """Integration tests — drives the app via the control API.
 
 Requires the app to be running headless. The control server port is dynamic;
-set CONTROL_PORT env var or default to 9900 for manual runs.
+set CONTROL_PORT env var or default to 9900 for manual runs. Every request also
+needs the temporary bearer key: set BUFFLEHEAD_CONTROL_KEY to the same value the
+app was launched with (integration_test.sh pins one for both sides).
 Run via: test/integration_test.sh (which builds, launches Godot, then runs pytest)
 """
 import os
@@ -13,6 +15,14 @@ import requests
 
 _PORT = os.environ.get("CONTROL_PORT", "9900")
 BASE_URL = f"http://127.0.0.1:{_PORT}"
+
+# The control server now requires a temporary bearer key on every request. The
+# harness pins it via BUFFLEHEAD_CONTROL_KEY (integration_test.sh exports the
+# same value to the app). A shared session attaches the header to every call.
+_KEY = os.environ.get("BUFFLEHEAD_CONTROL_KEY", "")
+SESSION = requests.Session()
+if _KEY:
+    SESSION.headers["Authorization"] = f"Bearer {_KEY}"
 TESTDATA = Path(__file__).resolve().parent.parent / "testdata"
 SAMPLE = str(TESTDATA / "sample.parquet")
 CITIES = str(TESTDATA / "cities.parquet")
@@ -27,11 +37,11 @@ SQLITE = str(TESTDATA / "test.sqlite")
 # ── Helpers ──────────────────────────────────────────────────────────────
 
 def state():
-    return requests.get(f"{BASE_URL}/state").json()
+    return SESSION.get(f"{BASE_URL}/state").json()
 
 
 def post(endpoint, data=None):
-    r = requests.post(f"{BASE_URL}/{endpoint}", json=data)
+    r = SESSION.post(f"{BASE_URL}/{endpoint}", json=data)
     return r.json()
 
 
@@ -130,7 +140,7 @@ def ui_tree(width=None, height=None, scale=None):
         params["height"] = height
     if scale:
         params["scale"] = scale
-    r = requests.get(f"{BASE_URL}/ui-tree", params=params)
+    r = SESSION.get(f"{BASE_URL}/ui-tree", params=params)
     return r.text
 
 

@@ -2183,6 +2183,7 @@ func (a *App) initMainWindow() {
 		a.mainWin.onNewConnection = func() { a.openGatewayScreen() }
 		if a.ControlServer != nil {
 			a.mainWin.controlAddr = a.ControlServer.Addr()
+			a.mainWin.controlKey = a.ControlServer.APIKey()
 		}
 		a.mainWin.titleBar.WindowID = rootWin.GetWindowId()
 
@@ -2713,6 +2714,7 @@ func (a *App) newWindow() {
 	aw.onNewConnection = func() { a.openGatewayScreen() }
 	if a.ControlServer != nil {
 		aw.controlAddr = a.ControlServer.Addr()
+		aw.controlKey = a.ControlServer.APIKey()
 	}
 	a.secondWins = append(a.secondWins, aw)
 

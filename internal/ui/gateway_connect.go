@@ -529,7 +529,7 @@ func (w *AppWindow) handleReconnectResult(res DBResult) {
 				cfg := conn.Gateway.Config
 				conn.Path = connPathFor(cfg)
 				if idx == w.activeConnIdx {
-					w.titleBar.SetAIPrompt(buildAIPrompt(cfg, conn.Tables, w.controlAddr))
+					w.titleBar.SetAIPrompt(buildAIPrompt(cfg, conn.Tables, w.controlAddr, w.controlKey))
 					w.titleBar.SetReconnectVisible(true)
 					w.titleBar.SetConnectionInfo(connDisplayKind(cfg), conn.Name, connDBSegment(cfg))
 				}

@@ -39,6 +39,11 @@ case "$(uname -s)" in
 esac
 echo "Build OK"
 
+# The control server requires a temporary bearer key. Pin a known value so the
+# app and the pytest harness share it (the app reads BUFFLEHEAD_CONTROL_KEY at
+# startup; the harness sends it as the Authorization header).
+export BUFFLEHEAD_CONTROL_KEY="integration-test-key"
+
 # Start headless and capture stdout to parse the dynamic port
 LOGFILE=$(mktemp)
 cd "$ROOT/graphics"
@@ -70,4 +75,5 @@ echo "Control server on port $PORT"
 
 # Run pytest with the dynamic port
 cd "$ROOT"
-CONTROL_PORT="$PORT" python3 -m pytest test/integration_test.py -v "$@"
+CONTROL_PORT="$PORT" BUFFLEHEAD_CONTROL_KEY="$BUFFLEHEAD_CONTROL_KEY" \
+    python3 -m pytest test/integration_test.py -v "$@"
