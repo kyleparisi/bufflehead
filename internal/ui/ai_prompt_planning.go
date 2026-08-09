@@ -9,8 +9,8 @@ func queryPlanningNote() string {
 QUERY PLANNING — design before scanning:
 For small explorations (≤500 rows), direct queries are fine.
 If your analysis requires extracting MORE than 500 rows, STOP and plan first:
-1. Study the schema above to understand table semantics, relationships, column types, and any temporal dimensions (e.g. process_date snapshots from ETL loads — naive aggregation risks double-counting across snapshots).
-2. Use catalog/metadata queries first (e.g. SELECT column_name, data_type FROM information_schema.columns WHERE table_name = '...') to discover indexes, partitions, and cardinality before touching data.
+1. Study the schema above to understand table semantics, relationships, column types, and any temporal dimensions (e.g. process_date snapshots from ETL loads).
+2. Use catalog/metadata queries if required (e.g. SELECT column_name, data_type FROM information_schema.columns WHERE table_name = '...') to discover indexes, partitions, and cardinality before touching data.
 3. Design a ranked plan of targeted, grouped queries (aggregations, COUNT DISTINCTs, filtered JOINs on indexed/partition columns) rather than blindly fetching pages of 100 rows.
 4. Only execute data-scanning queries after you have a clear analysis plan and know which columns, filters, and groupings matter.
 `
