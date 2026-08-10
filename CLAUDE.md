@@ -120,3 +120,15 @@ is required so the hardened runtime can load DuckDB's downloaded extension dylib
 ```bash
 ./bin/release-dmg
 ```
+
+**Linux AppImage:** the Linux build must run on Linux (glibc build + AppImage
+tooling), so it goes through the `Build Linux` GitHub Actions workflow
+(`.github/workflows/build-linux.yml`, on `ubuntu-22.04` for a low glibc floor).
+The build logic lives in `bin/build-linux` (runnable directly on a Linux box):
+it runs `gd build`, bundles `linux_amd64.so` next to the exported binary, and
+packages a portable AppImage. DuckDB needs no special toolchain on Linux
+(go-duckdb ships a static `libduckdb.a`; native ELF TLS avoids the Windows
+gcc-14.2/emutls issue). From macOS, trigger CI and download the artifact with:
+```bash
+./bin/release-appimage
+```

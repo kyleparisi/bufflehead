@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+#
+# Build the portable Linux bundle + AppImage for Bufflehead.
+#
+# This is the whole "Build Linux" CI job as a script, so it can be run locally
+# on a Linux box instead of only through GitHub Actions. It MUST run on Linux:
+# the glibc build and the AppImage tooling are Linux-only. Build on an OLD-enough
+# distro (CI uses ubuntu-22.04) so the glibc floor stays low and the AppImage
+# runs on newer distros too.
+#
+# Unlike Windows, DuckDB needs no special toolchain here: go-duckdb ships a
+# prebuilt static libduckdb.a for linux_amd64, and Linux uses native ELF TLS
+# (so the gcc-14.2/emutls dance from bin/build-windows does not apply).
+#
+# Outputs:
+#   releases/linux/amd64/               exported binary + GDExtension .so
+#   releases/linux/Bufflehead-<ver>-x86_64.AppImage
+#
+# Prereqs the environment must provide: go >= 1.26 on PATH; a C toolchain (gcc);
+# curl; file. appimagetool is downloaded on demand.
+set -euo pipefail
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO"
+
+[ "$(uname -s)" = "Linux" ] || { echo "bin/build-linux must run on Linux" >&2; exit 1; }
+
+OUT="releases/linux/amd64"
+BIN="$OUT/Bufflehead"        # export_path name in the "Linux x86_64" preset
+SO="graphics/linux_amd64.so" # GDExtension the binary loads from its own folder
+# Pin the gd CLI to the graphics.gd version in go.mod so the CLI (and the Godot
+# version it targets) never floats out from under the app.
+GD_VERSION="$(awk '$1=="graphics.gd"{print $2; exit}' go.mod)"
+
+step() { printf '\n\033[1m=== %s ===\033[0m\n' "$*"; }
+
+# --- gd CLI (pinned to go.mod) -----------------------------------------------
+step "installing gd CLI $GD_VERSION"
+go install "graphics.gd/cmd/gd@$GD_VERSION"
+export PATH="$(go env GOPATH)/bin:$PATH"
+
+# --- build the GDExtension .so + exported binary via gd ----------------------
+# gd build -> `go build -buildmode=c-shared -o graphics/linux_amd64.so`, then
+# Godot headless `--export-release "Linux x86_64"` -> releases/linux/amd64/Bufflehead.
+#
+# gd refuses to auto-download Godot when it sees GOTOOLCHAIN=local (which
+# actions/setup-go pins for reproducible builds). Flip GOTOOLCHAIN to the exact
+# installed version instead of "local": non-"local" re-enables gd's Godot
+# download while still pinning the Go toolchain. Give gd a writable GDPATH too.
+export GDPATH="${GDPATH:-$HOME/gd}"
+export GOTOOLCHAIN="$(go env GOVERSION)"   # e.g. go1.26.0 (never "local")
+export CGO_ENABLED=1
+mkdir -p "$OUT"
+step "gd build"
+gd_rc=0
+gd build ./cmd/viewer || gd_rc=$?
+# Godot's headless export can segfault on teardown on GPU-less machines AFTER
+# writing the binary. Treat the build as OK iff the expected artifacts exist and
+# the .so is a real ELF shared object; otherwise fail hard.
+if [ ! -f "$BIN" ] || [ ! -f "$SO" ]; then
+  echo "gd build failed (exit $gd_rc): expected artifacts not produced" >&2
+  exit 1
+fi
+file "$SO" | grep -q 'ELF 64-bit.*shared object' \
+  || { echo "GDExtension .so is not a valid ELF shared object" >&2; exit 1; }
+[ "$gd_rc" -eq 0 ] || echo "note: gd exited $gd_rc but artifacts are valid (Godot teardown segfault)"
+
+# --- version: single source of truth = export_presets.cfg --------------------
+V="$(grep -m1 'application/short_version' graphics/export_presets.cfg \
+      | grep -oE '[0-9]+(\.[0-9]+)+')"   # e.g. 0.25.0
+step "version $V"
+
+# --- bundle GDExtension .so next to the binary -------------------------------
+# The exported binary embeds the .pck (embed_pck=true); library.gdextension
+# inside it points at linux_amd64.so, which Godot loads from the binary's own
+# directory. Ship it alongside, exactly like the Windows exe+DLL bundle.
+step "bundle .so next to binary"
+cp -f "$SO" "$OUT/"
+
+# --- assemble the AppDir -----------------------------------------------------
+step "assemble AppDir"
+APPDIR="releases/linux/Bufflehead.AppDir"
+rm -rf "$APPDIR"
+mkdir -p "$APPDIR/usr/bin"
+cp -f "$BIN" "$APPDIR/usr/bin/Bufflehead"
+chmod +x "$APPDIR/usr/bin/Bufflehead"
+cp -f "$SO" "$APPDIR/usr/bin/"        # keep the .so beside the binary
+cp -f graphics/icon.png "$APPDIR/bufflehead.png"
+
+cat > "$APPDIR/bufflehead.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Bufflehead
+Comment=Native Parquet viewer
+Exec=Bufflehead
+Icon=bufflehead
+Categories=Development;Utility;
+Terminal=false
+EOF
+
+# AppRun resolves its own directory (following the AppImage mount symlink) and
+# execs the real binary, so the .so beside it is found via the binary's dir.
+cat > "$APPDIR/AppRun" <<'EOF'
+#!/bin/sh
+HERE="$(dirname "$(readlink -f "$0")")"
+exec "$HERE/usr/bin/Bufflehead" "$@"
+EOF
+chmod +x "$APPDIR/AppRun"
+
+# --- build the AppImage ------------------------------------------------------
+step "build AppImage"
+TOOL="${APPIMAGETOOL:-$HOME/.cache/appimagetool-x86_64.AppImage}"
+if [ ! -x "$TOOL" ]; then
+  mkdir -p "$(dirname "$TOOL")"
+  curl -fsSL -o "$TOOL" \
+    https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+  chmod +x "$TOOL"
+fi
+OUTIMG="releases/linux/Bufflehead-$V-x86_64.AppImage"
+rm -f "$OUTIMG"
+# CI runners often lack FUSE; APPIMAGE_EXTRACT_AND_RUN lets appimagetool (itself
+# an AppImage) run without it. ARCH is required by appimagetool.
+ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 "$TOOL" "$APPDIR" "$OUTIMG"
+
+step "done"
+echo "bundle:   $OUT/"
+echo "AppImage: $OUTIMG"
