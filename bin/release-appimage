@@ -2,16 +2,23 @@
 # Build the Linux AppImage via GitHub Actions and download it locally.
 #
 # The Linux build must run on Linux (glibc build + AppImage tooling), so this
-# triggers the "Build Linux" workflow on an ubuntu runner, waits for it to
-# finish, and downloads the AppImage into releases/linux/.
+# triggers the "Build Linux" workflow (amd64 + arm64 matrix) on ubuntu runners,
+# waits for it to finish, and downloads the AppImage for the chosen arch into
+# releases/linux/.
 #
-# Usage: ./bin/release-appimage
+# Usage: ./bin/release-appimage [amd64|arm64]   (default: amd64)
 # Requires: gh CLI (authenticated).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WORKFLOW="build-linux.yml"
 OUT_DIR="$ROOT/releases/linux"
+
+ARCH="${1:-amd64}"
+case "$ARCH" in
+    amd64|arm64) ;;
+    *) echo "Error: arch must be amd64 or arm64 (got '$ARCH')" >&2; exit 1 ;;
+esac
 
 cd "$ROOT"
 
@@ -51,9 +58,9 @@ fi
 echo "Watching run $RUN_ID (this builds on a Linux runner; ~several minutes)..."
 gh run watch "$RUN_ID" --exit-status
 
-echo "Downloading AppImage..."
+echo "Downloading $ARCH AppImage..."
 mkdir -p "$OUT_DIR"
-gh run download "$RUN_ID" --name "Bufflehead-linux-AppImage" --dir "$OUT_DIR"
+gh run download "$RUN_ID" --name "Bufflehead-linux-AppImage-$ARCH" --dir "$OUT_DIR"
 
 APPIMAGE="$(ls -1 "$OUT_DIR"/*.AppImage 2>/dev/null | head -1 || true)"
 if [ -z "$APPIMAGE" ]; then

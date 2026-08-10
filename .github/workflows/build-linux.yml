@@ -1,19 +1,34 @@
 name: Build Linux
 
 # Builds the Linux bundle (exported binary + GDExtension .so) and a portable
-# AppImage, natively on a Linux runner. The build logic lives in bin/build-linux
-# so it can be run locally too, rather than being spread across GitHub Actions
-# steps. Triggered manually.
+# AppImage for amd64 and arm64, natively on each arch's runner (no
+# cross-compilation). The build logic lives in bin/build-linux so it can be run
+# locally too, rather than being spread across GitHub Actions steps. Triggered
+# manually.
 #
-# Runs on ubuntu-22.04 (not ubuntu-latest) on purpose: building against an older
-# glibc keeps the binary's glibc floor low so the AppImage runs on newer distros.
+# Runs on ubuntu-22.04 / ubuntu-22.04-arm (not ubuntu-latest) on purpose:
+# building against an older glibc keeps the binary's glibc floor low so the
+# AppImage runs on newer distros.
 
 on:
   workflow_dispatch:
+  # TEMPORARY: lets the workflow run on this feature branch before it lands on
+  # the default branch (workflow_dispatch only works once it's on main). Remove
+  # this push trigger before merging — the release path is workflow_dispatch.
+  push:
+    branches: [feat/linux-appimage]
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-22.04
+          - arch: arm64
+            runner: ubuntu-22.04-arm
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
 
@@ -33,20 +48,22 @@ jobs:
       - name: Build Linux bundle + AppImage
         # Pin GDPATH so gd is not in "local toolchain" mode and will
         # auto-download the pinned Godot 4.6.1 editor + export template.
+        # GOARCH selects the native arch build (matches the runner).
         env:
           GDPATH: ${{ runner.temp }}/gd
+          GOARCH: ${{ matrix.arch }}
         run: ./bin/build-linux
 
       - name: Upload Linux bundle (binary + GDExtension .so)
         uses: actions/upload-artifact@v7
         with:
-          name: Bufflehead-linux-amd64
-          path: releases/linux/amd64/
+          name: Bufflehead-linux-${{ matrix.arch }}
+          path: releases/linux/${{ matrix.arch }}/
           if-no-files-found: error
 
       - name: Upload AppImage
         uses: actions/upload-artifact@v7
         with:
-          name: Bufflehead-linux-AppImage
+          name: Bufflehead-linux-AppImage-${{ matrix.arch }}
           path: releases/linux/*.AppImage
           if-no-files-found: error
