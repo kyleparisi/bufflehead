@@ -10,6 +10,11 @@ name: Build Linux
 
 on:
   workflow_dispatch:
+  # TEMPORARY: lets the workflow run on this feature branch before it lands on
+  # the default branch (workflow_dispatch only works once it's on main). Remove
+  # this push trigger before merging — the release path is workflow_dispatch.
+  push:
+    branches: [feat/linux-appimage]
 
 jobs:
   build:
