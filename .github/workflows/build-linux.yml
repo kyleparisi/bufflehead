@@ -1,0 +1,64 @@
+name: Build Linux
+
+# Builds the Linux bundle (exported binary + GDExtension .so) and a portable
+# AppImage for amd64 and arm64, natively on each arch's runner (no
+# cross-compilation). The build logic lives in bin/build-linux so it can be run
+# locally too, rather than being spread across GitHub Actions steps. Triggered
+# manually.
+#
+# Runs on ubuntu-22.04 / ubuntu-22.04-arm (not ubuntu-latest) on purpose:
+# building against an older glibc keeps the binary's glibc floor low so the
+# AppImage runs on newer distros.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-22.04
+          - arch: arm64
+            runner: ubuntu-22.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      # `file` (ELF check) and desktop-file-utils / libfuse2 (appimagetool) —
+      # DuckDB needs no extra libs (go-duckdb ships a static libduckdb.a), and
+      # the headless Godot export needs no X11/GL.
+      - name: Install packaging deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            file desktop-file-utils libfuse2 zsync
+
+      - name: Build Linux bundle + AppImage
+        # Pin GDPATH so gd is not in "local toolchain" mode and will
+        # auto-download the pinned Godot 4.6.1 editor + export template.
+        # GOARCH selects the native arch build (matches the runner).
+        env:
+          GDPATH: ${{ runner.temp }}/gd
+          GOARCH: ${{ matrix.arch }}
+        run: ./bin/build-linux
+
+      - name: Upload Linux bundle (binary + GDExtension .so)
+        uses: actions/upload-artifact@v7
+        with:
+          name: Bufflehead-linux-${{ matrix.arch }}
+          path: releases/linux/${{ matrix.arch }}/
+          if-no-files-found: error
+
+      - name: Upload AppImage
+        uses: actions/upload-artifact@v7
+        with:
+          name: Bufflehead-linux-AppImage-${{ matrix.arch }}
+          path: releases/linux/*.AppImage
+          if-no-files-found: error

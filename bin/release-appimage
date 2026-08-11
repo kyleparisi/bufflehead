@@ -1,0 +1,72 @@
+#!/bin/bash
+# Build the Linux AppImage via GitHub Actions and download it locally.
+#
+# The Linux build must run on Linux (glibc build + AppImage tooling), so this
+# triggers the "Build Linux" workflow (amd64 + arm64 matrix) on ubuntu runners,
+# waits for it to finish, and downloads the AppImage for the chosen arch into
+# releases/linux/.
+#
+# Usage: ./bin/release-appimage [amd64|arm64]   (default: amd64)
+# Requires: gh CLI (authenticated).
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+WORKFLOW="build-linux.yml"
+OUT_DIR="$ROOT/releases/linux"
+
+ARCH="${1:-amd64}"
+case "$ARCH" in
+    amd64|arm64) ;;
+    *) echo "Error: arch must be amd64 or arm64 (got '$ARCH')" >&2; exit 1 ;;
+esac
+
+cd "$ROOT"
+
+if ! command -v gh >/dev/null 2>&1; then
+    echo "Error: the GitHub CLI 'gh' is required." >&2
+    echo "Install it from https://cli.github.com/ and run: gh auth login" >&2
+    exit 1
+fi
+
+BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+
+echo "Triggering Linux build on branch '$BRANCH'..."
+# Record existing run IDs first so we can distinguish the run WE trigger from
+# stale completed runs (gh run list --limit 1 may return an old run before the
+# new one registers).
+BEFORE="$(gh run list --workflow "$WORKFLOW" --branch "$BRANCH" \
+    --limit 50 --json databaseId --jq '.[].databaseId' 2>/dev/null || true)"
+
+gh workflow run "$WORKFLOW" --ref "$BRANCH"
+
+# Poll until a run ID appears that wasn't present before the trigger.
+echo "Waiting for the new run to start..."
+RUN_ID=""
+for _ in $(seq 1 45); do
+    CURRENT="$(gh run list --workflow "$WORKFLOW" --branch "$BRANCH" \
+        --limit 50 --json databaseId --jq '.[].databaseId' 2>/dev/null || true)"
+    RUN_ID="$(comm -13 <(echo "$BEFORE" | sort) <(echo "$CURRENT" | sort) | head -1)"
+    [ -n "$RUN_ID" ] && break
+    sleep 2
+done
+
+if [ -z "$RUN_ID" ]; then
+    echo "Error: could not find the newly triggered workflow run." >&2
+    exit 1
+fi
+
+echo "Watching run $RUN_ID (this builds on a Linux runner; ~several minutes)..."
+gh run watch "$RUN_ID" --exit-status
+
+echo "Downloading $ARCH AppImage..."
+mkdir -p "$OUT_DIR"
+gh run download "$RUN_ID" --name "Bufflehead-linux-AppImage-$ARCH" --dir "$OUT_DIR"
+
+APPIMAGE="$(ls -1 "$OUT_DIR"/*.AppImage 2>/dev/null | head -1 || true)"
+if [ -z "$APPIMAGE" ]; then
+    echo "Error: no .AppImage found after download" >&2
+    exit 1
+fi
+
+echo "Done: $APPIMAGE"
+ls -lh "$APPIMAGE"
