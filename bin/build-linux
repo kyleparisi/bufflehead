@@ -99,6 +99,16 @@ step "version $V"
 # directory. Ship it alongside, exactly like the Windows exe+DLL bundle.
 step "bundle .so next to binary"
 cp -f "$SO" "$OUT/"
+# Launcher for anyone running the raw bundle (not via the AppImage): same
+# LD_PRELOAD workaround for the aarch64 static-TLS dlopen failure (see AppRun).
+cat > "$OUT/Bufflehead.sh" <<'EOF'
+#!/bin/sh
+HERE="$(dirname "$(readlink -f "$0")")"
+SO="$(ls "$HERE"/linux_*.so 2>/dev/null | head -1)"
+[ -n "$SO" ] && export LD_PRELOAD="$SO${LD_PRELOAD:+:$LD_PRELOAD}"
+exec "$HERE/Bufflehead" "$@"
+EOF
+chmod +x "$OUT/Bufflehead.sh"
 
 # --- assemble the AppDir -----------------------------------------------------
 step "assemble AppDir"
@@ -123,9 +133,18 @@ EOF
 
 # AppRun resolves its own directory (following the AppImage mount symlink) and
 # execs the real binary, so the .so beside it is found via the binary's dir.
+#
+# It LD_PRELOADs the GDExtension .so: it's a Go c-shared lib with initial-exec
+# TLS, and Godot dlopen()s it at runtime. On aarch64 glibc the dlopen static-TLS
+# surplus is too small, so the load fails with "cannot allocate memory in static
+# TLS block" (and then GoMainLoop / the whole extension never registers).
+# Preloading it at process startup puts its TLS in the initial static block,
+# which has room. Harmless on amd64 (where the surplus already suffices).
 cat > "$APPDIR/AppRun" <<'EOF'
 #!/bin/sh
 HERE="$(dirname "$(readlink -f "$0")")"
+SO="$(ls "$HERE"/usr/bin/linux_*.so 2>/dev/null | head -1)"
+[ -n "$SO" ] && export LD_PRELOAD="$SO${LD_PRELOAD:+:$LD_PRELOAD}"
 exec "$HERE/usr/bin/Bufflehead" "$@"
 EOF
 chmod +x "$APPDIR/AppRun"
