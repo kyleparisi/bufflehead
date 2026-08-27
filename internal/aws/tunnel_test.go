@@ -41,6 +41,47 @@ func TestIsAuthErrorString(t *testing.T) {
 	}
 }
 
+func TestShouldRetry_AuthErrorFailsImmediately(t *testing.T) {
+	tm := NewTunnelManager(nil)
+	if tm.shouldRetry(1, realWorldSSOError) {
+		t.Fatalf("expected shouldRetry=false on first attempt for expired SSO error")
+	}
+	if tm.Status() != TunnelError {
+		t.Errorf("expected status TunnelError, got %v", tm.Status())
+	}
+	if !tm.IsAuthError() {
+		t.Errorf("expected IsAuthError()=true after auth failure")
+	}
+	if tm.LastError() != realWorldSSOError {
+		t.Errorf("lastError = %q, want the raw error", tm.LastError())
+	}
+}
+
+func TestShouldRetry_TransientError(t *testing.T) {
+	tm := NewTunnelManager(nil)
+	errMsg := "dial tcp 127.0.0.1:5432: connect: connection refused"
+
+	if !tm.shouldRetry(1, errMsg) {
+		t.Fatalf("expected shouldRetry=true below the attempt limit")
+	}
+	if tm.Status() == TunnelError {
+		t.Errorf("status should not be TunnelError while retrying")
+	}
+
+	if tm.shouldRetry(maxReconnectAttempts, errMsg) {
+		t.Fatalf("expected shouldRetry=false at the attempt limit")
+	}
+	if tm.Status() != TunnelError {
+		t.Errorf("expected status TunnelError after giving up, got %v", tm.Status())
+	}
+	if tm.IsAuthError() {
+		t.Errorf("transient failure should not report as an auth error")
+	}
+	if !strings.Contains(tm.LastError(), "giving up after") {
+		t.Errorf("lastError should mention giving up: %q", tm.LastError())
+	}
+}
+
 func TestFormatConnError_ExpiredLogin(t *testing.T) {
 	msg, isAuth := FormatConnError(errors.New(realWorldSSOError))
 
