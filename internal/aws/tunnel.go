@@ -140,6 +140,32 @@ func (t *TunnelManager) Start(cfg TunnelConfig) error {
 	return nil
 }
 
+// fail transitions the tunnel to the error state and stops reconnecting.
+func (t *TunnelManager) fail(msg string) {
+	t.mu.Lock()
+	t.lastError = msg
+	t.cancel = nil
+	t.mu.Unlock()
+	t.setStatusNotify(TunnelError, msg)
+}
+
+// shouldRetry decides whether a failed attempt is worth retrying. Auth errors
+// (expired SSO login) can never succeed without user action, so they fail
+// immediately; other errors retry up to maxReconnectAttempts. When it returns
+// false the tunnel has already been moved to TunnelError.
+func (t *TunnelManager) shouldRetry(attempt int, errMsg string) bool {
+	if IsAuthErrorString(errMsg) {
+		log.Printf("ssm: not retrying, login expired: %s", errMsg)
+		t.fail(errMsg)
+		return false
+	}
+	if attempt >= maxReconnectAttempts {
+		t.fail(fmt.Sprintf("giving up after %d attempts: %s", maxReconnectAttempts, errMsg))
+		return false
+	}
+	return true
+}
+
 // runWithReconnect runs PortForwardSession in a loop, reconnecting on
 // unexpected disconnections with exponential backoff.
 func (t *TunnelManager) runWithReconnect(ctx context.Context, cfg TunnelConfig) {
@@ -176,12 +202,7 @@ func (t *TunnelManager) runWithReconnect(ctx context.Context, cfg TunnelConfig) 
 				}
 				log.Printf("ssm: instance resolution error: %v", err)
 				attempt++
-				if attempt >= maxReconnectAttempts {
-					t.mu.Lock()
-					t.lastError = fmt.Sprintf("giving up after %d attempts: %v", maxReconnectAttempts, err)
-					t.cancel = nil
-					t.mu.Unlock()
-					t.setStatusNotify(TunnelError, t.LastError())
+				if !t.shouldRetry(attempt, err.Error()) {
 					return
 				}
 				continue
@@ -206,12 +227,7 @@ func (t *TunnelManager) runWithReconnect(ctx context.Context, cfg TunnelConfig) 
 			}
 			log.Printf("ssm: aws config error: %v", err)
 			attempt++
-			if attempt >= maxReconnectAttempts {
-				t.mu.Lock()
-				t.lastError = fmt.Sprintf("giving up after %d attempts: %v", maxReconnectAttempts, err)
-				t.cancel = nil
-				t.mu.Unlock()
-				t.setStatusNotify(TunnelError, t.LastError())
+			if !t.shouldRetry(attempt, err.Error()) {
 				return
 			}
 			continue
@@ -240,12 +256,7 @@ func (t *TunnelManager) runWithReconnect(ctx context.Context, cfg TunnelConfig) 
 		log.Printf("ssm: session dropped: %s", errMsg)
 
 		attempt++
-		if attempt >= maxReconnectAttempts {
-			t.mu.Lock()
-			t.lastError = fmt.Sprintf("giving up after %d attempts: %s", maxReconnectAttempts, errMsg)
-			t.cancel = nil
-			t.mu.Unlock()
-			t.setStatusNotify(TunnelError, t.LastError())
+		if !t.shouldRetry(attempt, errMsg) {
 			return
 		}
 
