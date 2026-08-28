@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"strings"
 
 	"database/sql"
 
@@ -25,15 +26,7 @@ type SQLiteDB struct {
 // the SQL level as a second layer — matching the read-only guarantee of every
 // other Bufflehead backend.
 func OpenSQLiteNative(path string) (*SQLiteDB, error) {
-	// Build a file: URI so the path is carried safely regardless of spaces or
-	// special characters, with the read-only params attached.
-	u := url.URL{Scheme: "file", Path: path}
-	q := url.Values{}
-	q.Set("mode", "ro")
-	q.Set("_pragma", "query_only(1)")
-	u.RawQuery = q.Encode()
-
-	conn, err := sql.Open("sqlite", u.String())
+	conn, err := sql.Open("sqlite", sqliteReadOnlyDSN(path))
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
@@ -46,6 +39,30 @@ func OpenSQLiteNative(path string) (*SQLiteDB, error) {
 		return nil, fmt.Errorf("open sqlite %q: %w", path, err)
 	}
 	return &SQLiteDB{conn: conn, path: path}, nil
+}
+
+// sqliteReadOnlyDSN builds a read-only SQLite DSN as a file: URI. mode=ro opens
+// the file without OS-level write access; query_only=1 rejects writes at the SQL
+// level as a second layer.
+//
+// The path must become a valid file URI on every platform. On Windows an
+// absolute path is like `C:\dir\db`; SQLite's URI parser needs forward slashes
+// and a leading slash before the drive letter (`file:///C:/dir/db`), otherwise
+// it reads `C:` as a URI authority and fails. Backslashes are converted and a
+// leading slash added; on Unix the path already starts with `/` and has no
+// backslashes, so it is unchanged. Separator handling is done with plain string
+// ops (not path/filepath) so it is identical regardless of the host OS.
+func sqliteReadOnlyDSN(path string) string {
+	p := strings.ReplaceAll(path, `\`, "/")
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p // C:/dir/db  →  /C:/dir/db  →  file:///C:/dir/db
+	}
+	u := url.URL{Scheme: "file", Path: p}
+	q := url.Values{}
+	q.Set("mode", "ro")
+	q.Set("_pragma", "query_only(1)")
+	u.RawQuery = q.Encode()
+	return u.String()
 }
 
 // Ping verifies the connection is alive.
