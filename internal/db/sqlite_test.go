@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -156,6 +157,31 @@ func TestSQLiteValueRendering(t *testing.T) {
 		if row[i] != w {
 			t.Errorf("col %d = %q, want %q", i, row[i], w)
 		}
+	}
+}
+
+// TestSQLiteReadOnlyDSN checks the file: URI is valid for both Unix and Windows
+// absolute paths — Windows drive paths must become file:///C:/... rather than
+// file:C:%5C... which SQLite rejects as an invalid URI authority. Uses plain
+// string inputs so it runs identically on any host OS.
+func TestSQLiteReadOnlyDSN(t *testing.T) {
+	tests := []struct {
+		name, in, wantPrefix string
+	}{
+		{"unix", "/tmp/x/test.db", "file:///tmp/x/test.db?"},
+		{"windows", `C:\dir\sub\test.db`, "file:///C:/dir/sub/test.db?"},
+		{"path with space", "/tmp/my data/test.db", "file:///tmp/my%20data/test.db?"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := sqliteReadOnlyDSN(tt.in)
+			if !strings.HasPrefix(got, tt.wantPrefix) {
+				t.Errorf("sqliteReadOnlyDSN(%q) = %q, want prefix %q", tt.in, got, tt.wantPrefix)
+			}
+			if !strings.Contains(got, "mode=ro") {
+				t.Errorf("DSN %q missing mode=ro", got)
+			}
+		})
 	}
 }
 
