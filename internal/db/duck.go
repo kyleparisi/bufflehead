@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
-	"strings"
 
 	"github.com/marcboeker/go-duckdb"
 )
@@ -62,33 +61,6 @@ func OpenDB(path string) (*DB, error) {
 	return &DB{conn: conn}, nil
 }
 
-// OpenSQLite opens a SQLite database file (read-only) by attaching it through
-// DuckDB's sqlite extension. The attached database is made the current catalog
-// so unqualified table names and information_schema lookups (Tables /
-// TableSchema, which scope to current_database()) resolve against it, exactly
-// like a natively-opened DuckDB file.
-func OpenSQLite(path string) (*DB, error) {
-	conn, err := sql.Open("duckdb", "")
-	if err != nil {
-		return nil, fmt.Errorf("open duckdb: %w", err)
-	}
-	conn.SetMaxOpenConns(1)
-	esc := strings.ReplaceAll(path, "'", "''")
-	stmts := []string{
-		"INSTALL sqlite",
-		"LOAD sqlite",
-		fmt.Sprintf("ATTACH '%s' AS sqlitedb (TYPE SQLITE, READ_ONLY)", esc),
-		"USE sqlitedb",
-	}
-	for _, s := range stmts {
-		if _, err := conn.Exec(s); err != nil {
-			conn.Close()
-			return nil, fmt.Errorf("open sqlite: %w", err)
-		}
-	}
-	return &DB{conn: conn}, nil
-}
-
 // Ping verifies the connection is alive.
 func (d *DB) Ping(ctx context.Context) error {
 	return d.conn.PingContext(ctx)
@@ -101,9 +73,9 @@ func (d *DB) Close() error {
 
 // Tables lists all tables and views in the database.
 func (d *DB) Tables() ([]TableInfo, error) {
-	// Qualify as system.information_schema and scope to the current catalog:
-	// after ATTACH ... USE (sqlite), the current database is the attached one,
-	// which has no information_schema of its own, so unqualified lookups fail.
+	// Qualify as system.information_schema and scope to the current catalog so
+	// lookups resolve against the opened database file rather than failing on a
+	// catalog that has no information_schema of its own.
 	rows, err := d.conn.Query(`
 		SELECT table_name, table_type
 		FROM system.information_schema.tables
