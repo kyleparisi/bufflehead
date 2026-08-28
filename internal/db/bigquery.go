@@ -274,7 +274,7 @@ func (b *BigQueryDB) Query(ctx context.Context, sql string, offset, limit int) (
 		limit = 100
 	}
 
-	q := b.client.Query(bqPaged(sql, offset, limit))
+	q := b.client.Query(paginate(sql, offset, limit))
 	if b.defaultDataset != "" {
 		q.DefaultProjectID = b.projectID
 		q.DefaultDatasetID = b.defaultDataset
@@ -395,14 +395,6 @@ func (b *BigQueryDB) splitDatasetTable(name string) (dataset, table string) {
 		return name[:i], name[i+1:]
 	}
 	return b.defaultDataset, name
-}
-
-// bqPaged appends LIMIT/OFFSET to the user's SQL. Mirrors PostgresDB.Query's
-// paging: the query must not already carry its own LIMIT (the AI prompt tells
-// the agent not to add one — pagination is applied here).
-func bqPaged(sql string, offset, limit int) string {
-	s := strings.TrimRight(strings.TrimSpace(sql), ";")
-	return fmt.Sprintf("%s LIMIT %d OFFSET %d", s, limit, offset)
 }
 
 // bqFormatValue renders a single BigQuery value as display text.
