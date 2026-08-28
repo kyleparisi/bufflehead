@@ -2538,6 +2538,18 @@ func (a *App) onGatewayConnected(entry models.GatewayEntry, auth *bfaws.AuthMana
 		return
 	}
 
+	if entry.IsMySQL() {
+		// Direct MySQL: dial the real host:port with no tunnel or AWS auth.
+		RunOpenMySQL(entry.RDSHost, entry.RDSPort, entry.DBName, entry.DBUser, password,
+			entry.EffectiveTLSMode(), nextTabID, 0, w.results, func(msg string) {
+				w.gatewayLoadingMsg = msg
+			})
+		nextTabID++
+
+		w.pendingGateway = &GatewayConnection{Config: entry}
+		return
+	}
+
 	// For IAM auth, pass the AWS config; for password auth, pass nil
 	var awsCfg *aws.Config
 	if entry.UseIAMAuth() {
@@ -2978,8 +2990,8 @@ func (a *App) pollResults() {
 					w.statusBar.SetStatus("Reconnected")
 					// Reset the Postgres pool so the next query uses a fresh
 					// connection through the rebuilt tunnel instead of a stale one.
-					if pgConn, ok := conn.DB.(*db.PostgresDB); ok {
-						pgConn.ResetPool()
+					if pool, ok := conn.DB.(db.PoolResetter); ok {
+						pool.ResetPool()
 					}
 					// Restore the rounded tile + green dot.
 					applyConnTileTheme(conn.button.AsControl(), isActive)

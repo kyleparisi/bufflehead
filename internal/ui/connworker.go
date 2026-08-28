@@ -211,8 +211,8 @@ func (cw *ConnWorker) handle(req DBRequest) {
 	const maxHealthRetries = 6
 	for retries := 0; retries < maxHealthRetries; retries++ {
 		if retries > 0 {
-			if pgConn, ok := cw.db.(*db.PostgresDB); ok {
-				pgConn.ResetPool()
+			if pool, ok := cw.db.(db.PoolResetter); ok {
+				pool.ResetPool()
 			}
 			// Back off to let the tunnel reconnect. 3s, 6s, 9s covers
 			// the tunnel's first several reconnect attempts.
@@ -293,9 +293,9 @@ func (cw *ConnWorker) handleSQL(req DBRequest, ctx context.Context) {
 	// the connection may be in a dirty state. Reset the pool so the
 	// next operation gets a clean connection.
 	if err != nil && ctx.Err() != nil {
-		if pgConn, ok := cw.db.(*db.PostgresDB); ok {
+		if pool, ok := cw.db.(db.PoolResetter); ok {
 			log.Println("sql: resetting pool after cancelled query")
-			pgConn.ResetPool()
+			pool.ResetPool()
 		}
 	}
 }
@@ -303,8 +303,8 @@ func (cw *ConnWorker) handleSQL(req DBRequest, ctx context.Context) {
 func (cw *ConnWorker) handleRefresh(req DBRequest) {
 	// Reset the pool so refresh gets a fresh connection, not a stale one
 	// left over from a dead SSM tunnel.
-	if pgConn, ok := cw.db.(*db.PostgresDB); ok {
-		pgConn.ResetPool()
+	if pool, ok := cw.db.(db.PoolResetter); ok {
+		pool.ResetPool()
 	}
 	tables, err := cw.db.Tables()
 	if err != nil {
@@ -318,17 +318,11 @@ func (cw *ConnWorker) handleRefresh(req DBRequest) {
 
 	// Load column schemas so the schema tree keeps its table-level columns
 	// after a refresh (Postgres has a bulk API; DuckDB loads per-table).
-	if pgConn, ok := cw.db.(*db.PostgresDB); ok {
-		if err := pgConn.AllTableSchemas(tables); err != nil {
-			cw.results <- DBResult{
-				Kind:    ReqRefresh,
-				ConnIdx: req.ConnIdx,
-				Err:     fmt.Errorf("load schemas: %w", err),
-			}
-			return
-		}
-	} else if bq, ok := cw.db.(*db.BigQueryDB); ok {
-		if err := bq.AllTableSchemas(tables); err != nil {
+	if bulk, ok := cw.db.(interface {
+		AllTableSchemas([]db.TableInfo) error
+	}); ok {
+		// Postgres, MySQL, and BigQuery expose a bulk schema loader.
+		if err := bulk.AllTableSchemas(tables); err != nil {
 			cw.results <- DBResult{
 				Kind:    ReqRefresh,
 				ConnIdx: req.ConnIdx,
@@ -552,6 +546,70 @@ func RunOpenPostgres(host string, port int, dbName, user, password, sslMode stri
 			TabID:      tabID,
 			Generation: generation,
 			Querier:    pgConn,
+			Tables:     tables,
+		}
+	}()
+}
+
+// RunOpenMySQL connects directly to a reachable MySQL host in a one-shot
+// goroutine (no SSM tunnel), listing tables and schemas, then sending the
+// result. Mirrors RunOpenPostgres for the direct MySQL connection type.
+// statusFunc is an optional progress callback (may be nil).
+func RunOpenMySQL(host string, port int, dbName, user, password, tlsMode string,
+	tabID, generation uint64, results chan DBResult, statusFunc func(string)) {
+	go func() {
+		if statusFunc != nil {
+			statusFunc("Connecting to database...")
+		}
+
+		type myResult struct {
+			conn *db.MySQLDB
+			err  error
+		}
+		ch := make(chan myResult, 1)
+		go func() {
+			myConn, err := db.NewMySQLDirect(host, port, dbName, user, password, tlsMode)
+			ch <- myResult{myConn, err}
+		}()
+
+		var myConn *db.MySQLDB
+		var err error
+		select {
+		case r := <-ch:
+			myConn, err = r.conn, r.err
+		case <-time.After(30 * time.Second):
+			err = fmt.Errorf("connection timed out after 30s — host may be unreachable")
+		}
+
+		if err != nil {
+			results <- DBResult{Kind: ReqOpenGateway, TabID: tabID, Generation: generation, Err: err}
+			return
+		}
+
+		if statusFunc != nil {
+			statusFunc("Loading tables...")
+		}
+		tables, err := myConn.Tables()
+		if err != nil {
+			myConn.Close()
+			results <- DBResult{Kind: ReqOpenGateway, TabID: tabID, Generation: generation, Err: err}
+			return
+		}
+
+		if statusFunc != nil {
+			statusFunc(fmt.Sprintf("Loading schema for %d tables...", len(tables)))
+		}
+		if err := myConn.AllTableSchemas(tables); err != nil {
+			myConn.Close()
+			results <- DBResult{Kind: ReqOpenGateway, TabID: tabID, Generation: generation, Err: fmt.Errorf("load schemas: %w", err)}
+			return
+		}
+
+		results <- DBResult{
+			Kind:       ReqOpenGateway,
+			TabID:      tabID,
+			Generation: generation,
+			Querier:    myConn,
 			Tables:     tables,
 		}
 	}()

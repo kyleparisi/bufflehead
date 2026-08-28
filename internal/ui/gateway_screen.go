@@ -121,6 +121,7 @@ type GatewayScreen struct {
 	// Connection-type selector tiles
 	typeAWSBtn Button.Instance
 	typePGBtn  Button.Instance
+	typeMyBtn  Button.Instance
 	typeSSHBtn Button.Instance
 
 	// Panels toggled by connKind (AWS flow vs. direct Postgres form)
@@ -153,11 +154,31 @@ type GatewayScreen struct {
 	bqCreds     LineEdit.Instance
 	bqMaxGB     LineEdit.Instance
 	bqStatus    Label.Instance
+
+	// Direct MySQL form + panel
+	myFormPanel PanelContainer.Instance
+	myLabel     LineEdit.Instance
+	myEnv       LineEdit.Instance
+	myHost      LineEdit.Instance
+	myPort      LineEdit.Instance
+	myDBName    LineEdit.Instance
+	myDBUser    LineEdit.Instance
+	myDBPass    LineEdit.Instance
+	myPassVBox  VBoxContainer.Instance // password field, hidden when "No Password"
+	myTLSMode   OptionButton.Instance
+	myStatus    Label.Instance
+	myNoPass    bool // true = no-password auth
+	myPassBtn   Button.Instance
+	myNoPassBtn Button.Instance
 }
 
 // pgSSLModes lists the sslmode options for the direct Postgres form dropdown,
 // in display order.
 var pgSSLModes = []string{"prefer", "require", "disable"}
+
+// mysqlTLSModes lists the go-sql-driver TLS options for the direct MySQL form
+// dropdown, in display order. "preferred" uses TLS when the server offers it.
+var mysqlTLSModes = []string{"preferred", "true", "skip-verify", "false"}
 
 type gatewayCard struct {
 	entry       models.GatewayEntry
@@ -257,6 +278,10 @@ func (g *GatewayScreen) Ready() {
 	g.pgFormPanel = g.buildPGForm()
 	leftCol.AsNode().AddChild(g.pgFormPanel.AsNode())
 
+	// Direct MySQL connection form
+	g.myFormPanel = g.buildMySQLForm()
+	leftCol.AsNode().AddChild(g.myFormPanel.AsNode())
+
 	// BigQuery connection form
 	g.bqFormPanel = g.buildBQForm()
 	leftCol.AsNode().AddChild(g.bqFormPanel.AsNode())
@@ -350,6 +375,13 @@ func (g *GatewayScreen) buildTypeSelector() VBoxContainer.Instance {
 	})
 	row.AsNode().AddChild(g.typePGBtn.AsNode())
 
+	g.typeMyBtn = g.makeTypeTile("🐬  MySQL", "Direct host — local, VPN, or public", false)
+	g.typeMyBtn.AsBaseButton().OnPressed(func() {
+		g.connKind = models.KindMySQL
+		g.renderConnKind()
+	})
+	row.AsNode().AddChild(g.typeMyBtn.AsNode())
+
 	g.typeBQBtn = g.makeTypeTile("◆  BigQuery", "Google BigQuery via gcloud (ADC)", false)
 	g.typeBQBtn.AsBaseButton().OnPressed(func() {
 		g.connKind = models.KindBigQuery
@@ -406,12 +438,16 @@ func (g *GatewayScreen) renderConnKind() {
 	aws := g.connKind == models.KindAWSGateway
 	pg := g.connKind == models.KindPostgres
 	bq := g.connKind == models.KindBigQuery
+	my := g.connKind == models.KindMySQL
 
 	if g.typeAWSBtn != (Button.Instance{}) {
 		applyTypeTileTheme(g.typeAWSBtn.AsControl(), aws)
 	}
 	if g.typePGBtn != (Button.Instance{}) {
 		applyTypeTileTheme(g.typePGBtn.AsControl(), pg)
+	}
+	if g.typeMyBtn != (Button.Instance{}) {
+		applyTypeTileTheme(g.typeMyBtn.AsControl(), my)
 	}
 	if g.typeBQBtn != (Button.Instance{}) {
 		applyTypeTileTheme(g.typeBQBtn.AsControl(), bq)
@@ -428,6 +464,9 @@ func (g *GatewayScreen) renderConnKind() {
 	}
 	if g.pgFormPanel != (PanelContainer.Instance{}) {
 		g.pgFormPanel.AsCanvasItem().SetVisible(pg)
+	}
+	if g.myFormPanel != (PanelContainer.Instance{}) {
+		g.myFormPanel.AsCanvasItem().SetVisible(my)
 	}
 	if g.bqFormPanel != (PanelContainer.Instance{}) {
 		g.bqFormPanel.AsCanvasItem().SetVisible(bq)
@@ -1335,6 +1374,276 @@ func (g *GatewayScreen) onPGConnect() {
 	}
 }
 
+// buildMySQLForm builds the direct MySQL connection form. It mirrors buildPGForm
+// with MySQL-appropriate defaults (port 3306, user root) and a go-sql-driver TLS
+// dropdown instead of Postgres sslmodes. Shown when connKind == KindMySQL.
+func (g *GatewayScreen) buildMySQLForm() PanelContainer.Instance {
+	panel := PanelContainer.New()
+	border := makeStyleBox(colorBgPanel, 6, 1, colorBorderDim)
+	border.AsStyleBox().SetContentMarginAll(scaled(16))
+	panel.AsControl().AddThemeStyleboxOverride("panel", border.AsStyleBox())
+
+	vbox := VBoxContainer.New()
+	vbox.AsControl().AddThemeConstantOverride("separation", 8)
+
+	title := Label.New()
+	title.SetText("Connection Details")
+	title.AsControl().AddThemeFontSizeOverride("font_size", fontSize(14))
+	title.AsControl().AddThemeColorOverride("font_color", colorText)
+	vbox.AsNode().AddChild(title.AsNode())
+
+	g.myLabel, g.myEnv = g.makeFieldPair(vbox, "Label", "e.g. local-mysql", 2, "Environment", "e.g. dev", 1)
+	g.myHost, g.myPort = g.makeFieldPair(vbox, "Host", "localhost", 3, "Port", "3306", 1)
+	g.myPort.SetText("3306")
+	g.myDBName, g.myDBUser = g.makeFieldPair(vbox, "Database Name", "e.g. app", 1, "Username", "root", 1)
+	g.myDBUser.SetText("root")
+
+	// Authentication toggle: Password vs No Password
+	authLabel := Label.New()
+	authLabel.SetText("Authentication")
+	authLabel.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
+	authLabel.AsControl().AddThemeColorOverride("font_color", colorTextDim)
+	vbox.AsNode().AddChild(authLabel.AsNode())
+
+	authRow := HBoxContainer.New()
+	authRow.AsControl().AddThemeConstantOverride("separation", 4)
+
+	g.myPassBtn = Button.New()
+	g.myPassBtn.SetText("Password")
+	g.myPassBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
+	applyButtonTheme(g.myPassBtn.AsControl())
+	g.myPassBtn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(100), scaled(28)))
+
+	g.myNoPassBtn = Button.New()
+	g.myNoPassBtn.SetText("No Password")
+	g.myNoPassBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
+	applySecondaryButtonTheme(g.myNoPassBtn.AsControl())
+	g.myNoPassBtn.AsControl().SetCustomMinimumSize(Vector2.New(scaled(100), scaled(28)))
+
+	g.myPassBtn.AsBaseButton().OnPressed(func() {
+		g.myNoPass = false
+		applyButtonTheme(g.myPassBtn.AsControl())
+		applySecondaryButtonTheme(g.myNoPassBtn.AsControl())
+		g.myPassVBox.AsCanvasItem().SetVisible(true)
+	})
+	g.myNoPassBtn.AsBaseButton().OnPressed(func() {
+		g.myNoPass = true
+		applyButtonTheme(g.myNoPassBtn.AsControl())
+		applySecondaryButtonTheme(g.myPassBtn.AsControl())
+		g.myPassVBox.AsCanvasItem().SetVisible(false)
+	})
+
+	authRow.AsNode().AddChild(g.myPassBtn.AsNode())
+	authRow.AsNode().AddChild(g.myNoPassBtn.AsNode())
+	vbox.AsNode().AddChild(authRow.AsNode())
+
+	// Password field (hidden when "No Password")
+	g.myPassVBox = VBoxContainer.New()
+	g.myPassVBox.AsControl().AddThemeConstantOverride("separation", 2)
+	passLbl := Label.New()
+	passLbl.SetText("Password")
+	passLbl.AsControl().AddThemeFontSizeOverride("font_size", fontSize(10))
+	passLbl.AsControl().AddThemeColorOverride("font_color", colorTextMuted)
+	g.myDBPass = LineEdit.New()
+	g.myDBPass.SetPlaceholderText("stored securely in your OS keychain")
+	applyInputTheme(g.myDBPass.AsControl())
+	g.myDBPass.AsControl().AddThemeFontSizeOverride("font_size", fontSize(12))
+	g.myDBPass.SetSecretCharacter("●")
+	g.myDBPass.SetSecret(true)
+	g.myPassVBox.AsNode().AddChild(passLbl.AsNode())
+	g.myPassVBox.AsNode().AddChild(g.myDBPass.AsNode())
+	vbox.AsNode().AddChild(g.myPassVBox.AsNode())
+
+	// TLS Mode dropdown
+	tlsVBox := VBoxContainer.New()
+	tlsVBox.AsControl().AddThemeConstantOverride("separation", 2)
+	tlsLbl := Label.New()
+	tlsLbl.SetText("TLS Mode")
+	tlsLbl.AsControl().AddThemeFontSizeOverride("font_size", fontSize(10))
+	tlsLbl.AsControl().AddThemeColorOverride("font_color", colorTextMuted)
+	g.myTLSMode = OptionButton.New()
+	for _, m := range mysqlTLSModes {
+		g.myTLSMode.AddItem(m)
+	}
+	applyInputTheme(g.myTLSMode.AsControl())
+	g.myTLSMode.AsControl().AddThemeFontSizeOverride("font_size", fontSize(12))
+	g.myTLSMode.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	tlsVBox.AsNode().AddChild(tlsLbl.AsNode())
+	tlsVBox.AsNode().AddChild(g.myTLSMode.AsNode())
+	vbox.AsNode().AddChild(tlsVBox.AsNode())
+
+	// Helper text
+	helper := Label.New()
+	helper.SetText("Use this for local databases, VPN-reachable instances, or public endpoints. No AWS credentials needed.")
+	helper.AsControl().AddThemeFontSizeOverride("font_size", fontSize(10))
+	helper.AsControl().AddThemeColorOverride("font_color", colorTextDim)
+	helper.SetAutowrapMode(3)
+	vbox.AsNode().AddChild(helper.AsNode())
+
+	// Status label
+	g.myStatus = Label.New()
+	g.myStatus.SetText("")
+	g.myStatus.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
+	g.myStatus.AsControl().AddThemeColorOverride("font_color", colorTextMuted)
+	g.myStatus.SetAutowrapMode(3)
+	vbox.AsNode().AddChild(g.myStatus.AsNode())
+
+	// Connect + Test buttons
+	btnRow := HBoxContainer.New()
+	btnRow.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	btnRow.AsControl().AddThemeConstantOverride("separation", 8)
+
+	connectBtn := Button.New()
+	connectBtn.SetText("Connect")
+	connectBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(13))
+	applyButtonTheme(connectBtn.AsControl())
+	connectBtn.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	connectBtn.AsControl().SetSizeFlagsStretchRatio(2)
+	connectBtn.AsControl().SetCustomMinimumSize(Vector2.New(0, scaled(34)))
+	connectBtn.AsBaseButton().OnPressed(func() {
+		g.onMySQLConnect()
+	})
+
+	testBtn := Button.New()
+	testBtn.SetText("Test Connection")
+	testBtn.AsControl().AddThemeFontSizeOverride("font_size", fontSize(12))
+	applySecondaryButtonTheme(testBtn.AsControl())
+	testBtn.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	testBtn.AsControl().SetSizeFlagsStretchRatio(1)
+	testBtn.AsControl().SetCustomMinimumSize(Vector2.New(0, scaled(34)))
+	testBtn.AsControl().SetTooltipText("Validate the form fields without connecting")
+	testBtn.AsBaseButton().OnPressed(func() {
+		g.onMySQLTest()
+	})
+
+	btnRow.AsNode().AddChild(connectBtn.AsNode())
+	btnRow.AsNode().AddChild(testBtn.AsNode())
+	vbox.AsNode().AddChild(btnRow.AsNode())
+
+	panel.AsNode().AddChild(vbox.AsNode())
+	return panel
+}
+
+// selectedTLSMode returns the go-sql-driver TLS mode chosen in the dropdown.
+func (g *GatewayScreen) selectedTLSMode() string {
+	idx := g.myTLSMode.Selected()
+	if idx < 0 || idx >= len(mysqlTLSModes) {
+		return "preferred"
+	}
+	return mysqlTLSModes[idx]
+}
+
+// onMySQLTest validates the direct-MySQL form fields locally (no network).
+func (g *GatewayScreen) onMySQLTest() {
+	if g.myLabel.Text() == "" {
+		g.myStatus.SetText("Missing: Label")
+		g.myStatus.AsControl().AddThemeColorOverride("font_color", colorStatusRed)
+		return
+	}
+
+	host := valueOrDefault(g.myHost.Text(), "localhost")
+	port := valueOrDefault(g.myPort.Text(), "3306")
+	dbUser := valueOrDefault(g.myDBUser.Text(), "root")
+	dbName := g.myDBName.Text()
+
+	g.myStatus.SetText(fmt.Sprintf("✓ Ready — will connect to %s@%s:%s/%s", dbUser, host, port, dbName))
+	g.myStatus.AsControl().AddThemeColorOverride("font_color", colorStatusGreen)
+}
+
+// onMySQLConnect validates the direct-MySQL form, persists a bookmark (with the
+// password in the OS keychain when provided), and starts a direct connection.
+func (g *GatewayScreen) onMySQLConnect() {
+	label := g.myLabel.Text()
+	env := g.myEnv.Text()
+	host := g.myHost.Text()
+	portStr := g.myPort.Text()
+	dbName := g.myDBName.Text()
+	dbUser := g.myDBUser.Text()
+	dbPass := g.myDBPass.Text()
+
+	setErr := func(msg string) {
+		g.myStatus.SetText(msg)
+		g.myStatus.AsControl().AddThemeColorOverride("font_color", colorStatusRed)
+	}
+
+	// Apply sensible defaults for the connection-target fields when left blank —
+	// a local MySQL install listens on localhost:3306 with a "root" account. The
+	// database may be left blank; the database switcher lists what's available.
+	if host == "" {
+		host = "localhost"
+		g.myHost.SetText(host)
+	}
+	if dbUser == "" {
+		dbUser = "root"
+		g.myDBUser.SetText(dbUser)
+	}
+
+	// Label stays required: it names the bookmark and must be a valid slug.
+	if label == "" {
+		setErr("Label is required")
+		return
+	}
+	if err := models.ValidateLabel(label); err != nil {
+		setErr(err.Error())
+		return
+	}
+
+	port, _ := strconv.Atoi(portStr)
+	if port == 0 {
+		port = 3306
+		g.myPort.SetText(strconv.Itoa(port))
+	}
+
+	tlsMode := g.selectedTLSMode()
+
+	// Determine secret storage: keychain when a password is provided.
+	secretKind := models.SecretNone
+	if !g.myNoPass && dbPass != "" {
+		if err := models.SetSecret(label, dbPass); err != nil {
+			g.myStatus.SetText("Note: OS keychain unavailable — password won't be saved for next time.")
+			g.myStatus.AsControl().AddThemeColorOverride("font_color", colorStatusYellow)
+		} else {
+			secretKind = models.SecretKeychain
+		}
+	}
+
+	entry := models.GatewayEntry{
+		Name:       label,
+		Kind:       models.KindMySQL,
+		RDSHost:    host,
+		RDSPort:    port,
+		DBName:     dbName,
+		DBUser:     dbUser,
+		DBPassword: dbPass, // in-memory only for this session
+		SSLMode:    tlsMode, // SSLMode field stores the MySQL TLS mode
+		SecretKind: secretKind,
+	}
+
+	// Save/update a bookmark (raw password never written to the JSON file).
+	if g.bookmarks != nil {
+		bm := models.Bookmark{
+			Label:      label,
+			Kind:       models.KindMySQL,
+			Env:        env,
+			RDSHost:    host,
+			RDSPort:    port,
+			DBName:     dbName,
+			DBUser:     dbUser,
+			SSLMode:    tlsMode,
+			SecretKind: secretKind,
+		}
+		g.bookmarks.Add(bm)
+	}
+
+	g.myStatus.SetText("Connecting...")
+	g.myStatus.AsControl().AddThemeColorOverride("font_color", colorStatusYellow)
+
+	// Direct connections have no AWS auth/tunnel — hand straight to OnConnect.
+	if g.OnConnect != nil {
+		g.OnConnect(entry, nil, nil)
+	}
+}
+
 // buildBQForm builds the BigQuery connection form. Auth defaults to Application
 // Default Credentials (the gcloud login); an optional credentials file overrides
 // it. Shown when connKind == KindBigQuery.
@@ -1981,10 +2290,11 @@ func (g *GatewayScreen) buildBookmarkCard(bm models.Bookmark) PanelContainer.Ins
 	}
 
 	isDirect := bm.Kind == models.KindPostgres
+	isMySQL := bm.Kind == models.KindMySQL
 	isBQ := bm.Kind == models.KindBigQuery
-	// noAWS connections (direct Postgres, BigQuery) have no SSO/tunnel — they
-	// connect immediately without an AuthManager.
-	noAWS := isDirect || isBQ
+	// noAWS connections (direct Postgres, direct MySQL, BigQuery) have no
+	// SSO/tunnel — they connect immediately without an AuthManager.
+	noAWS := isDirect || isMySQL || isBQ
 
 	// Detail rows — wrap so a long endpoint fits the card width instead of
 	// forcing the card wider than the column (which pushed the buttons off-screen).
@@ -1992,7 +2302,7 @@ func (g *GatewayScreen) buildBookmarkCard(bm models.Bookmark) PanelContainer.Ins
 	switch {
 	case isBQ:
 		hostLabel.SetText(fmt.Sprintf("%s · dataset %s", bm.GCPProject, bm.DefaultDataset))
-	case isDirect:
+	case isDirect, isMySQL:
 		hostLabel.SetText(fmt.Sprintf("%s/%s @ %s:%d", bm.DBName, bm.DBUser, bm.RDSHost, bm.RDSPort))
 	default:
 		hostLabel.SetText(fmt.Sprintf("%s/%s @ %s", bm.DBName, bm.DBUser, bm.RDSHost))
@@ -2011,6 +2321,8 @@ func (g *GatewayScreen) buildBookmarkCard(bm models.Bookmark) PanelContainer.Ins
 		}
 	case isDirect:
 		profileLabel.SetText("Direct PostgreSQL · SSL: " + bm.SSLMode)
+	case isMySQL:
+		profileLabel.SetText("Direct MySQL · TLS: " + bm.SSLMode)
 	default:
 		profileLabel.SetText("AWS Profile: " + bm.AWSProfile)
 	}

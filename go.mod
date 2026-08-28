@@ -13,11 +13,13 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ssm v1.68.6
 	github.com/aws/aws-sdk-go-v2/service/sso v1.30.17
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.35.21
+	github.com/go-sql-driver/mysql v1.10.0
 	github.com/jackc/pgx/v5 v5.9.1
 	github.com/kyleparisi/session-manager-plugin v0.0.0-20260430184122-898ee41db4b7
 	github.com/marcboeker/go-duckdb v1.8.5
 	github.com/twinj/uuid v1.0.0
 	github.com/zalando/go-keyring v0.2.8
+	golang.org/x/oauth2 v0.36.0
 	google.golang.org/api v0.291.0
 	gopkg.in/yaml.v3 v3.0.1
 	graphics.gd v0.0.0-20260301004336-07bec6a0140d
@@ -29,6 +31,7 @@ require (
 	cloud.google.com/go/auth/oauth2adapt v0.2.8 // indirect
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
 	cloud.google.com/go/iam v1.11.0 // indirect
+	filippo.io/edwards25519 v1.2.0 // indirect
 	github.com/apache/arrow-go/v18 v18.1.0 // indirect
 	github.com/apache/arrow/go/v15 v15.0.2 // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.9 // indirect
@@ -84,7 +87,6 @@ require (
 	golang.org/x/exp v0.0.0-20250128182459-e0ece0dbea4c // indirect
 	golang.org/x/mod v0.37.0 // indirect
 	golang.org/x/net v0.57.0 // indirect
-	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/telemetry v0.0.0-20260625142307-59b4966ccb57 // indirect
