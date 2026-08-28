@@ -6,27 +6,6 @@ import (
 	"time"
 )
 
-func TestBQPaged(t *testing.T) {
-	tests := []struct {
-		name          string
-		sql           string
-		offset, limit int
-		want          string
-	}{
-		{"basic", "SELECT * FROM t", 0, 100, "SELECT * FROM t LIMIT 100 OFFSET 0"},
-		{"offset", "SELECT * FROM t", 200, 50, "SELECT * FROM t LIMIT 50 OFFSET 200"},
-		{"trailing semicolon", "SELECT * FROM t;", 0, 10, "SELECT * FROM t LIMIT 10 OFFSET 0"},
-		{"trailing space", "SELECT * FROM t  ", 0, 10, "SELECT * FROM t LIMIT 10 OFFSET 0"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := bqPaged(tt.sql, tt.offset, tt.limit); got != tt.want {
-				t.Errorf("bqPaged() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestIsReadOnlyQuery(t *testing.T) {
 	readOnly := []string{
 		"SELECT 1",

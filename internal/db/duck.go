@@ -179,13 +179,14 @@ func (d *DB) Schema(path string) ([]Column, error) {
 // offset/limit drive pagination.
 func (d *DB) Query(ctx context.Context, virtualSQL string, offset, limit int) (*QueryResult, error) {
 	// Count total rows.
+	virtualSQL = trimSQL(virtualSQL)
 	countQ := fmt.Sprintf("SELECT COUNT(*) FROM (%s) _c", virtualSQL)
 	var total int64
 	if err := d.conn.QueryRowContext(ctx, countQ).Scan(&total); err != nil {
 		return nil, fmt.Errorf("count: %w", err)
 	}
 
-	pagedQ := fmt.Sprintf("%s LIMIT %d OFFSET %d", virtualSQL, limit, offset)
+	pagedQ := paginate(virtualSQL, offset, limit)
 	rows, err := d.conn.QueryContext(ctx, pagedQ)
 	if err != nil {
 		return nil, fmt.Errorf("query: %w", err)
@@ -203,6 +204,9 @@ func (d *DB) Query(ctx context.Context, virtualSQL string, offset, limit int) (*
 	}
 
 	for rows.Next() {
+		if len(result.Rows) >= maxResultRows {
+			break // hard row ceiling; total still reflects the true count
+		}
 		vals := make([]any, len(colNames))
 		ptrs := make([]any, len(colNames))
 		for i := range vals {
