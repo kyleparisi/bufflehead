@@ -310,6 +310,9 @@ func (p *PostgresDB) Query(ctx context.Context, virtualSQL string, offset, limit
 	}
 
 	for rows.Next() {
+		if len(result.Rows) >= maxResultRows {
+			break // hard row ceiling; total still reflects the true count
+		}
 		vals := make([]any, len(colNames))
 		ptrs := make([]any, len(colNames))
 		for i := range vals {

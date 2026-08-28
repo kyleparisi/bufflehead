@@ -6,6 +6,18 @@ import (
 	"strings"
 )
 
+// maxResultRows is a hard ceiling on the number of rows the row-based backends
+// (DuckDB, Postgres, MySQL) materialize from a single Query, regardless of a
+// user-supplied LIMIT. It bounds memory and response size so an agent can't
+// stream millions of rows through /sql. Each of those backends' row loops stops
+// accumulating at this count even when the user wrote a larger LIMIT. The grid
+// pages in blocks of 100, far below this, so normal use is never truncated.
+//
+// BigQuery is deliberately exempt: it is bounded by bytes scanned
+// (MaxBytesBilled), which is its real cost lever — a row cap there is meaningless
+// since a LIMIT doesn't reduce bytes scanned.
+const maxResultRows = 10000
+
 // sqlTrailingLimitRe matches a LIMIT clause at the very end of a statement
 // (after whitespace/semicolons are trimmed). It covers the standard
 // `LIMIT n [OFFSET m]` form and MySQL's `LIMIT m, n` form.
