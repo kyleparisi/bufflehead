@@ -119,6 +119,46 @@ func TestSQLiteQuery(t *testing.T) {
 	}
 }
 
+// TestSQLiteValueRendering checks that each SQLite storage class renders as
+// expected, and — the key difference from the old DuckDB-extension path — that a
+// 16-byte BLOB is NOT mangled into UUID form.
+func TestSQLiteValueRendering(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "types.db")
+	rw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open rw: %v", err)
+	}
+	if _, err := rw.Exec(`CREATE TABLE v (i INTEGER, r REAL, t TEXT, b BLOB, n TEXT)`); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	// A 16-char blob is the case DuckDB's formatter would turn into a UUID.
+	if _, err := rw.Exec(`INSERT INTO v VALUES (42, 3.5, 'hello', CAST('0123456789abcdef' AS BLOB), NULL)`); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	rw.Close()
+
+	db, err := OpenSQLiteNative(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	res, err := db.Query(context.Background(), "SELECT i, r, t, b, n FROM v", 0, 100)
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if len(res.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(res.Rows))
+	}
+	row := res.Rows[0]
+	want := []string{"42", "3.5", "hello", "0123456789abcdef", ""}
+	for i, w := range want {
+		if row[i] != w {
+			t.Errorf("col %d = %q, want %q", i, row[i], w)
+		}
+	}
+}
+
 func TestSQLiteReadOnly(t *testing.T) {
 	path := seedSQLite(t)
 	db, err := OpenSQLiteNative(path)
