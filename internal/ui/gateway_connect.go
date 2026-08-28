@@ -209,6 +209,23 @@ func (w *AppWindow) reconnectConnection(idx int, cmd *control.Command) {
 			return
 		}
 
+		// Direct MySQL: no tunnel or AWS auth — just reopen the DB.
+		if entry.IsMySQL() {
+			myConn, tables, err := openDirectMySQLDB(entry)
+			if err != nil {
+				outcome.Steps = append(outcome.Steps, control.ReconnectStep{
+					Step: "connect_db", OK: false, Error: err.Error(),
+				})
+				finish()
+				return
+			}
+			outcome.Steps = append(outcome.Steps, control.ReconnectStep{Step: "connect_db", OK: true})
+			outcome.Querier = myConn
+			outcome.Tables = tables
+			finish()
+			return
+		}
+
 		// Refresh AWS credentials/config for IAM auth so an expired SSO login
 		// surfaces here (and a fresh login is picked up) before we build a token.
 		var awsCfg *aws.Config
@@ -323,6 +340,20 @@ func (w *AppWindow) switchDatabase(idx int, dbName string) {
 			return
 		}
 
+		if entry.IsMySQL() {
+			myConn, tables, err := openDirectMySQLDB(entry)
+			if err != nil {
+				outcome.Steps = append(outcome.Steps, control.ReconnectStep{Step: "connect_db", OK: false, Error: err.Error()})
+				finish()
+				return
+			}
+			outcome.Steps = append(outcome.Steps, control.ReconnectStep{Step: "connect_db", OK: true})
+			outcome.Querier = myConn
+			outcome.Tables = tables
+			finish()
+			return
+		}
+
 		var pgConn *db.PostgresDB
 		var tables []db.TableInfo
 		var err error
@@ -432,6 +463,45 @@ func openDirectPostgresDB(entry models.GatewayEntry) (*db.PostgresDB, []db.Table
 		return nil, nil, fmt.Errorf("load schemas: %w", err)
 	}
 	return pgConn, tables, nil
+}
+
+// openDirectMySQLDB opens a direct MySQL connection (no tunnel) and loads its
+// tables and schemas synchronously. Mirrors openDirectPostgresDB for the direct
+// MySQL connection type.
+func openDirectMySQLDB(entry models.GatewayEntry) (*db.MySQLDB, []db.TableInfo, error) {
+	type myResult struct {
+		conn *db.MySQLDB
+		err  error
+	}
+	ch := make(chan myResult, 1)
+	go func() {
+		myConn, err := db.NewMySQLDirect(entry.RDSHost, entry.RDSPort,
+			entry.DBName, entry.DBUser, entry.ResolvePassword(), entry.EffectiveTLSMode())
+		ch <- myResult{myConn, err}
+	}()
+
+	var myConn *db.MySQLDB
+	var err error
+	select {
+	case r := <-ch:
+		myConn, err = r.conn, r.err
+	case <-time.After(30 * time.Second):
+		return nil, nil, fmt.Errorf("connection timed out after 30s — host may be unreachable")
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+
+	tables, err := myConn.Tables()
+	if err != nil {
+		myConn.Close()
+		return nil, nil, fmt.Errorf("load tables: %w", err)
+	}
+	if err := myConn.AllTableSchemas(tables); err != nil {
+		myConn.Close()
+		return nil, nil, fmt.Errorf("load schemas: %w", err)
+	}
+	return myConn, tables, nil
 }
 
 // openBigQueryDB opens a BigQuery connection (no tunnel, no AWS) and loads the

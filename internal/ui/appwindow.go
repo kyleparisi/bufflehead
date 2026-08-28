@@ -75,8 +75,11 @@ type GatewayConnection struct {
 
 // connDisplayKind returns the backend label shown in the title breadcrumb.
 func connDisplayKind(cfg models.GatewayEntry) string {
-	if cfg.IsBigQuery() {
+	switch {
+	case cfg.IsBigQuery():
 		return "BigQuery"
+	case cfg.IsMySQL():
+		return "MySQL"
 	}
 	return "PostgreSQL"
 }
@@ -94,6 +97,8 @@ func connPathFor(cfg models.GatewayEntry) string {
 	switch {
 	case cfg.IsBigQuery():
 		return fmt.Sprintf("bigquery://%s/%s", cfg.GCPProject, cfg.DefaultDataset)
+	case cfg.IsMySQL():
+		return fmt.Sprintf("mysql://%s:%d/%s", cfg.RDSHost, cfg.RDSPort, cfg.DBName)
 	case cfg.IsDirect():
 		return fmt.Sprintf("postgresql://%s:%d/%s", cfg.RDSHost, cfg.RDSPort, cfg.DBName)
 	default:
@@ -1417,19 +1422,26 @@ func (w *AppWindow) bindTabToConnection(ts *tabState, idx int) {
 	ts.State.IsDatabase = true
 	ts.connIdx = idx
 	isBQ := conn.Gateway != nil && conn.Gateway.Config.IsBigQuery()
-	if isBQ {
+	isMySQL := conn.Gateway != nil && conn.Gateway.Config.IsMySQL()
+	switch {
+	case isBQ:
 		ts.State.Dialect = models.DialectBigQuery
+	case isMySQL:
+		ts.State.Dialect = models.DialectMySQL
 	}
 	ts.schema.SetTables(conn.Tables)
 	ts.sqlPanel.SetCompletionTables(conn.Tables)
 	ts.schema.OnTableClicked = func(tableName string) {
 		ts.State.ActiveTable = tableName
 		// Quote each dotted segment separately so schema-qualified names become
-		// "schema"."table" (Postgres/DuckDB) or `dataset`.`table` (BigQuery),
-		// not the invalid single-quoted whole name.
+		// "schema"."table" (Postgres/DuckDB), `dataset`.`table` (BigQuery), or
+		// `db`.`table` (MySQL), not the invalid single-quoted whole name.
 		quote := db.QuoteQualifiedName
-		if isBQ {
+		switch {
+		case isBQ:
 			quote = db.QuoteBigQueryName
+		case isMySQL:
+			quote = db.QuoteMySQLName
 		}
 		ts.State.UserSQL = "SELECT * FROM " + quote(tableName)
 		ts.State.PageOffset = 0
@@ -1668,14 +1680,14 @@ func (w *AppWindow) showDatabaseSwitcher(idx int) {
 		return
 	}
 
-	pg, ok := conn.DB.(*db.PostgresDB)
+	switcher, ok := conn.DB.(db.DatabaseSwitcher)
 	if !ok {
 		return
 	}
 	current := conn.Gateway.Config.DBName
 	w.statusBar.SetStatus("Loading databases…")
 	go func() {
-		dbs, err := pg.Databases()
+		dbs, err := switcher.Databases()
 		w.dbListMsg = &dbListResult{connIdx: idx, current: current, dbs: dbs, err: err}
 	}()
 }
@@ -2288,8 +2300,13 @@ func buildAIPrompt(entry models.GatewayEntry, tables []db.TableInfo, controlAddr
 	connName := entry.Name
 	auth := bearerFlag(controlKey)
 
+	engine := "PostgreSQL"
+	if entry.IsMySQL() {
+		engine = "MySQL"
+	}
+
 	var b strings.Builder
-	b.WriteString("I have a PostgreSQL database you can query.\n")
+	b.WriteString(fmt.Sprintf("I have a %s database you can query.\n", engine))
 	b.WriteString(fmt.Sprintf("Database: %s\n", entry.DBName))
 	b.WriteString(authNote(controlKey))
 	b.WriteString(fmt.Sprintf("  curl -s%s -X POST http://%s/sql -d '{\"sql\":\"SELECT * FROM table LIMIT 10\",\"connection\":\"%s\"}'\n", auth, controlAddr, connName))

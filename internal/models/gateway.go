@@ -26,6 +26,9 @@ const (
 	// KindBigQuery queries Google BigQuery via the native client. No tunnel and
 	// no AWS; auth is Application Default Credentials (the file gcloud wrote).
 	KindBigQuery ConnKind = "bigquery"
+	// KindMySQL connects directly to a reachable MySQL host (local, over a VPN,
+	// or a public endpoint). No AWS credentials or tunnel are used.
+	KindMySQL ConnKind = "mysql"
 )
 
 // DefaultBQMaxBytesBilled caps bytes scanned per BigQuery query when a
@@ -87,6 +90,27 @@ func (g *GatewayEntry) EffectiveMaxBytesBilled() int64 {
 // SSM tunnel).
 func (g *GatewayEntry) IsDirect() bool {
 	return g.Kind == KindPostgres
+}
+
+// IsMySQL reports whether this entry is a direct MySQL connection (no AWS SSM
+// tunnel).
+func (g *GatewayEntry) IsMySQL() bool {
+	return g.Kind == KindMySQL
+}
+
+// IsNoAWS reports whether this entry connects without AWS SSO/tunnel: direct
+// Postgres, direct MySQL, or BigQuery.
+func (g *GatewayEntry) IsNoAWS() bool {
+	return g.IsDirect() || g.IsMySQL() || g.IsBigQuery()
+}
+
+// EffectiveTLSMode returns the go-sql-driver TLS mode for a direct MySQL
+// connection, defaulting to "preferred" when unset.
+func (g *GatewayEntry) EffectiveTLSMode() string {
+	if g.SSLMode == "" {
+		return "preferred"
+	}
+	return g.SSLMode
 }
 
 // UseIAMAuth returns true if this entry uses RDS IAM authentication.

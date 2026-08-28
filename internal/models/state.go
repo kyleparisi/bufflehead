@@ -22,11 +22,13 @@ const (
 	DialectDefault SQLDialect = ""
 	// DialectBigQuery uses backtick-quoted identifiers (GoogleSQL).
 	DialectBigQuery SQLDialect = "bigquery"
+	// DialectMySQL uses backtick-quoted identifiers.
+	DialectMySQL SQLDialect = "mysql"
 )
 
 // quoteIdent quotes a single identifier per the state's dialect.
 func (s *AppState) quoteIdent(name string) string {
-	if s.Dialect == DialectBigQuery {
+	if s.Dialect == DialectBigQuery || s.Dialect == DialectMySQL {
 		return "`" + name + "`"
 	}
 	return "\"" + name + "\""
