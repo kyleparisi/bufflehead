@@ -1221,10 +1221,10 @@ func (w *AppWindow) onFileSelected(path string) {
 }
 
 func (w *AppWindow) onFileSelectedWithCmd(path string, cmd *control.Command) {
-	// Check the SQLite header before the extension test: a SQLite database
-	// needs to be ATTACHed via the sqlite extension, not opened natively or
-	// read as a data file, and it may carry a .db extension that would
-	// otherwise be routed to the native DuckDB opener.
+	// Check the SQLite header before the extension test: a SQLite database is
+	// opened by the native SQLite backend, not the DuckDB opener or read as a
+	// data file, and it may carry a .db extension that would otherwise be routed
+	// to the DuckDB opener.
 	if isSQLiteFile(path) {
 		w.onSQLiteOpenedWithCmd(path, cmd)
 		return
@@ -1330,7 +1330,7 @@ func (w *AppWindow) onDatabaseOpenedWithCmd(path string, cmd *control.Command) {
 }
 
 // onSQLiteOpenedWithCmd opens a SQLite file as a new connection. It mirrors
-// onDatabaseOpenedWithCmd but attaches via the sqlite extension; the result
+// onDatabaseOpenedWithCmd but opens via the native SQLite backend; the result
 // flows through the same ReqOpenDB path in handleOpenDBResult.
 func (w *AppWindow) onSQLiteOpenedWithCmd(path string, cmd *control.Command) {
 	w.statusBar.SetStatus("Opening database…")
@@ -2443,8 +2443,8 @@ func buildDBAIPrompt(connName, dbPath string, tables []db.TableInfo, controlAddr
 			if strings.EqualFold(t.Type, "view") {
 				prefix += " (view)"
 			}
-			// Columns may be unavailable (e.g. DuckDB's sqlite extension doesn't
-			// report view columns) — omit the parenthesised list in that case.
+			// Columns may be unavailable for some tables/views — omit the
+			// parenthesised list in that case.
 			var cols []string
 			for _, c := range t.Columns {
 				cols = append(cols, fmt.Sprintf("%s %s", c.Name, c.DataType))
