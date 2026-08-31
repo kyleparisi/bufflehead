@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -196,6 +197,20 @@ type gatewayCard struct {
 	connecting  bool
 	fromForm    bool // true if created from inline form (no statusDot/logLbl/actionBtn)
 	direct      bool // true for direct Postgres bookmarks (no AWS auth/tunnel)
+
+	// In-flight connect cancellation (the action button doubles as Cancel).
+	cancel    context.CancelFunc
+	cancelled bool
+
+	// Bastion instance picker, shown when a connect fails because several SSM
+	// instances are online and none can be auto-selected.
+	bastionRow     HBoxContainer.Instance
+	bastionPick    OptionButton.Instance
+	bastionIDs     []string // instance IDs corresponding to dropdown items
+	bastionLoading bool
+	bastionReady   bool
+	bastionErr     string
+	bastionResult  []bfaws.SSMInstance
 }
 
 func (g *GatewayScreen) SetConfig(cfg *models.GatewayConfig) {
@@ -2143,6 +2158,64 @@ func (g *GatewayScreen) refreshStepIndicators() {
 	setStepDone(g.step3Num, "③", step3Done)
 }
 
+// needsBastionPick reports whether a connect error means the user has to
+// choose a bastion instance manually (several SSM instances online, or none
+// configured on the entry) — retrying without a selection cannot succeed.
+func needsBastionPick(errMsg string) bool {
+	return strings.Contains(errMsg, "cannot auto-select bastion") ||
+		strings.Contains(errMsg, "no instance_id or instance_tags configured")
+}
+
+// addBastionPicker appends a hidden "Bastion: <dropdown>" row to a card. It is
+// revealed when a connect fails because the bastion instance is ambiguous, so
+// the user can pick one and Retry.
+func (g *GatewayScreen) addBastionPicker(card *gatewayCard, vbox VBoxContainer.Instance) {
+	row := HBoxContainer.New()
+	row.AsControl().AddThemeConstantOverride("separation", 8)
+
+	lbl := Label.New()
+	lbl.SetText("Bastion:")
+	lbl.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
+	lbl.AsControl().AddThemeColorOverride("font_color", colorTextDim)
+
+	pick := OptionButton.New()
+	pick.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
+	pick.AsControl().AddThemeFontSizeOverride("font_size", fontSize(11))
+	pick.OnItemSelected(func(index int) { g.onBastionPicked(card, index) })
+
+	row.AsNode().AddChild(lbl.AsNode())
+	row.AsNode().AddChild(pick.AsNode())
+	row.AsCanvasItem().SetVisible(false)
+	vbox.AsNode().AddChild(row.AsNode())
+
+	card.bastionRow = row
+	card.bastionPick = pick
+}
+
+// onBastionPicked pins the chosen SSM instance on the card's entry (and its
+// bookmark, if one exists) so the next Connect/Retry tunnels through it.
+func (g *GatewayScreen) onBastionPicked(card *gatewayCard, index int) {
+	if index <= 0 || index > len(card.bastionIDs) {
+		return
+	}
+	id := card.bastionIDs[index-1] // offset by 1 for placeholder item
+	card.entry.InstanceID = id
+	card.entry.InstanceTags = nil
+
+	// Persist the pick so future launches skip the ambiguity.
+	if g.bookmarks != nil {
+		if bm := g.bookmarks.FindByLabel(card.entry.Name); bm != nil {
+			updated := *bm
+			updated.InstanceID = id
+			updated.InstanceTags = nil
+			g.bookmarks.Add(updated)
+		}
+	}
+
+	card.statusLbl.SetText("Bastion " + id + " selected — click Retry")
+	card.statusLbl.AsControl().AddThemeColorOverride("font_color", colorTextMuted)
+}
+
 func (g *GatewayScreen) buildCardPanel(entry models.GatewayEntry, idx int) PanelContainer.Instance {
 	panel := PanelContainer.New()
 	border := makeStyleBox(colorBgPanel, 6, 1, colorBorderDim)
@@ -2226,6 +2299,7 @@ func (g *GatewayScreen) buildCardPanel(entry models.GatewayEntry, idx int) Panel
 		actionBtn: actionBtn,
 		statusDot: statusDot,
 	}
+	g.addBastionPicker(card, vbox)
 	g.cards = append(g.cards, card)
 
 	// Credentials are checked synchronously when the user clicks Connect (see
@@ -2385,6 +2459,7 @@ func (g *GatewayScreen) buildBookmarkCard(bm models.Bookmark) PanelContainer.Ins
 	}
 	if !noAWS {
 		card.auth = bfaws.NewAuthManager(bm.AWSProfile, bm.AWSRegion)
+		g.addBastionPicker(card, vbox)
 	}
 	g.cards = append(g.cards, card)
 	cardIdx := len(g.cards) - 1
@@ -2421,6 +2496,17 @@ func (g *GatewayScreen) onCardAction(idx int) {
 		return
 	}
 	card := g.cards[idx]
+
+	// While a connect is in flight the action button reads "Cancel" — clicking
+	// it aborts the attempt (stopping the tunnel and its reconnect loop).
+	if card.connecting {
+		if card.cancel != nil {
+			card.cancel()
+		}
+		card.statusLbl.SetText("Cancelling...")
+		card.actionBtn.AsBaseButton().SetDisabled(true)
+		return
+	}
 
 	// Direct Postgres bookmarks skip AWS auth/tunnel entirely.
 	if card.direct {
@@ -2472,12 +2558,16 @@ func (g *GatewayScreen) onCardAction(idx int) {
 	case bfaws.CredsValid:
 		card.statusLbl.SetText("Connecting...")
 		card.statusDot.AsControl().AddThemeColorOverride("font_color", colorStatusYellow)
-		card.actionBtn.SetText("Connecting...")
-		card.actionBtn.AsBaseButton().SetDisabled(true)
+		// Stay enabled so the user can abort the attempt.
+		card.actionBtn.SetText("Cancel")
+		card.actionBtn.AsBaseButton().SetDisabled(false)
 		card.connecting = true
 		card.loginLog = ""
 		card.logLbl.SetText("")
 		card.logLbl.AsCanvasItem().SetVisible(true)
+		if card.bastionRow != (HBoxContainer.Instance{}) {
+			card.bastionRow.AsCanvasItem().SetVisible(false)
+		}
 		g.startGatewayConnection(card)
 	}
 }
@@ -2486,7 +2576,12 @@ func (g *GatewayScreen) startGatewayConnection(card *gatewayCard) {
 	entry := card.entry
 	auth := card.auth
 
+	ctx, cancel := context.WithCancel(context.Background())
+	card.cancel = cancel
+
 	go func() {
+		defer cancel()
+
 		appendLog := func(msg string) {
 			if card.loginLog != "" {
 				card.loginLog += "\n"
@@ -2495,9 +2590,14 @@ func (g *GatewayScreen) startGatewayConnection(card *gatewayCard) {
 			card.needsUpdate = true
 		}
 
-		tunnel, updated, err := establishTunnel(auth, entry, appendLog)
+		tunnel, updated, err := establishTunnel(ctx, auth, entry, appendLog)
 		if err != nil {
-			card.loginErr = err.Error()
+			if ctx.Err() != nil {
+				// User hit Cancel — not an error state.
+				card.cancelled = true
+			} else {
+				card.loginErr = err.Error()
+			}
 			card.needsUpdate = true
 			return
 		}
@@ -2685,9 +2785,55 @@ func (g *GatewayScreen) Process(delta Float.X) {
 			}
 		}
 
+		// User cancelled an in-flight connect — reset to the idle state.
+		if card.cancelled {
+			card.cancelled = false
+			card.connecting = false
+			card.cancel = nil
+			if !card.fromForm {
+				card.statusLbl.SetText("Cancelled — click Connect to try again")
+				card.statusLbl.AsControl().AddThemeColorOverride("font_color", colorTextMuted)
+				card.statusDot.SetText("○")
+				card.statusDot.AsControl().AddThemeColorOverride("font_color", colorStatusGray)
+				card.actionBtn.SetText("Connect")
+				card.actionBtn.AsBaseButton().SetDisabled(false)
+				card.logLbl.AsCanvasItem().SetVisible(false)
+			}
+			continue
+		}
+
+		// Bastion instance list loaded — populate the picker on the card.
+		if card.bastionReady {
+			card.bastionReady = false
+			card.bastionLoading = false
+			if card.bastionErr != "" {
+				card.statusLbl.SetText("Error loading instances: " + card.bastionErr)
+				card.statusLbl.AsControl().AddThemeColorOverride("font_color", colorStatusRed)
+				card.bastionErr = ""
+			} else {
+				card.bastionPick.Clear()
+				card.bastionIDs = nil
+				card.bastionPick.AddItem(fmt.Sprintf("Select an instance (%d online)...", len(card.bastionResult)))
+				for _, inst := range card.bastionResult {
+					label := inst.InstanceID
+					if inst.Name != "" {
+						label = fmt.Sprintf("%s (%s)", inst.Name, inst.InstanceID)
+					}
+					card.bastionPick.AddItem(label)
+					card.bastionIDs = append(card.bastionIDs, inst.InstanceID)
+				}
+				card.bastionResult = nil
+				card.bastionRow.AsCanvasItem().SetVisible(true)
+				card.statusLbl.SetText("Pick a bastion instance, then Retry")
+				card.statusLbl.AsControl().AddThemeColorOverride("font_color", colorStatusYellow)
+			}
+			continue
+		}
+
 		if card.loginErr != "" {
 			errMsg := "Error: " + card.loginErr
 			card.connecting = false
+			card.cancel = nil
 			if card.fromForm {
 				g.formStatus.SetText(errMsg)
 				g.formStatus.AsControl().AddThemeColorOverride("font_color", colorStatusRed)
@@ -2696,6 +2842,25 @@ func (g *GatewayScreen) Process(delta Float.X) {
 				card.statusDot.AsControl().AddThemeColorOverride("font_color", colorStatusRed)
 				card.actionBtn.AsBaseButton().SetDisabled(false)
 				card.actionBtn.SetText("Retry")
+
+				// The bastion is ambiguous (several SSM instances online) —
+				// fetch the list so the user can pick one and retry.
+				if needsBastionPick(card.loginErr) && !card.bastionLoading {
+					card.bastionLoading = true
+					card.statusLbl.SetText("Multiple bastion instances online — loading list...")
+					card.statusLbl.AsControl().AddThemeColorOverride("font_color", colorStatusYellow)
+					auth := card.auth
+					go func() {
+						instances, err := auth.ListSSMInstances()
+						if err != nil {
+							card.bastionErr = err.Error()
+						} else {
+							card.bastionResult = instances
+						}
+						card.bastionReady = true
+						card.needsUpdate = true
+					}()
+				}
 			}
 			card.loginErr = ""
 			continue
@@ -2703,6 +2868,7 @@ func (g *GatewayScreen) Process(delta Float.X) {
 
 		if card.connected {
 			card.connecting = false
+			card.cancel = nil
 			if card.fromForm {
 				g.formStatus.SetText("Connected!")
 				g.formStatus.AsControl().AddThemeColorOverride("font_color", colorStatusGreen)
@@ -2710,6 +2876,7 @@ func (g *GatewayScreen) Process(delta Float.X) {
 				card.statusLbl.SetText("Connected")
 				card.statusDot.SetText("●")
 				card.statusDot.AsControl().AddThemeColorOverride("font_color", colorStatusGreen)
+				card.actionBtn.SetText("Connect")
 				card.actionBtn.AsBaseButton().SetDisabled(true)
 				card.logLbl.AsCanvasItem().SetVisible(false)
 			}

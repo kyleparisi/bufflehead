@@ -2,6 +2,7 @@ package aws
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -11,6 +12,14 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/config"
 )
+
+// PermanentError wraps an error that reconnecting cannot fix without user
+// action (e.g. several bastion instances online with no way to auto-select
+// one). The reconnect loop fails immediately instead of retrying.
+type PermanentError struct{ Err error }
+
+func (e *PermanentError) Error() string { return e.Err.Error() }
+func (e *PermanentError) Unwrap() error { return e.Err }
 
 // TunnelStatus represents the state of an SSM tunnel.
 type TunnelStatus int
@@ -149,6 +158,18 @@ func (t *TunnelManager) fail(msg string) {
 	t.setStatusNotify(TunnelError, msg)
 }
 
+// failIfPermanent moves the tunnel to TunnelError and reports true when err is
+// a PermanentError — one that reconnecting can never fix without user action.
+func (t *TunnelManager) failIfPermanent(err error) bool {
+	var perm *PermanentError
+	if !errors.As(err, &perm) {
+		return false
+	}
+	log.Printf("ssm: not retrying, permanent error: %v", err)
+	t.fail(err.Error())
+	return true
+}
+
 // shouldRetry decides whether a failed attempt is worth retrying. Auth errors
 // (expired SSO login) can never succeed without user action, so they fail
 // immediately; other errors retry up to maxReconnectAttempts. When it returns
@@ -201,6 +222,9 @@ func (t *TunnelManager) runWithReconnect(ctx context.Context, cfg TunnelConfig) 
 					return
 				}
 				log.Printf("ssm: instance resolution error: %v", err)
+				if t.failIfPermanent(err) {
+					return
+				}
 				attempt++
 				if !t.shouldRetry(attempt, err.Error()) {
 					return
@@ -330,10 +354,14 @@ func (t *TunnelManager) IsPortReady() bool {
 	return t.status == TunnelConnected
 }
 
-// WaitReady blocks until the tunnel is connected or timeout.
-func (t *TunnelManager) WaitReady(timeout time.Duration) error {
+// WaitReady blocks until the tunnel is connected, the context is cancelled,
+// or the timeout elapses.
+func (t *TunnelManager) WaitReady(ctx context.Context, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if t.IsPortReady() {
 			return nil
 		}

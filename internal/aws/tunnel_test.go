@@ -2,6 +2,7 @@ package aws
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -79,6 +80,45 @@ func TestShouldRetry_TransientError(t *testing.T) {
 	}
 	if !strings.Contains(tm.LastError(), "giving up after") {
 		t.Errorf("lastError should mention giving up: %q", tm.LastError())
+	}
+}
+
+func TestFailIfPermanent_PermanentErrorFailsImmediately(t *testing.T) {
+	tm := NewTunnelManager(nil)
+	err := &PermanentError{Err: errors.New("4 SSM instances online — cannot auto-select bastion")}
+
+	if !tm.failIfPermanent(err) {
+		t.Fatalf("expected failIfPermanent=true for a PermanentError")
+	}
+	if tm.Status() != TunnelError {
+		t.Errorf("expected status TunnelError, got %v", tm.Status())
+	}
+	if tm.LastError() != err.Error() {
+		t.Errorf("lastError = %q, want %q", tm.LastError(), err.Error())
+	}
+}
+
+func TestFailIfPermanent_WrappedPermanentError(t *testing.T) {
+	tm := NewTunnelManager(nil)
+	err := fmt.Errorf("instance resolution: %w",
+		&PermanentError{Err: errors.New("cannot auto-select bastion")})
+
+	if !tm.failIfPermanent(err) {
+		t.Fatalf("expected failIfPermanent=true for a wrapped PermanentError")
+	}
+	if tm.Status() != TunnelError {
+		t.Errorf("expected status TunnelError, got %v", tm.Status())
+	}
+}
+
+func TestFailIfPermanent_TransientErrorKeepsRetrying(t *testing.T) {
+	tm := NewTunnelManager(nil)
+
+	if tm.failIfPermanent(errors.New("dial tcp: connection refused")) {
+		t.Fatalf("expected failIfPermanent=false for a plain error")
+	}
+	if tm.Status() == TunnelError {
+		t.Errorf("status should not be TunnelError for a retryable error")
 	}
 }
 
