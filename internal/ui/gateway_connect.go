@@ -18,12 +18,13 @@ import (
 
 // establishTunnel allocates a local port, resolves the bastion instance, and
 // starts + waits for an SSM tunnel for the given gateway entry. It returns the
-// running tunnel and the entry updated with the assigned LocalPort.
+// running tunnel and the entry updated with the assigned LocalPort. Cancelling
+// ctx aborts the attempt and stops the tunnel.
 //
 // logf, if non-nil, receives human-readable progress messages. This is shared
 // by the initial gateway connect flow and the reconnect flow so both build the
 // tunnel identically (including spot-instance resolution on reconnect).
-func establishTunnel(auth *bfaws.AuthManager, entry models.GatewayEntry, logf func(string)) (*bfaws.TunnelManager, models.GatewayEntry, error) {
+func establishTunnel(ctx context.Context, auth *bfaws.AuthManager, entry models.GatewayEntry, logf func(string)) (*bfaws.TunnelManager, models.GatewayEntry, error) {
 	log := func(msg string) {
 		if logf != nil {
 			logf(msg)
@@ -41,6 +42,9 @@ func establishTunnel(auth *bfaws.AuthManager, entry models.GatewayEntry, logf fu
 	instanceID, err := auth.ResolveInstanceID(entry.InstanceID, entry.InstanceTags)
 	if err != nil {
 		return nil, entry, fmt.Errorf("instance resolution: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, entry, err
 	}
 
 	log("Starting SSM tunnel...")
@@ -77,7 +81,9 @@ func establishTunnel(auth *bfaws.AuthManager, entry models.GatewayEntry, logf fu
 			case 1:
 				return instances[0].InstanceID, nil
 			default:
-				return "", fmt.Errorf("%d SSM instances online — cannot auto-select bastion", len(instances))
+				// Ambiguous — only the user can pick the right bastion, so
+				// retrying is pointless. Fail the tunnel immediately.
+				return "", &bfaws.PermanentError{Err: fmt.Errorf("%d SSM instances online — cannot auto-select bastion", len(instances))}
 			}
 		}
 	}
@@ -86,8 +92,13 @@ func establishTunnel(auth *bfaws.AuthManager, entry models.GatewayEntry, logf fu
 		return nil, entry, fmt.Errorf("start tunnel: %w", err)
 	}
 
+	// Tear the tunnel down (which also halts its reconnect loop) as soon as
+	// the caller cancels — e.g. the user hit Cancel on the connection card.
+	stopOnCancel := context.AfterFunc(ctx, func() { tunnel.Stop() })
+	defer stopOnCancel()
+
 	log("Waiting for tunnel...")
-	if err := tunnel.WaitReady(60 * time.Second); err != nil {
+	if err := tunnel.WaitReady(ctx, 60*time.Second); err != nil {
 		tunnel.Stop()
 		return nil, entry, fmt.Errorf("tunnel not ready: %w", err)
 	}
@@ -246,7 +257,7 @@ func (w *AppWindow) reconnectConnection(idx int, cmd *control.Command) {
 		}
 
 		// Re-establish the SSM tunnel.
-		tunnel, updated, err := establishTunnel(auth, entry, nil)
+		tunnel, updated, err := establishTunnel(context.Background(), auth, entry, nil)
 		if err != nil {
 			outcome.Steps = append(outcome.Steps, control.ReconnectStep{
 				Step: "start_tunnel", OK: false, Error: err.Error(),
