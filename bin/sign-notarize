@@ -1,12 +1,9 @@
 #!/bin/bash
 # Sign, notarize, and staple the macOS app + DMG for Developer ID distribution.
 #
-# Prerequisites (one-time, interactive — see README/notes):
-#   1. A "Developer ID Application" certificate installed in your login keychain.
-#        security find-identity -v -p codesigning     # should list it
-#   2. notarytool credentials saved as a keychain profile:
-#        xcrun notarytool store-credentials "bufflehead-notary" \
-#          --apple-id "you@example.com" --team-id "TEAMID" --password "app-specific-pw"
+# Runs both locally (credentials in your login keychain) and in CI (credentials
+# injected as env vars / GitHub secrets) — see "Credentials" below. This is the
+# same split bin/build-windows uses for Authenticode signing.
 #
 # Usage:
 #   SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" \
@@ -17,6 +14,27 @@
 #   SKIP_BUILD=1     reuse the existing .app instead of rebuilding
 #   SKIP_NOTARIZE=1  sign only (fast local check; app will NOT pass Gatekeeper
 #                    on other Macs without notarization)
+#
+# --- Credentials -------------------------------------------------------------
+# Signing identity, either:
+#   (a) Local — a "Developer ID Application" cert already in your login keychain
+#       plus SIGN_IDENTITY naming it:
+#         security find-identity -v -p codesigning     # should list it
+#   (b) CI — the cert as a base64 .p12, imported into a throwaway keychain that
+#       is deleted on exit. SIGN_IDENTITY is derived from the cert if unset:
+#         MACOS_CERT_P12_BASE64   base64 of the exported .p12 (cert + key)
+#         MACOS_CERT_PASSWORD     the .p12 export password
+#
+# Notary credentials, either:
+#   (a) App Store Connect API key (preferred, and what CI uses) — not tied to an
+#       Apple ID or 2FA:
+#         APPLE_API_KEY_P8_BASE64  base64 of the AuthKey_XXXXXXXX.p8
+#         APPLE_API_KEY_ID         the Key ID
+#         APPLE_API_ISSUER_ID      the Issuer ID (UUID)
+#   (b) A keychain profile saved locally:
+#         xcrun notarytool store-credentials "bufflehead-notary" \
+#           --apple-id "you@example.com" --team-id "TEAMID" --password "app-specific-pw"
+#         NOTARY_PROFILE=bufflehead-notary
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -25,11 +43,121 @@ DMG="$ROOT/releases/Bufflehead.dmg"
 ENTITLEMENTS="$ROOT/packaging/macos/entitlements.plist"
 DMG_SETTINGS="$ROOT/packaging/dmg/settings.py"
 
-: "${SIGN_IDENTITY:?Set SIGN_IDENTITY to your 'Developer ID Application: ...' identity}"
 : "${SKIP_BUILD:=0}"
 : "${SKIP_NOTARIZE:=0}"
+
+# Everything transient (temp keychain, decoded .p8, manifest) is registered here
+# and torn down by a single EXIT trap — a second `trap ... EXIT` would silently
+# replace the first, leaking the keychain and private key onto the runner.
+CLEANUP_KEYCHAIN=""
+CLEANUP_KEYCHAIN_LIST=""
+CLEANUP_FILES=()
+cleanup() {
+    # Capture the status that triggered the trap FIRST and hand it back at the
+    # end: an EXIT trap that falls off its own last command replaces the
+    # script's exit status, which would turn a failed sign/notarize green in CI.
+    local rc=$?
+    # No `&&` chains here: under `set -e` a false test would abort the handler
+    # and leak the keychain (and the private key inside it) onto the runner.
+    if [ ${#CLEANUP_FILES[@]} -gt 0 ]; then
+        rm -f "${CLEANUP_FILES[@]}" || true
+    fi
+    if [ -n "$CLEANUP_KEYCHAIN" ]; then
+        # Put the user's search list back before deleting: importing left a
+        # reference to our throwaway keychain in it, and on a local run that
+        # would persist as a dangling entry long after this script exits.
+        if [ -n "$CLEANUP_KEYCHAIN_LIST" ]; then
+            # shellcheck disable=SC2086
+            security list-keychains -d user -s $CLEANUP_KEYCHAIN_LIST 2>/dev/null || true
+        fi
+        security delete-keychain "$CLEANUP_KEYCHAIN" 2>/dev/null || true
+    fi
+    return $rc
+}
+trap cleanup EXIT
+
+# Guard required env vars with an explicit exit rather than `${VAR:?msg}`:
+# a `:?` expansion failure exits the shell WITHOUT setting `$?`, so the EXIT
+# trap sees 0 and the script would report success on a missing credential.
+require() {   # require VAR_NAME "error message"
+    if [ -z "${!1:-}" ]; then
+        echo "Error: $2" >&2
+        exit 1
+    fi
+}
+
+# Decode $<VAR_NAME> (base64) to a file. Uses python3 — already required below
+# for dmgbuild — because base64(1)'s decode flag is not portable: BSD/macOS
+# historically took only -D while GNU takes -d/--decode, and which one is on
+# PATH depends on the runner image.
+b64decode() {   # b64decode VAR_NAME OUT_PATH
+    python3 -c 'import base64, os, sys; sys.stdout.buffer.write(base64.b64decode(os.environ[sys.argv[1]]))' \
+        "$1" > "$2"
+}
+
+# --- 0a. Signing identity ----------------------------------------------------
+# With a .p12 in the environment, import it into a throwaway keychain rather
+# than the login keychain, so CI never mutates persistent state and the private
+# key is destroyed when the script exits.
+if [ -n "${MACOS_CERT_P12_BASE64:-}" ]; then
+    require MACOS_CERT_PASSWORD "Set MACOS_CERT_PASSWORD alongside MACOS_CERT_P12_BASE64"
+    echo "==> Importing signing certificate into a temporary keychain..."
+    # Outside the working tree on purpose — a crash between create and cleanup
+    # must not leave private key material sitting in the repo checkout.
+    KEYCHAIN="$(mktemp -d -t bufflehead-kc)/build-signing.keychain-db"
+    KEYCHAIN_PW="$(uuidgen)"
+    P12="$(mktemp -t bufflehead-cert)"
+    CLEANUP_FILES+=("$P12")
+
+    b64decode MACOS_CERT_P12_BASE64 "$P12"
+    security create-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN"
+    CLEANUP_KEYCHAIN="$KEYCHAIN"
+    # No auto-lock: a long notarization wait must not lock the key mid-run.
+    security set-keychain-settings -lut 21600 "$KEYCHAIN"
+    security unlock-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN"
+    security import "$P12" -k "$KEYCHAIN" -P "$MACOS_CERT_PASSWORD" \
+        -T /usr/bin/codesign -T /usr/bin/security -f pkcs12
+    # Without this, codesign blocks on a GUI "allow access?" prompt that can
+    # never be answered on a headless runner.
+    security set-key-partition-list -S apple-tool:,apple:,codesign: \
+        -s -k "$KEYCHAIN_PW" "$KEYCHAIN" >/dev/null
+    # Prepend to the search list so codesign and notarytool can find the identity,
+    # remembering the previous list so cleanup can restore it.
+    CLEANUP_KEYCHAIN_LIST="$(security list-keychains -d user | tr -d '" ')"
+    # shellcheck disable=SC2086
+    security list-keychains -d user -s "$KEYCHAIN" $CLEANUP_KEYCHAIN_LIST
+
+    if [ -z "${SIGN_IDENTITY:-}" ]; then
+        SIGN_IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" \
+            | awk -F'"' '/Developer ID Application/{print $2; exit}')"
+        [ -n "$SIGN_IDENTITY" ] \
+            || { echo "Error: no 'Developer ID Application' identity in the imported .p12" >&2; exit 1; }
+        echo "    derived SIGN_IDENTITY: $SIGN_IDENTITY"
+    fi
+fi
+require SIGN_IDENTITY "Set SIGN_IDENTITY to your 'Developer ID Application: ...' identity (or MACOS_CERT_P12_BASE64 to import one)"
+
+# --- 0b. Notary credentials --------------------------------------------------
+# Resolved up front so a credential mistake fails in seconds, not after a
+# multi-minute build. NOTARY_ARGS is the auth flag set passed to notarytool.
+NOTARY_ARGS=()
 if [ "$SKIP_NOTARIZE" != "1" ]; then
-    : "${NOTARY_PROFILE:?Set NOTARY_PROFILE (saved via 'xcrun notarytool store-credentials'), or set SKIP_NOTARIZE=1}"
+    if [ -n "${APPLE_API_KEY_P8_BASE64:-}" ]; then
+        require APPLE_API_KEY_ID "Set APPLE_API_KEY_ID alongside APPLE_API_KEY_P8_BASE64"
+        require APPLE_API_ISSUER_ID "Set APPLE_API_ISSUER_ID alongside APPLE_API_KEY_P8_BASE64"
+        API_KEY="$(mktemp -t bufflehead-authkey)"
+        CLEANUP_FILES+=("$API_KEY")
+        b64decode APPLE_API_KEY_P8_BASE64 "$API_KEY"
+        NOTARY_ARGS=(--key "$API_KEY" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID")
+        echo "==> Notarizing with App Store Connect API key $APPLE_API_KEY_ID"
+    elif [ -n "${NOTARY_PROFILE:-}" ]; then
+        NOTARY_ARGS=(--keychain-profile "$NOTARY_PROFILE")
+        echo "==> Notarizing with keychain profile '$NOTARY_PROFILE'"
+    else
+        echo "Error: no notary credentials. Set APPLE_API_KEY_P8_BASE64 + APPLE_API_KEY_ID +" >&2
+        echo "       APPLE_API_ISSUER_ID, or NOTARY_PROFILE, or SKIP_NOTARIZE=1." >&2
+        exit 1
+    fi
 fi
 
 cd "$ROOT"
@@ -38,10 +166,46 @@ cd "$ROOT"
 if [ "$SKIP_BUILD" = "1" ]; then
     echo "==> Skipping build (SKIP_BUILD=1)"
 else
+    # Pin the gd CLI to the graphics.gd version in go.mod so the CLI (and the
+    # Godot version it targets) never floats out from under the app — same
+    # bootstrap bin/build-linux does, so a CI runner with no gd installed works.
+    GD_VERSION="$(awk '$1=="graphics.gd"{print $2; exit}' go.mod)"
+    echo "==> Installing gd CLI $GD_VERSION..."
+    go install "graphics.gd/cmd/gd@$GD_VERSION"
+    export PATH="$(go env GOPATH)/bin:$PATH"
+
+    # gd refuses to auto-download Godot when it sees GOTOOLCHAIN=local (which
+    # actions/setup-go pins). Setting it to the exact installed version keeps
+    # the toolchain pinned while re-enabling the download. GDPATH must be
+    # writable.
+    export GDPATH="${GDPATH:-$HOME/gd}"
+    export GOTOOLCHAIN="$(go env GOVERSION)"   # e.g. go1.26.0 (never "local")
+
     echo "==> Building macOS app..."
-    GOOS=macos gd build ./cmd/viewer
+    # Godot's headless export can segfault on teardown on GPU-less machines
+    # AFTER writing the .app, so trust the artifact, not the exit code.
+    gd_rc=0
+    GOOS=macos gd build ./cmd/viewer || gd_rc=$?
+    if [ ! -d "$APP" ]; then
+        echo "Error: gd build failed (exit $gd_rc): $APP not produced" >&2
+        exit 1
+    fi
+    [ "$gd_rc" -eq 0 ] \
+        || echo "note: gd exited $gd_rc but the .app is present (Godot teardown segfault)"
 fi
 [ -d "$APP" ] || { echo "Error: $APP not found" >&2; exit 1; }
+
+# The DMG ships to users on both architectures — a thin build here would
+# silently exclude every Intel Mac, so fail loudly instead.
+MAIN_BIN="$APP/Contents/MacOS/Bufflehead"
+if [ -f "$MAIN_BIN" ]; then
+    archs="$(lipo -archs "$MAIN_BIN" 2>/dev/null || true)"
+    echo "==> Architectures: ${archs:-unknown}"
+    case "$archs" in
+        *x86_64*arm64*|*arm64*x86_64*) ;;
+        *) echo "Error: $MAIN_BIN is not universal (got '${archs:-unknown}')" >&2; exit 1 ;;
+    esac
+fi
 
 # --- 2. Sign every nested Mach-O binary, deepest-first ----------------------
 # Hardened runtime + secure timestamp + our entitlements. Signing inside-out is
@@ -55,7 +219,7 @@ sign_one() {
 
 echo "==> Discovering nested Mach-O binaries..."
 manifest="$(mktemp)"
-trap 'rm -f "$manifest"' EXIT
+CLEANUP_FILES+=("$manifest")
 while IFS= read -r -d '' f; do
     if file -b "$f" | grep -q "Mach-O"; then
         # prefix with slash-count so we can sort deepest-first
@@ -104,7 +268,7 @@ if [ "$SKIP_NOTARIZE" = "1" ]; then
     echo "    NOTE: unnotarized — will be blocked by Gatekeeper on other Macs."
 else
     echo "==> Submitting to Apple notary service (this can take a few minutes)..."
-    xcrun notarytool submit "$DMG" --keychain-profile "$NOTARY_PROFILE" --wait
+    xcrun notarytool submit "$DMG" "${NOTARY_ARGS[@]}" --wait
     echo "==> Stapling notarization ticket..."
     xcrun stapler staple "$DMG"
     # Staple the app too, so a copy dragged out of the DMG is self-contained.

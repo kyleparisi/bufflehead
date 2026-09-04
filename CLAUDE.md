@@ -103,11 +103,27 @@ If the `gopls` and `godoc` MCP servers are available, use them for Go workspace 
 Bump the version in `graphics/export_presets.cfg` (macOS `application/short_version`
 + `application/version`, and the Windows presets' `file_version`/`product_version`).
 
-**Signed + notarized DMG (Developer ID — this is what ships to users):** builds
-the app, deep-signs every nested Mach-O with the hardened runtime, builds the
-styled DMG, then notarizes and staples it. Requires a "Developer ID Application"
-cert in the keychain and notary credentials saved as a keychain profile (see the
-header comment in `bin/sign-notarize`).
+**Signed + notarized DMG (Developer ID — this is what ships to users):**
+`bin/sign-notarize` builds the app, deep-signs every nested Mach-O with the
+hardened runtime, builds the styled DMG, then notarizes and staples it. It runs
+either in CI or locally — same script, credentials come from a different place.
+
+*Via CI (preferred — no dependency on one machine's keychain):* the `Build macOS`
+workflow (`.github/workflows/build-macos.yml`) runs it on a macOS runner with the
+signing credentials as repo secrets. Trigger it and download the DMG with:
+```bash
+./bin/release-dmg-ci
+gh release upload vX.Y.Z releases/Bufflehead.dmg --clobber
+```
+Required repo secrets — `MACOS_CERT_P12_BASE64`, `MACOS_CERT_PASSWORD` (the
+Developer ID cert as a base64 `.p12`), plus `APPLE_API_KEY_P8_BASE64`,
+`APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID` (an App Store Connect API key, which
+unlike an app-specific password is not tied to an Apple ID or 2FA). The workflow
+checks all five are set before the build, and re-verifies the stapled ticket with
+`stapler validate` + `spctl` before uploading the artifact. In CI the cert is
+imported into a throwaway keychain that is deleted on exit.
+
+*Locally* (credentials in your login keychain, per `bin/sign-notarize`'s header):
 ```bash
 SIGN_IDENTITY="Developer ID Application: Kyle Parisi (63GMD6U4J2)" \
 NOTARY_PROFILE="bufflehead-notary" ./bin/sign-notarize

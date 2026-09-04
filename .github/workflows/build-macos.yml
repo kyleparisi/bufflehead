@@ -1,0 +1,88 @@
+name: Build macOS
+
+# Builds the universal macOS .app, signs it with the Developer ID cert, packages
+# the styled DMG, notarizes it with Apple and staples the ticket — natively on a
+# macOS runner. The build/sign logic lives in bin/sign-notarize so it can be run
+# locally too, rather than being spread across GitHub Actions steps. Triggered
+# manually (or by bin/release-dmg-ci).
+#
+# Required repo secrets (see bin/sign-notarize's header for how to produce them):
+#   MACOS_CERT_P12_BASE64    "Developer ID Application" cert + key, as base64 .p12
+#   MACOS_CERT_PASSWORD      the .p12 export password
+#   APPLE_API_KEY_P8_BASE64  App Store Connect API key (.p8), base64
+#   APPLE_API_KEY_ID         its Key ID
+#   APPLE_API_ISSUER_ID      its Issuer ID
+#
+# The job fails fast if any are missing — unlike the Windows build, an unsigned
+# DMG is not a useful artifact, since Gatekeeper blocks it on every other Mac.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15   # arm64 runner; gd cross-builds the x86_64 slice too
+    timeout-minutes: 90 # the build is slow and Apple's notary queue is variable
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      # Fail before the ~20 minute build rather than at the signing step.
+      - name: Check signing secrets are present
+        env:
+          MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: |
+          missing=""
+          for v in MACOS_CERT_P12_BASE64 MACOS_CERT_PASSWORD \
+                   APPLE_API_KEY_P8_BASE64 APPLE_API_KEY_ID APPLE_API_ISSUER_ID; do
+            [ -n "${!v}" ] || missing="$missing $v"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repo secret(s):$missing"
+            exit 1
+          fi
+          echo "All signing secrets present."
+
+      # dmgbuild builds the styled DMG. The runner's python is externally
+      # managed, so install into a venv and put it on PATH rather than fighting
+      # pip's --break-system-packages.
+      - name: Install dmgbuild
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install --quiet --upgrade pip dmgbuild
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
+
+      - name: Build, sign, notarize, staple
+        env:
+          # Pin GDPATH so gd is not in "local toolchain" mode and will
+          # auto-download the pinned Godot editor + macOS export templates.
+          GDPATH: ${{ runner.temp }}/gd
+          MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: ./bin/sign-notarize
+
+      # Independent re-check of the finished artifact: proves the stapled ticket
+      # is present and Gatekeeper accepts the DMG, so a broken build can never
+      # be uploaded to a release.
+      - name: Verify notarization
+        run: |
+          xcrun stapler validate releases/Bufflehead.dmg
+          spctl --assess --type open \
+            --context context:primary-signature --verbose=4 releases/Bufflehead.dmg
+
+      - name: Upload signed DMG
+        uses: actions/upload-artifact@v7
+        with:
+          name: Bufflehead-macOS-dmg
+          path: releases/Bufflehead.dmg
+          if-no-files-found: error

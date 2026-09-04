@@ -1,0 +1,75 @@
+#!/bin/bash
+# Build the signed + notarized macOS DMG via GitHub Actions and download it.
+#
+# This is the counterpart to bin/release-appimage. Signing credentials live as
+# repo secrets rather than on your Mac, so a release DMG can be produced from a
+# clean checkout (and by CI) instead of depending on one machine's keychain.
+# For a local build with your own keychain credentials, use bin/sign-notarize
+# directly.
+#
+# Usage: ./bin/release-dmg-ci
+# Requires: gh CLI (authenticated).
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+WORKFLOW="build-macos.yml"
+OUT_DIR="$ROOT/releases"
+
+cd "$ROOT"
+
+if ! command -v gh >/dev/null 2>&1; then
+    echo "Error: the GitHub CLI 'gh' is required." >&2
+    echo "Install it from https://cli.github.com/ and run: gh auth login" >&2
+    exit 1
+fi
+
+BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+
+echo "Triggering macOS build on branch '$BRANCH'..."
+# Record existing run IDs first so we can distinguish the run WE trigger from
+# stale completed runs (gh run list --limit 1 may return an old run before the
+# new one registers).
+BEFORE="$(gh run list --workflow "$WORKFLOW" --branch "$BRANCH" \
+    --limit 50 --json databaseId --jq '.[].databaseId' 2>/dev/null || true)"
+
+gh workflow run "$WORKFLOW" --ref "$BRANCH"
+
+# Poll until a run ID appears that wasn't present before the trigger.
+echo "Waiting for the new run to start..."
+RUN_ID=""
+for _ in $(seq 1 45); do
+    CURRENT="$(gh run list --workflow "$WORKFLOW" --branch "$BRANCH" \
+        --limit 50 --json databaseId --jq '.[].databaseId' 2>/dev/null || true)"
+    RUN_ID="$(comm -13 <(echo "$BEFORE" | sort) <(echo "$CURRENT" | sort) | head -1)"
+    [ -n "$RUN_ID" ] && break
+    sleep 2
+done
+
+if [ -z "$RUN_ID" ]; then
+    echo "Error: could not find the newly triggered workflow run." >&2
+    exit 1
+fi
+
+echo "Watching run $RUN_ID (builds, signs and notarizes; ~20-40 minutes)..."
+gh run watch "$RUN_ID" --exit-status
+
+echo "Downloading signed DMG..."
+mkdir -p "$OUT_DIR"
+gh run download "$RUN_ID" --name "Bufflehead-macOS-dmg" --dir "$OUT_DIR"
+
+DMG="$OUT_DIR/Bufflehead.dmg"
+[ -f "$DMG" ] || { echo "Error: no DMG found after download" >&2; exit 1; }
+
+# Re-verify locally: the ticket must survive the artifact round-trip (zip and
+# back) or users would hit Gatekeeper on a DMG we believed was notarized.
+echo "Verifying stapled notarization..."
+xcrun stapler validate "$DMG"
+spctl --assess --type open --context context:primary-signature --verbose=4 "$DMG"
+
+echo
+echo "Done: $DMG"
+ls -lh "$DMG"
+echo
+echo "Attach it to a release with:"
+echo "  cp '$DMG' /tmp/Bufflehead-X.Y.Z-macOS.dmg"
+echo "  gh release upload vX.Y.Z /tmp/Bufflehead-X.Y.Z-macOS.dmg --clobber"
