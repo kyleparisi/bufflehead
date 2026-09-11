@@ -1081,6 +1081,125 @@ class TestConnectionScopedTabs:
         )
 
 
+class TestDropFileSwitchesToMemory:
+    """Dropping a data file (CSV/Parquet/JSON/TSV) while a non-memory connection
+    is active must auto-select the in-memory connection.
+
+    Flat files are read by the in-memory DuckDB connection. If the file landed in
+    a tab still bound to the previously-selected connection, every follow-up
+    query — re-run, sort, page — would be sent to that connection's worker, which
+    cannot see the file. CI has no AWS gateway, so a DuckDB file connection
+    stands in for the remote: the failure mode is identical for any connIdx != 0.
+    """
+
+    def setup_method(self):
+        close_all_connections()
+        close_all_tabs()
+        post("new-tab")
+        time.sleep(0.3)
+
+    def test_drop_while_db_connection_active_selects_memory(self):
+        # Open test.duckdb → becomes connection 1 and the active connection.
+        open_file(DUCKDB)
+        s = state()
+        assert s["connectionCount"] == 2
+        assert s["activeConnIdx"] == 1, "opening a database selects its connection"
+
+        # Drop a CSV (same code path as a Godot files_dropped event).
+        open_file(CSV)
+        s = state()
+        assert s["activeConnIdx"] == 0, (
+            "dropping a data file must auto-select the Memory connection"
+        )
+        assert s["connIdx"] == 0, "the file's tab must be bound to Memory"
+        assert s["filePath"] == CSV
+        assert s["rowCount"] > 0, "the file should have loaded"
+        assert s["connectionCount"] == 2, "the database connection stays open"
+
+    def test_query_after_drop_runs_on_memory_connection(self):
+        """The dropped file's tab must query through Memory, not the DB worker."""
+        open_file(DUCKDB)
+        assert state()["activeConnIdx"] == 1
+
+        open_file(SAMPLE)
+        s = state()
+        assert s["connIdx"] == 0
+        assert s["rowCount"] == 500
+
+        # Re-running a query is routed by the tab's connIdx. On the DuckDB
+        # connection this file path is invisible and the query would error.
+        post("query", {"sql": f"SELECT id, name FROM '{SAMPLE}' WHERE id <= 10"})
+        wait()
+        s = state()
+        assert s["rowCount"] == 10, "re-query after drop must run on Memory"
+        assert len(s["columns"]) == 2
+
+        # Sorting goes through the same worker (column is a result index).
+        post("sort", {"column": 0})
+        wait()
+        s = state()
+        assert s["sortColumn"] == "id"
+        assert s["rowCount"] == 10, "sort after drop must run on Memory"
+
+    def test_dropped_file_tab_lives_in_the_memory_tab_bar(self):
+        open_file(DUCKDB)
+        open_file(CSV)
+        s = state()
+        assert s["activeConnIdx"] == 0
+        file_tab = s["activeTabID"]
+        assert file_tab in s["visibleTabIDs"], (
+            "the dropped file's tab must be visible in the Memory tab bar"
+        )
+
+        # It must NOT appear under the database connection's tab bar.
+        post("select-connection", {"index": 1})
+        time.sleep(0.3)
+        s = state()
+        assert s["activeConnIdx"] == 1
+        assert file_tab not in s["visibleTabIDs"], (
+            "the file tab must not be scoped to the database connection"
+        )
+
+    def test_drop_does_not_hijack_the_db_connections_tab(self):
+        """The active DB tab must be left untouched — the file opens on Memory."""
+        open_file(DUCKDB)
+        s = state()
+        db_tab_id = s["activeTabID"]
+
+        open_file(CSV)
+        assert state()["activeTabID"] != db_tab_id, (
+            "the file must not load into the database connection's tab"
+        )
+
+        # Switch back: the DB tab is still file-free and still on connection 1.
+        post("select-connection", {"index": 1})
+        time.sleep(0.3)
+        s = state()
+        assert s["activeConnIdx"] == 1
+        assert s["activeTabID"] == db_tab_id
+        assert s["filePath"] == "", "the database tab must not have taken the file"
+
+    def test_drop_reuses_empty_memory_tab(self):
+        """Switching to Memory must not pile up empty tabs on repeat drops."""
+        open_file(DUCKDB)
+        open_file(CSV)
+        s = state()
+        assert s["activeConnIdx"] == 0
+        mem_tabs = s["visibleTabCount"]
+
+        # Back to the DB connection, then drop another file: the CSV tab already
+        # holds a file, so this one gets a new Memory tab — exactly one.
+        post("select-connection", {"index": 1})
+        time.sleep(0.3)
+        open_file(CITIES)
+        s = state()
+        assert s["activeConnIdx"] == 0
+        assert s["filePath"] == CITIES
+        assert s["visibleTabCount"] == mem_tabs + 1, (
+            "one new Memory tab per dropped file, no stray empties"
+        )
+
+
 class TestReconnect:
     """Test the /reconnect endpoint's graceful error paths.
 

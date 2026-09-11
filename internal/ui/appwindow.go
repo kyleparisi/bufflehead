@@ -108,6 +108,12 @@ func connPathFor(cfg models.GatewayEntry) string {
 
 var nextTabID uint64
 
+// memConnIdx is the rail index of the always-present in-memory DuckDB
+// connection. It is created first in buildUI and can never be closed, so the
+// index is stable for the life of the window. Flat data files (CSV, Parquet,
+// JSON, TSV, …) are always queried through it.
+const memConnIdx = 0
+
 // AppWindow represents a single viewer window (main or secondary).
 type AppWindow struct {
 	window    Window.Instance // zero for main window (uses root viewport)
@@ -1233,19 +1239,32 @@ func (w *AppWindow) onFileSelectedWithCmd(path string, cmd *control.Command) {
 		w.onDatabaseOpenedWithCmd(path, cmd)
 		return
 	}
-	if len(w.tabs) == 0 {
+	// A flat data file is read by the in-memory DuckDB connection, never by a
+	// database or remote (gateway) connection. Make Memory the active connection
+	// FIRST, so the tab the file lands in belongs to it: dropping a file while a
+	// remote connection was active used to load it into a tab bound to that
+	// remote, and every follow-up query (re-run, sort, page) was then sent to the
+	// remote worker, which can't see the file. selectConnection is the state
+	// event — it also opens a tab for Memory if it has none.
+	w.selectConnection(memConnIdx)
+
+	// Reuse the active Memory tab when it's empty; otherwise open a new one.
+	// activeTabState() derives from state (w.activeTab is only a render cache).
+	ts := w.activeTabState()
+	if ts == nil || ts.State.FilePath != "" {
 		w.addNewTab()
-	} else if ts := w.currentTab(); ts != nil && ts.State.FilePath != "" {
-		// Current tab has a file — open in new tab
-		w.addNewTab()
+		ts = w.activeTabState()
 	}
-	ts := w.currentTab()
 	if ts == nil {
 		if cmd != nil {
 			cmd.Respond(control.Result{Error: "no active tab"})
 		}
 		return
 	}
+	// The tab may have been bound to a database connection before (or carry a
+	// gateway dialect); a data file is plain DuckDB.
+	ts.State.IsDatabase = false
+	ts.State.Dialect = models.DialectDefault
 	ts.State.FilePath = path
 	ts.State.UserSQL = db.DefaultQuery(path)
 	ts.State.PageOffset = 0
@@ -1260,7 +1279,7 @@ func (w *AppWindow) onFileSelectedWithCmd(path string, cmd *control.Command) {
 	w.skipPoll = true
 
 	ts.generation++
-	conn := w.connections[0] // memory connection for file queries
+	conn := w.connections[memConnIdx] // memory connection for file queries
 	conn.worker.Send(DBRequest{
 		Kind:       ReqOpenFile,
 		FilePath:   path,
