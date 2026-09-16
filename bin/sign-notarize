@@ -185,7 +185,7 @@ else
     # Godot's headless export can segfault on teardown on GPU-less machines
     # AFTER writing the .app, so trust the artifact, not the exit code.
     gd_rc=0
-    GOOS=macos gd build ./cmd/viewer || gd_rc=$?
+    GOOS=macos gd build || gd_rc=$?
     if [ ! -d "$APP" ]; then
         echo "Error: gd build failed (exit $gd_rc): $APP not produced" >&2
         exit 1

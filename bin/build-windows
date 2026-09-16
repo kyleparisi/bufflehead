@@ -88,7 +88,7 @@ export CXX="$(cygpath -w "$GCCDIR/bin/g++.exe")"
 export CGO_ENABLED=1
 export CGO_LDFLAGS="-static-libgcc -static-libstdc++ -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic"
 gd_rc=0
-gd build ./cmd/viewer || gd_rc=$?
+gd build || gd_rc=$?
 # Godot's headless export can segfault on teardown on GPU-less machines
 # (0xC0000005) AFTER writing the exe. Treat the build as OK iff the expected
 # artifacts exist and the DLL is a real amd64 PE; otherwise fail hard.

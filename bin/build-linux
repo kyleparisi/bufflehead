@@ -76,7 +76,7 @@ export CGO_ENABLED=1
 mkdir -p "$OUT"
 step "gd build"
 gd_rc=0
-gd build ./cmd/viewer || gd_rc=$?
+gd build || gd_rc=$?
 # Godot's headless export can segfault on teardown on GPU-less machines AFTER
 # writing the binary. Treat the build as OK iff the expected artifacts exist and
 # the .so is a real ELF shared object; otherwise fail hard.

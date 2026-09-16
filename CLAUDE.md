@@ -12,10 +12,10 @@ Requires Go 1.26+ and the `gd` CLI (`go install graphics.gd/cmd/gd@release`).
 
 ```bash
 # Run in dev mode (downloads Godot 4.6 on first run)
-gd run ./cmd/viewer
+gd run
 
 # Build for macOS
-GOOS=macos gd build ./cmd/viewer
+GOOS=macos gd build
 ```
 
 ## Testing
@@ -41,7 +41,7 @@ Test data lives in `testdata/` (parquet, CSV, JSON, TSV, .duckdb files).
 
 ## Architecture
 
-**Entry point**: `cmd/viewer/main.go` — initializes the Godot scene tree, creates a DuckDB instance, starts the control server, registers UI classes, and creates the main window.
+**Entry point**: `main.go` (repo root) — initializes the Godot scene tree, creates a DuckDB instance, starts the control server, registers UI classes, and creates the main window.
 
 **Key packages**:
 
