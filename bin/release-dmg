@@ -11,7 +11,7 @@ SETTINGS="$ROOT/packaging/dmg/settings.py"
 cd "$ROOT"
 
 echo "Building macOS app..."
-GOOS=macos gd build ./cmd/viewer
+GOOS=macos gd build
 
 if [ ! -d "$APP" ]; then
     echo "Error: $APP not found after build" >&2

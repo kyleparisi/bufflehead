@@ -31,7 +31,7 @@ export PATH=$PATH:$(go env GOPATH)/bin
 ## Run
 
 ```bash
-gd run ./cmd/viewer
+gd run
 ```
 
 This will download Godot 4.6 automatically on first run and open the editor/app.
@@ -40,27 +40,26 @@ This will download Godot 4.6 automatically on first run and open the editor/app.
 
 ```bash
 # macOS
-GOOS=macos gd build ./cmd/viewer
+GOOS=macos gd build
 
 # Windows
-GOOS=windows gd build ./cmd/viewer
+GOOS=windows gd build
 
 # Linux
-GOOS=linux gd build ./cmd/viewer
+GOOS=linux gd build
 
 # Android
-GOOS=android GOARCH=arm64 gd build ./cmd/viewer
+GOOS=android GOARCH=arm64 gd build
 
 # Web (WASM)
-GOOS=web gd build ./cmd/viewer
+GOOS=web gd build
 ```
 
 ## Project Structure
 
 ```
 bufflehead/
-├── cmd/viewer/
-│   └── main.go          # Entrypoint
+├── main.go              # Entrypoint
 ├── internal/
 │   ├── db/
 │   │   └── duck.go      # DuckDB wrapper (schema, query, metadata)
@@ -77,3 +76,7 @@ bufflehead/
 <p align="center">
   <img src="graphics/architecture.png" alt="Bufflehead architecture diagram">
 </p>
+
+Private AWS data is reached with no SSH keys and no database password — an AWS
+SSO login, an SSM port-forwarding tunnel to a bastion, and short-lived RDS IAM
+tokens. See [docs/aws-ssm-gateway.md](docs/aws-ssm-gateway.md) for the design.
