@@ -71,12 +71,6 @@ bufflehead/
 └── README.md
 ```
 
-## Architecture
+## Docs
 
-<p align="center">
-  <img src="graphics/architecture.png" alt="Bufflehead architecture diagram">
-</p>
-
-Private AWS data is reached with no SSH keys and no database password — an AWS
-SSO login, an SSM port-forwarding tunnel to a bastion, and short-lived RDS IAM
-tokens. See [docs/aws-ssm-gateway.md](docs/aws-ssm-gateway.md) for the design.
+Design notes live in [docs/](docs/).
