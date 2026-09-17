@@ -58,6 +58,12 @@ type ResizeData struct {
 	Scale  float64 `json:"scale,omitempty"`
 }
 
+// SelectTableData is the payload for the "select_table" action: the name of a
+// table, view, or folder pattern as it appears in the schema sidebar.
+type SelectTableData struct {
+	Name string `json:"name"`
+}
+
 // CloseConnectionData is the payload for the "close_connection" action.
 type CloseConnectionData struct {
 	Index int `json:"index"`
@@ -408,6 +414,10 @@ func buildMux(s *Server) *http.ServeMux {
 		s.handleCommand(w, r, "select_tab")
 	})
 
+	mux.HandleFunc("POST /select-table", func(w http.ResponseWriter, r *http.Request) {
+		s.handleCommand(w, r, "select_table")
+	})
+
 	mux.HandleFunc("POST /select-columns", func(w http.ResponseWriter, r *http.Request) {
 		s.handleCommand(w, r, "select_columns")
 	})
@@ -555,9 +565,9 @@ func buildMux(s *Server) *http.ServeMux {
 			json.NewEncoder(w).Encode(SQLResult{Error: "sql is required"})
 			return
 		}
-		if req.Limit <= 0 {
-			req.Limit = 100
-		}
+		// A missing limit is passed through as 0 ("unspecified"). The executor
+		// applies the right default for the connection: none for local files and
+		// databases, a modest page for remote ones, which are slow or billed.
 
 		// No server-side timeout — the agent manages its own timeouts
 		// by disconnecting, which baseCtx detects and cancels the query.

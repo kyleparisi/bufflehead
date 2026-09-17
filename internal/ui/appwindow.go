@@ -18,6 +18,7 @@ import (
 	"graphics.gd/classdb/Button"
 	"graphics.gd/classdb/Control"
 	"graphics.gd/classdb/DisplayServer"
+	"graphics.gd/classdb/GUI"
 	"graphics.gd/classdb/HBoxContainer"
 	"graphics.gd/classdb/HSplitContainer"
 	"graphics.gd/classdb/Input"
@@ -28,7 +29,6 @@ import (
 	"graphics.gd/classdb/MarginContainer"
 	"graphics.gd/classdb/PanelContainer"
 	"graphics.gd/classdb/PopupMenu"
-	"graphics.gd/classdb/GUI"
 	"graphics.gd/classdb/PopupPanel"
 	"graphics.gd/classdb/ScrollContainer"
 	"graphics.gd/classdb/TabBar"
@@ -46,8 +46,11 @@ type Connection struct {
 	Path   string
 	DB     db.Querier
 	Tables []db.TableInfo
-	button Button.Instance
-	worker *ConnWorker
+	// IsFolder marks a connection opened from a dropped folder: Path is a
+	// directory and Tables are glob patterns over it, not real tables.
+	IsFolder bool
+	button   Button.Instance
+	worker   *ConnWorker
 	// activeTabID is the tabID of the tab last viewed for this connection, so
 	// switching connections restores the right tab. 0 means "none / first".
 	// This is authoritative model state, not inferred from node selection.
@@ -116,20 +119,20 @@ const memConnIdx = 0
 
 // AppWindow represents a single viewer window (main or secondary).
 type AppWindow struct {
-	window    Window.Instance // zero for main window (uses root viewport)
-	isMain    bool
-	duck      *db.DB // in-memory DuckDB for file queries
-	history   *models.QueryHistory
+	window  Window.Instance // zero for main window (uses root viewport)
+	isMain  bool
+	duck    *db.DB // in-memory DuckDB for file queries
+	history *models.QueryHistory
 
-	titleBar   *TitleBar
+	titleBar *TitleBar
 	// toolbar removed
 	statusBar  *StatusBar
 	tabBar     TabBar.Instance
 	tabBarWrap MarginContainer.Instance
-	split        HSplitContainer.Instance
-	sidebarCol   VBoxContainer.Instance // left side of split, holds per-tab sidebars
-	contentCol   VBoxContainer.Instance // right side of split, holds tabbar + per-tab content
-	emptyView    VBoxContainer.Instance
+	split      HSplitContainer.Instance
+	sidebarCol VBoxContainer.Instance // left side of split, holds per-tab sidebars
+	contentCol VBoxContainer.Instance // right side of split, holds tabbar + per-tab content
+	emptyView  VBoxContainer.Instance
 
 	// Bottom console pane (window-level, collapsible). bodyVSplit wraps the
 	// content area over the console; console visibility is model state.
@@ -190,9 +193,9 @@ type AppWindow struct {
 	onReLogin       func() // opens the gateway/SSO screen to re-authenticate
 	onNewConnection func() // opens the gateway screen to add a new connection
 
-	reLoginDialogOpen bool             // guards against stacking re-login dialogs
+	reLoginDialogOpen bool                    // guards against stacking re-login dialogs
 	rootPanel         PanelContainer.Instance // full-window root; host for modal overlays
-	reLoginOverlay    Control.Instance   // the in-scene re-login modal overlay (freed on dismiss)
+	reLoginOverlay    Control.Instance        // the in-scene re-login modal overlay (freed on dismiss)
 }
 
 // buildUI creates the full UI tree and returns the root node.
@@ -886,8 +889,8 @@ func (w *AppWindow) closeTabByID(tabID uint64) {
 	wasActive := connIdx >= 0 && connIdx < len(w.connections) && w.connections[connIdx].activeTabID == tabID
 	var neighbor uint64
 	if wasActive {
-		var prev uint64  // last same-conn tab seen before idx
-		var next uint64  // first same-conn tab seen after idx
+		var prev uint64 // last same-conn tab seen before idx
+		var next uint64 // first same-conn tab seen after idx
 		for i, t := range w.tabs {
 			if t.connIdx != connIdx || i == idx {
 				continue
@@ -1059,6 +1062,10 @@ func (w *AppWindow) render() {
 				// A flat data file (CSV/Parquet/…) in the in-memory connection:
 				// queried by its single-quoted path.
 				w.titleBar.SetAIPrompt(buildFileAIPrompt(active.State.FilePath, conn.Name, active.State.Schema, w.controlAddr, w.controlKey))
+			case conn.IsFolder:
+				// A dropped folder: its patterns are globs, so they are queried
+				// by single-quoted path like a file, never by table name.
+				w.titleBar.SetAIPrompt(buildFolderAIPrompt(conn.Name, conn.Path, conn.Tables, w.controlAddr, w.controlKey))
 			case conn.Path != "" && conn.Path != ":memory:":
 				// A database file (DuckDB/SQLite) opened as its own connection:
 				// queried by table name.
@@ -1227,6 +1234,16 @@ func (w *AppWindow) onFileSelected(path string) {
 }
 
 func (w *AppWindow) onFileSelectedWithCmd(path string, cmd *control.Command) {
+	// A directory is not a file DuckDB can read: `SELECT * FROM '<dir>'` can't
+	// infer a format and falls back to resolving the path as a table name,
+	// which fails with a baffling "Table with name /Users/... does not exist".
+	// Open it as a connection whose patterns are globs over the folder instead.
+	// This must precede the sniffing below, which would otherwise route a
+	// directory named "foo.db" into the DuckDB opener.
+	if info, err := os.Stat(path); err == nil && info.IsDir() {
+		w.onFolderOpenedWithCmd(path, cmd)
+		return
+	}
 	// Check the SQLite header before the extension test: a SQLite database is
 	// opened by the native SQLite backend, not the DuckDB opener or read as a
 	// data file, and it may carry a .db extension that would otherwise be routed
@@ -1348,6 +1365,16 @@ func (w *AppWindow) onDatabaseOpenedWithCmd(path string, cmd *control.Command) {
 	RunOpenDB(path, tid, 0, cmd, w.results)
 }
 
+// onFolderOpenedWithCmd opens a directory as a new connection whose selectable
+// "tables" are the data-file globs inside it. The result flows through the same
+// ReqOpenDB path as a database file.
+func (w *AppWindow) onFolderOpenedWithCmd(path string, cmd *control.Command) {
+	w.statusBar.SetStatus("Scanning folder…")
+	tid := nextTabID
+	nextTabID++
+	RunOpenFolder(path, tid, 0, cmd, w.results)
+}
+
 // onSQLiteOpenedWithCmd opens a SQLite file as a new connection. It mirrors
 // onDatabaseOpenedWithCmd but opens via the native SQLite backend; the result
 // flows through the same ReqOpenDB path in handleOpenDBResult.
@@ -1391,11 +1418,12 @@ func (w *AppWindow) handleOpenDBResult(res DBResult) {
 
 	// Create connection
 	conn := &Connection{
-		Name:   name,
-		Path:   path,
-		DB:     dbConn,
-		Tables: tables,
-		worker: dbWorker,
+		Name:     name,
+		Path:     path,
+		DB:       dbConn,
+		Tables:   tables,
+		IsFolder: res.Folder,
+		worker:   dbWorker,
 	}
 
 	// Add button to rail
@@ -1420,10 +1448,41 @@ func (w *AppWindow) handleOpenDBResult(res DBResult) {
 	w.activeConnIdx = dbIdx
 	w.newTabForConnection(dbIdx)
 
-	w.statusBar.SetStatus(fmt.Sprintf("Connected: %s (%d tables/views)", name, len(tables)))
+	if conn.IsFolder {
+		// A folder has nothing to browse until a pattern is chosen, so open on
+		// the dominant one (ScanFolder sorts by file count) rather than leaving
+		// an empty grid. Clicking another pattern in the sidebar switches to it.
+		if ts := w.activeTabState(); ts != nil && len(tables) > 0 {
+			w.selectFolderPattern(ts, conn, tables[0].Name)
+		}
+		w.statusBar.SetStatus(fmt.Sprintf("Opened folder: %s (%d %s)",
+			name, len(tables), pluralPatterns(len(tables))))
+	} else {
+		w.statusBar.SetStatus(fmt.Sprintf("Connected: %s (%d tables/views)", name, len(tables)))
+	}
 	if res.ControlCmd != nil {
 		res.ControlCmd.Respond(control.Result{OK: true})
 	}
+}
+
+func pluralPatterns(n int) string {
+	if n == 1 {
+		return "pattern"
+	}
+	return "patterns"
+}
+
+// selectFolderPattern points a tab at one of a folder connection's globs and
+// runs it. It is the folder counterpart of clicking a table in the sidebar.
+func (w *AppWindow) selectFolderPattern(ts *tabState, conn *Connection, glob string) {
+	ts.State.ActiveTable = glob
+	ts.State.UserSQL = db.FolderQuery(conn.Path, glob)
+	ts.State.PageOffset = 0
+	ts.State.SortColumn = ""
+	ts.State.SortDir = models.SortNone
+	ts.State.SelectedCols = nil
+	ts.sqlPanel.SetSQL(ts.State.UserSQL)
+	w.runCurrentQuery(nil)
 }
 
 // bindTabToConnection wires an existing tab to the connection at idx: sets its
@@ -1450,6 +1509,15 @@ func (w *AppWindow) bindTabToConnection(ts *tabState, idx int) {
 	}
 	ts.schema.SetTables(conn.Tables)
 	ts.sqlPanel.SetCompletionTables(conn.Tables)
+	if conn.IsFolder {
+		// A pattern is a path, so it is single-quoted as a string literal —
+		// QuoteQualifiedName would render "*.parquet" as a double-quoted
+		// identifier and DuckDB would look for a table by that name.
+		ts.schema.OnTableClicked = func(glob string) {
+			w.selectFolderPattern(ts, conn, glob)
+		}
+		return
+	}
 	ts.schema.OnTableClicked = func(tableName string) {
 		ts.State.ActiveTable = tableName
 		// Quote each dotted segment separately so schema-qualified names become
@@ -2329,7 +2397,7 @@ func buildAIPrompt(entry models.GatewayEntry, tables []db.TableInfo, controlAddr
 	b.WriteString(fmt.Sprintf("Database: %s\n", entry.DBName))
 	b.WriteString(authNote(controlKey))
 	b.WriteString(fmt.Sprintf("  curl -s%s -X POST http://%s/sql -d '{\"sql\":\"SELECT * FROM table LIMIT 10\",\"connection\":\"%s\"}'\n", auth, controlAddr, connName))
-	b.WriteString("\nResults are limited to 100 rows by default. Queries time out after 30 seconds.\n")
+	b.WriteString("\nResults are limited to 100 rows by default; pass \"limit\": N to change it. There is no server-side timeout; disconnecting cancels the query.\n")
 	b.WriteString("Use indexed columns in WHERE clauses, avoid full table scans, and keep queries targeted.\n")
 	b.WriteString("\nResponse format: {\"columns\":[...],\"rows\":[[...],...],\"total\":N}\n")
 
@@ -2427,13 +2495,64 @@ func buildFileAIPrompt(filePath, connName string, schema []db.Column, controlAdd
 	b.WriteString(authNote(controlKey))
 	b.WriteString("Reference the file by its single-quoted path in the FROM clause:\n")
 	b.WriteString(fmt.Sprintf("  curl -s%s -X POST http://%s/sql --data-raw \"{\\\"sql\\\":\\\"SELECT * FROM '%s' LIMIT 10\\\",\\\"connection\\\":\\\"%s\\\"}\"\n", auth, controlAddr, filePath, connName))
-	b.WriteString("\nResults are limited to 100 rows by default. Queries time out after 30 seconds.\n")
+	b.WriteString("\nEvery row the query returns is sent, up to a 10,000-row ceiling — this is a local file, so nothing is truncated to a page by default. Add \"limit\": N to the request (or your own LIMIT) to cap it.\n")
+	b.WriteString("There is no server-side timeout; disconnecting cancels the query.\n")
 	b.WriteString("Response format: {\"columns\":[...],\"rows\":[[...],...],\"total\":N}\n")
 
 	if len(schema) > 0 {
 		b.WriteString("\nSchema:\n")
 		for _, c := range schema {
 			b.WriteString(fmt.Sprintf("- %s %s\n", c.Name, c.DataType))
+		}
+	}
+
+	return b.String()
+}
+
+// defaultRemoteSQLLimit is the row limit applied to a /sql request that names
+// no limit of its own, on a gateway connection. Remote queries cross a tunnel
+// and BigQuery bills by bytes scanned, so an unbounded default there is a
+// footgun; local connections get no default limit at all.
+const defaultRemoteSQLLimit = 100
+
+// buildFolderAIPrompt produces an AI prompt for a dropped folder. A folder's
+// entries are globs, not tables: telling an agent to "query tables by name"
+// would have it write SELECT * FROM *.parquet, which is a syntax error. So the
+// prompt mirrors the flat-file one — reference the data by single-quoted path —
+// and spells out that a single file or narrower glob works the same way.
+func buildFolderAIPrompt(connName, dir string, tables []db.TableInfo, controlAddr, controlKey string) string {
+	auth := bearerFlag(controlKey)
+	var b strings.Builder
+	b.WriteString("I have a local folder of data files open in Bufflehead that you can query with SQL (DuckDB).\n")
+	b.WriteString(fmt.Sprintf("Folder: %s\n", dir))
+	b.WriteString(authNote(controlKey))
+	b.WriteString("Reference the files by a single-quoted glob path in the FROM clause — a glob reads every file it matches as one table:\n")
+	example := "*.parquet"
+	if len(tables) > 0 {
+		example = tables[0].Name
+	}
+	b.WriteString(fmt.Sprintf("  curl -s%s -X POST http://%s/sql --data-raw \"{\\\"sql\\\":\\\"SELECT * FROM '%s' LIMIT 10\\\",\\\"connection\\\":\\\"%s\\\"}\"\n",
+		auth, controlAddr, db.FolderGlobPath(dir, example), connName))
+	b.WriteString(fmt.Sprintf("A single file ('%s') or a narrower glob works the same way.\n", db.FolderGlobPath(dir, "<filename>")))
+	b.WriteString("\nEvery row the query returns is sent, up to a 10,000-row ceiling — this is a local file, so nothing is truncated to a page by default. Add \"limit\": N to the request (or your own LIMIT) to cap it.\n")
+	b.WriteString("There is no server-side timeout; disconnecting cancels the query.\n")
+	b.WriteString("Response format: {\"columns\":[...],\"rows\":[[...],...],\"total\":N}\n")
+
+	if len(tables) > 0 {
+		b.WriteString("\nPatterns in this folder:\n")
+		for _, t := range tables {
+			line := "- '" + db.FolderGlobPath(dir, t.Name) + "'"
+			if t.Detail != "" {
+				line += " — " + t.Detail
+			}
+			var cols []string
+			for _, c := range t.Columns {
+				cols = append(cols, fmt.Sprintf("%s %s", c.Name, c.DataType))
+			}
+			if len(cols) > 0 {
+				line += " (" + strings.Join(cols, ", ") + ")"
+			}
+			b.WriteString(line + "\n")
 		}
 	}
 
@@ -2452,7 +2571,8 @@ func buildDBAIPrompt(connName, dbPath string, tables []db.TableInfo, controlAddr
 	b.WriteString(authNote(controlKey))
 	b.WriteString(fmt.Sprintf("Query tables by name, naming the connection in the request:\n"))
 	b.WriteString(fmt.Sprintf("  curl -s%s -X POST http://%s/sql --data-raw \"{\\\"sql\\\":\\\"SELECT * FROM <table> LIMIT 10\\\",\\\"connection\\\":\\\"%s\\\"}\"\n", auth, controlAddr, connName))
-	b.WriteString("\nResults are limited to 100 rows by default. Queries time out after 30 seconds.\n")
+	b.WriteString("\nEvery row the query returns is sent, up to a 10,000-row ceiling — this is a local file, so nothing is truncated to a page by default. Add \"limit\": N to the request (or your own LIMIT) to cap it.\n")
+	b.WriteString("There is no server-side timeout; disconnecting cancels the query.\n")
 	b.WriteString("Response format: {\"columns\":[...],\"rows\":[[...],...],\"total\":N}\n")
 
 	if len(tables) > 0 {
@@ -2752,8 +2872,6 @@ func createSecondaryWindow(duck *db.DB, history *models.QueryHistory, onNewWindo
 	ui.AsControl().SetAnchorsAndOffsetsPreset(Control.PresetFullRect)
 	root.AsNode().AddChild(ui.AsNode())
 	win.AsNode().AddChild(root.AsNode())
-
-
 
 	// Note: caller must call aw.addNewTab() after adding window to scene tree
 

@@ -33,10 +33,18 @@ type QueryResult struct {
 
 // TableInfo describes a table or view in a database.
 type TableInfo struct {
-	Name    string
-	Type    string // "table" or "view"
+	Name string
+	Type string // "table", "view", or TypePattern for a dropped folder's globs
+	// Detail is optional right-column text in the schema sidebar (a folder
+	// pattern shows its file count there). Empty for ordinary tables.
+	Detail  string
 	Columns []Column
 }
+
+// TypePattern marks a TableInfo that is a glob over a dropped folder rather
+// than a real table, so the sidebar groups and labels it as a pattern and the
+// click handler quotes it as a path instead of an identifier.
+const TypePattern = "PATTERN"
 
 // New opens an in-memory DuckDB instance.
 func New() (*DB, error) {
@@ -124,7 +132,7 @@ func (d *DB) TableSchema(tableName string) ([]Column, error) {
 
 // Schema returns column info for a parquet file.
 func (d *DB) Schema(path string) ([]Column, error) {
-	q := fmt.Sprintf(`DESCRIBE SELECT * FROM '%s'`, path)
+	q := fmt.Sprintf(`DESCRIBE SELECT * FROM %s`, QuotePathLiteral(path))
 
 	rows, err := d.conn.Query(q)
 	if err != nil {
@@ -218,7 +226,7 @@ func formatValue(v any) string {
 
 // Metadata returns parquet file-level metadata.
 func (d *DB) Metadata(path string) (map[string]string, error) {
-	q := fmt.Sprintf(`SELECT * FROM parquet_metadata('%s') LIMIT 1`, path)
+	q := fmt.Sprintf(`SELECT * FROM parquet_metadata(%s) LIMIT 1`, QuotePathLiteral(path))
 	rows, err := d.conn.Query(q)
 	if err != nil {
 		return nil, err
@@ -244,10 +252,15 @@ func (d *DB) Metadata(path string) (map[string]string, error) {
 	return meta, nil
 }
 
+// IsLocal reports that DuckDB reads from this machine: an in-memory database, a
+// .duckdb file, or data files referenced by path. See LocalQuerier.
+func (d *DB) IsLocal() bool { return true }
+
 // Verify DB implements Querier at compile time.
 var _ Querier = (*DB)(nil)
+var _ LocalQuerier = (*DB)(nil)
 
 // DefaultQuery builds a simple SELECT * for a given parquet path.
 func DefaultQuery(path string) string {
-	return fmt.Sprintf("SELECT * FROM '%s'", path)
+	return fmt.Sprintf("SELECT * FROM %s", QuotePathLiteral(path))
 }

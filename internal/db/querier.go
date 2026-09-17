@@ -13,6 +13,14 @@ type Querier interface {
 	Close() error
 }
 
+// LocalQuerier is implemented by backends that read from this machine — DuckDB
+// (in-memory, a database file, or a dropped folder's files) and SQLite. Nothing
+// between the app and the data can go away mid-session, so the UI skips the
+// liveness checks and connect timeouts that exist for tunnelled connections.
+type LocalQuerier interface {
+	IsLocal() bool
+}
+
 // PoolResetter is implemented by pooled SQL backends (Postgres, MySQL) that can
 // drop stale connections after a tunnel reconnect or a cancelled query. The UI
 // asserts on this interface instead of a concrete type so every pooled backend
@@ -27,3 +35,12 @@ type PoolResetter interface {
 type DatabaseSwitcher interface {
 	Databases() ([]DatabaseInfo, error)
 }
+
+// Remote backends deliberately do NOT implement LocalQuerier: Postgres and
+// MySQL reach a host (often through an SSM tunnel that can drop), and BigQuery
+// is a network service, so both keep the liveness check and connect deadlines.
+var (
+	_ Querier = (*PostgresDB)(nil)
+	_ Querier = (*MySQLDB)(nil)
+	_ Querier = (*BigQueryDB)(nil)
+)

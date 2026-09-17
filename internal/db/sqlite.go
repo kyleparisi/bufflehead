@@ -228,4 +228,9 @@ func formatSQLiteValue(v any) string {
 }
 
 // Verify SQLiteDB implements Querier at compile time.
+// IsLocal reports that a SQLite database is a file on this machine. See
+// LocalQuerier.
+func (s *SQLiteDB) IsLocal() bool { return true }
+
 var _ Querier = (*SQLiteDB)(nil)
+var _ LocalQuerier = (*SQLiteDB)(nil)

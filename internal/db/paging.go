@@ -40,6 +40,11 @@ func hasTrailingLimit(sql string) bool {
 // invalid double clause like "... LIMIT 5 LIMIT 100 OFFSET 0". A trailing ';'
 // and surrounding whitespace are stripped first.
 //
+// A limit <= 0 means "no limit": no LIMIT clause is emitted, so the query
+// returns everything it produces (still bounded by maxResultRows when the
+// backend materializes rows). Local connections use this over /sql — there is
+// no reason to truncate a parquet file on disk to 100 rows by default.
+//
 // The grid path never hits the untouched branch: AppState.VirtualSQL wraps the
 // user query in a subquery, so any user LIMIT is nested and the page window is
 // appended as usual. The /sql control path passes raw user SQL, so an agent that
@@ -47,6 +52,12 @@ func hasTrailingLimit(sql string) bool {
 func paginate(sql string, offset, limit int) string {
 	s := trimSQL(sql)
 	if hasTrailingLimit(s) {
+		return s
+	}
+	if limit <= 0 {
+		if offset > 0 {
+			return fmt.Sprintf("%s OFFSET %d", s, offset)
+		}
 		return s
 	}
 	return fmt.Sprintf("%s LIMIT %d OFFSET %d", s, limit, offset)
