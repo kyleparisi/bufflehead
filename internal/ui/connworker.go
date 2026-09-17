@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"path/filepath"
 	"time"
 
 	bfaws "bufflehead/internal/aws"
@@ -71,6 +72,9 @@ type DBResult struct {
 	UserSQL    string
 	VirtualSQL string
 	Reconnect  *ReconnectOutcome // for ReqReconnect
+	// Folder marks a ReqOpenDB result that came from a dropped folder, so the
+	// connection is created with glob patterns instead of tables.
+	Folder bool
 }
 
 // ReconnectOutcome carries the result of a background reconnect attempt back to
@@ -204,6 +208,15 @@ func (cw *ConnWorker) handle(req DBRequest) {
 	ctx, ctxCancel := cw.baseCtx(req)
 	defer ctxCancel()
 
+	// Local backends (DuckDB, SQLite) need no liveness check: there is no
+	// tunnel or socket to go stale between queries, so the Ping — and the
+	// 10s-per-attempt timeout and backoff retries behind it — would only add
+	// latency and an artificial deadline to reading a file on this machine.
+	if local, ok := cw.db.(db.LocalQuerier); ok && local.IsLocal() {
+		cw.dispatch(req, ctx)
+		return
+	}
+
 	// Health check before every operation to fail fast on dead connections.
 	// SSM tunnels can drop and reconnect, so retry with backoff to give
 	// the tunnel time to re-establish (tunnel backoff is 1s, 2s, 4s, 8s...).
@@ -255,6 +268,12 @@ func (cw *ConnWorker) handle(req DBRequest) {
 		return
 	}
 
+	cw.dispatch(req, ctx)
+}
+
+// dispatch routes a request to its handler. Split out of handle so the local
+// fast path can reach it without the health-check preamble.
+func (cw *ConnWorker) dispatch(req DBRequest, ctx context.Context) {
 	switch req.Kind {
 	case ReqQuery:
 		cw.handleQuery(req)
@@ -464,6 +483,80 @@ func runOpenDBWith(open func(string) (db.Querier, error), dbPath string, tabID, 
 			DBPath:     dbPath,
 		}
 	}()
+}
+
+// RunOpenFolder opens a dropped folder as a connection in a one-shot
+// goroutine. A folder is not a database, so there is nothing to open: the
+// "tables" are the data-file globs found directly inside it, each described by
+// DESCRIBE-ing the glob so its columns fill the sidebar like a real table. The
+// result flows through the same ReqOpenDB path as a .duckdb file, so the
+// connection, rail tile, and tab are created identically.
+func RunOpenFolder(dir string, tabID, generation uint64, cmd *control.Command, results chan DBResult) {
+	go func() {
+		fail := func(err error) {
+			results <- DBResult{
+				Kind:       ReqOpenDB,
+				TabID:      tabID,
+				Generation: generation,
+				Err:        err,
+				ControlCmd: cmd,
+				DBPath:     dir,
+				Folder:     true,
+			}
+		}
+
+		pats, err := db.ScanFolder(dir)
+		if err != nil {
+			fail(err)
+			return
+		}
+		if len(pats) == 0 {
+			fail(fmt.Errorf("no readable data files in %s (looked for parquet, csv, tsv, json)", filepath.Base(dir)))
+			return
+		}
+
+		// A folder is read by its own in-memory DuckDB, so its queries, sorting
+		// and paging run on a dedicated worker rather than sharing Memory's.
+		conn, err := db.New()
+		if err != nil {
+			fail(err)
+			return
+		}
+
+		tables := make([]db.TableInfo, 0, len(pats))
+		for _, p := range pats {
+			t := db.TableInfo{
+				Name:   p.Glob,
+				Type:   db.TypePattern,
+				Detail: fmt.Sprintf("%d %s", p.Count, pluralFiles(p.Count)),
+			}
+			// Columns are best-effort: files sharing a suffix need not share a
+			// schema, and a union that DuckDB can't reconcile should still be
+			// listed (clicking it surfaces the real error in the grid).
+			if cols, err := conn.Schema(db.FolderGlobPath(dir, p.Glob)); err == nil {
+				t.Columns = cols
+			}
+			tables = append(tables, t)
+		}
+
+		results <- DBResult{
+			Kind:       ReqOpenDB,
+			TabID:      tabID,
+			Generation: generation,
+			Querier:    conn,
+			Tables:     tables,
+			ControlCmd: cmd,
+			DBPath:     dir,
+			Folder:     true,
+		}
+	}()
+}
+
+func pluralFiles(n int) string {
+	if n == 1 {
+		return "file"
+	}
+	return "files"
 }
 
 // RunOpenBigQuery connects to BigQuery in a one-shot goroutine (no tunnel, no

@@ -718,15 +718,30 @@ func (s *SchemaPanel) filterTables(query string) {
 	root := s.tree.CreateItem()
 
 	// Group: Tables
-	var tableItems, viewItems []db.TableInfo
+	var tableItems, viewItems, patternItems []db.TableInfo
 	for _, t := range s.allTables {
 		if q != "" && !strings.Contains(strings.ToLower(t.Name), q) {
 			continue
 		}
-		if t.Type == "VIEW" {
+		switch t.Type {
+		case "VIEW":
 			viewItems = append(viewItems, t)
-		} else {
+		case db.TypePattern:
+			patternItems = append(patternItems, t)
+		default:
 			tableItems = append(tableItems, t)
+		}
+	}
+
+	// A dropped folder has patterns instead of tables; the two never mix in
+	// one connection, so at most one of these groups is ever non-empty.
+	if len(patternItems) > 0 {
+		group := s.tree.MoreArgs().CreateItem(root, -1)
+		group.SetText(0, fmt.Sprintf("Patterns (%d)", len(patternItems)))
+		group.SetSelectable(0, false)
+		group.SetSelectable(1, false)
+		for _, t := range patternItems {
+			s.addTableItem(group, t)
 		}
 	}
 
@@ -753,10 +768,17 @@ func (s *SchemaPanel) filterTables(query string) {
 
 func (s *SchemaPanel) addTableItem(parent TreeItem.Instance, t db.TableInfo) {
 	tableItem := s.tree.MoreArgs().CreateItem(parent, -1)
-	tableItem.SetText(0, "  "+t.Name)
-	tableItem.SetText(1, "")
+	label := "  " + t.Name
+	if t.Detail != "" {
+		// Inline rather than in column 1: that column is sized to the type
+		// suffixes on the child rows and leaves nothing visible up here.
+		label += "   " + t.Detail
+	}
+	tableItem.SetText(0, label)
 	tableItem.SetSelectable(0, true)
 	tableItem.SetSelectable(1, false)
+	// The click handler resolves the entry by tooltip, so this stays the clean
+	// name even when the label carries a file count.
 	tableItem.SetTooltipText(0, t.Name)
 
 	for _, col := range t.Columns {
@@ -2281,6 +2303,20 @@ func (a *App) initMainWindow() {
 				return nil, fmt.Errorf("connection %q has no worker", conn.Name)
 			}
 
+			// Apply the per-connection default when the caller gave no limit.
+			// A local file, folder, or database file is on this machine and
+			// costs nothing to read, so it returns everything the query
+			// produces (bounded by the backend's maxResultRows ceiling). Remote
+			// connections keep a modest default page: they are slow, and
+			// BigQuery bills for what they scan.
+			if limit <= 0 {
+				if conn.Gateway != nil {
+					limit = defaultRemoteSQLLimit
+				} else {
+					limit = 0 // no LIMIT clause
+				}
+			}
+
 			// Route through the connection's worker so all queries are serialized
 			// on a single goroutine — no concurrent access to the underlying sql.DB.
 			reply := make(chan SQLReply, 1)
@@ -2623,6 +2659,11 @@ func (a *App) updateCachedState() {
 		state["windowCount"] = 1 + len(a.secondWins)
 	}
 	state["activeConnIdx"] = w.activeConnIdx
+	connNames := make([]string, 0, len(w.connections))
+	for _, c := range w.connections {
+		connNames = append(connNames, c.Name)
+	}
+	state["connectionNames"] = connNames
 	state["visibleTabCount"] = w.tabBar.TabCount()
 	// Left-pane (sidebar column) projection. leftPaneVisible is the model bit;
 	// sidebarColVisible is the actual split child — they must agree, and when
@@ -2647,6 +2688,16 @@ func (a *App) updateCachedState() {
 		state["activeTabTitle"] = w.tabTitle(ts)
 		if ts.schema != nil {
 			state["schemaTableCount"] = len(ts.schema.allTables)
+			// Names and right-column detail of the sidebar entries, so tests
+			// can assert on a folder connection's glob patterns.
+			names := make([]string, 0, len(ts.schema.allTables))
+			details := make([]string, 0, len(ts.schema.allTables))
+			for _, t := range ts.schema.allTables {
+				names = append(names, t.Name)
+				details = append(details, t.Detail)
+			}
+			state["schemaTableNames"] = names
+			state["schemaTableDetails"] = details
 		}
 		state["detailVisible"] = ts.detailWrap.AsCanvasItem().Visible()
 		totalWidth := ts.outerWrap.AsControl().Size().X
@@ -3134,6 +3185,33 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 			return
 		}
 		w.selectConnection(d.Index)
+		cmd.Respond(control.Result{OK: true})
+
+	case "select_table":
+		// Drives the schema sidebar's click handler, so a table, view, or
+		// folder pattern can be chosen the way a user chooses it.
+		var d control.SelectTableData
+		if err := json.Unmarshal(cmd.Data, &d); err != nil {
+			cmd.Respond(control.Result{Error: err.Error()})
+			return
+		}
+		ts := w.currentTab()
+		if ts == nil || ts.schema == nil || ts.schema.OnTableClicked == nil {
+			cmd.Respond(control.Result{Error: "no selectable schema in the active tab"})
+			return
+		}
+		found := false
+		for _, t := range ts.schema.allTables {
+			if t.Name == d.Name {
+				found = true
+				break
+			}
+		}
+		if !found {
+			cmd.Respond(control.Result{Error: fmt.Sprintf("no table or pattern named %q", d.Name)})
+			return
+		}
+		ts.schema.OnTableClicked(d.Name)
 		cmd.Respond(control.Result{OK: true})
 
 	case "select_tab":

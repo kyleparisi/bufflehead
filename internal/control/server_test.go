@@ -266,8 +266,11 @@ func TestSQLEndpoint_Success(t *testing.T) {
 	}
 }
 
-func TestSQLEndpoint_DefaultLimit(t *testing.T) {
-	var capturedLimit int
+// A missing limit reaches the executor as 0 ("unspecified") rather than being
+// defaulted here: the right default depends on the connection, which only the
+// executor knows — none for a local file, a modest page for a remote one.
+func TestSQLEndpoint_MissingLimitPassesThroughUnspecified(t *testing.T) {
+	capturedLimit := -1
 	s := New(0)
 	s.SetSQLExecutor(func(ctx context.Context, connName, sql string, limit int) (*SQLResult, error) {
 		capturedLimit = limit
@@ -280,8 +283,28 @@ func TestSQLEndpoint_DefaultLimit(t *testing.T) {
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
-	if capturedLimit != 100 {
-		t.Errorf("expected default limit 100, got %d", capturedLimit)
+	if capturedLimit != 0 {
+		t.Errorf("expected unspecified limit 0, got %d", capturedLimit)
+	}
+}
+
+// An explicit limit is passed through untouched.
+func TestSQLEndpoint_ExplicitLimitPassedThrough(t *testing.T) {
+	capturedLimit := -1
+	s := New(0)
+	s.SetSQLExecutor(func(ctx context.Context, connName, sql string, limit int) (*SQLResult, error) {
+		capturedLimit = limit
+		return &SQLResult{Columns: []string{}, Rows: [][]string{}, Total: 0}, nil
+	})
+	handler := buildMux(s)
+
+	body := `{"sql":"SELECT 1","limit":25}`
+	req := httptest.NewRequest("POST", "/sql", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if capturedLimit != 25 {
+		t.Errorf("expected limit 25, got %d", capturedLimit)
 	}
 }
 

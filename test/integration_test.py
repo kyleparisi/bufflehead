@@ -8,6 +8,8 @@ Run via: test/integration_test.sh (which builds, launches Godot, then runs pytes
 """
 import os
 import re
+import shutil
+import tempfile
 import time
 from pathlib import Path
 
@@ -66,6 +68,26 @@ def open_file(path):
     result = post("open", {"path": path})
     wait()
     return result
+
+
+_FOLDER_ROOT = None
+
+
+def make_folder(name, files):
+    """Build a folder of test data and return its path.
+
+    `files` maps destination filename -> source path in testdata/. Folders are
+    created under one temp root that lives for the whole session, so the app
+    (same machine) can read them by absolute path.
+    """
+    global _FOLDER_ROOT
+    if _FOLDER_ROOT is None:
+        _FOLDER_ROOT = tempfile.mkdtemp(prefix="bufflehead-folders-")
+    folder = Path(_FOLDER_ROOT) / name
+    folder.mkdir(parents=True, exist_ok=True)
+    for dest, src in files.items():
+        shutil.copy(src, folder / dest)
+    return str(folder)
 
 
 # ── .tscn parser ─────────────────────────────────────────────────────────
@@ -1552,3 +1574,265 @@ class TestExtensionsPanel:
         tree = ui_tree()
         assert has_node_named(tree, "ExtensionRow"), "extensions panel should list extension cards"
         assert has_node_named(tree, "ExtensionStatus"), "extension cards should show a status chip"
+
+
+class TestFolderDrop:
+    """Dropping a folder opens it as its own connection whose selectable
+    entries are globs over the files inside it.
+
+    DuckDB cannot read a bare directory — `SELECT * FROM '<dir>'` can't infer a
+    format and degrades into a table-name lookup ("Table with name /Users/...
+    does not exist"). The folder is scanned instead, and each data-file suffix
+    found becomes a pattern in the schema sidebar, clickable like a table.
+    """
+
+    def setup_method(self):
+        close_all_connections()
+        close_all_tabs()
+        post("new-tab")
+        time.sleep(0.3)
+
+    def test_folder_opens_as_connection(self):
+        folder = make_folder("sales_data", {
+            "jan.parquet": CITIES,
+            "feb.parquet": CITIES,
+            "extra.csv": CSV,
+            "notes.txt": CSV,
+        })
+        result = open_file(folder)
+        assert result["ok"] is True
+
+        s = state()
+        assert s["connectionCount"] == 2, "the folder opens as its own connection"
+        assert s["activeConnIdx"] == 1, "and becomes the active connection"
+        assert s["connectionNames"][1] == "sales_data", "named after the folder"
+
+    def test_patterns_listed_with_file_counts(self):
+        folder = make_folder("counted", {
+            "a.parquet": CITIES,
+            "b.parquet": CITIES,
+            "c.csv": CSV,
+            "readme.txt": CSV,
+        })
+        open_file(folder)
+
+        s = state()
+        # Most files first, so the dominant format leads.
+        assert s["schemaTableNames"] == ["*.parquet", "*.csv"]
+        assert s["schemaTableDetails"] == ["2 files", "1 file"]
+        assert "notes.txt" not in s["schemaTableNames"]
+        assert "*.txt" not in s["schemaTableNames"], "non-data files are not offered"
+
+    def test_opens_on_dominant_pattern(self):
+        folder = make_folder("dominant", {
+            "a.parquet": CITIES,
+            "b.parquet": CITIES,
+            "c.csv": CSV,
+        })
+        open_file(folder)
+
+        s = state()
+        assert s["userSQL"] == f"SELECT * FROM '{folder}/*.parquet'"
+        # cities.parquet holds 3 rows; the glob unions both copies.
+        assert s["rowCount"] == 6, "the glob reads every matching file"
+        assert "city" in s["columns"]
+
+    def test_selecting_a_pattern_switches_the_query(self):
+        """The point of the feature: the sidebar chooses between globs."""
+        folder = make_folder("switcher", {
+            "a.parquet": CITIES,
+            "b.parquet": CITIES,
+            "c.csv": CSV,
+        })
+        open_file(folder)
+        assert state()["rowCount"] == 6
+
+        # How many rows sales.csv holds, read directly, for comparison.
+        open_file(CSV)
+        csv_rows = state()["rowCount"]
+        post("select-connection", {"index": 1})
+        time.sleep(0.3)
+
+        result = post("select-table", {"name": "*.csv"})
+        assert result["ok"] is True
+        wait()
+
+        s = state()
+        assert s["userSQL"] == f"SELECT * FROM '{folder}/*.csv'"
+        assert s["rowCount"] == csv_rows
+        assert "product" in s["columns"], "now showing the CSV's columns"
+
+        # And back again.
+        assert post("select-table", {"name": "*.parquet"})["ok"] is True
+        wait()
+        assert state()["rowCount"] == 6
+
+    def test_sort_and_page_run_on_the_folder_connection(self):
+        """Follow-up operations must route through the folder's own worker."""
+        folder = make_folder("sortable", {
+            "a.parquet": CITIES,
+            "b.parquet": CITIES,
+        })
+        open_file(folder)
+
+        result = post("sort", {"column": 0})  # "city" — /sort takes an index
+        assert result["ok"] is True
+        wait()
+        s = state()
+        assert s["sortColumn"] == "city"
+        assert s["rowCount"] == 6, "sorting a glob must not error"
+
+        assert post("page", {"offset": 3})["ok"] is True
+        wait()
+        s = state()
+        assert s["pageOffset"] == 3
+        assert s["rowCount"] == 6
+
+    def test_folder_with_no_data_files_reports_a_clear_error(self):
+        folder = make_folder("docs_only", {"readme.txt": CSV})
+        before = state()["connectionCount"]
+
+        result = post("open", {"path": folder})
+        wait()
+        assert result.get("ok") is not True
+        assert "no readable data files" in result.get("error", "")
+        assert state()["connectionCount"] == before, "no connection is created"
+
+    def test_folder_named_like_a_database_is_still_a_folder(self):
+        """A directory named *.db must not be routed to the DuckDB opener,
+        which would fail with 'Is a directory'."""
+        folder = make_folder("archive.db", {"a.parquet": CITIES})
+        result = open_file(folder)
+        assert result["ok"] is True
+
+        s = state()
+        assert s["connectionNames"][1] == "archive.db"
+        assert s["schemaTableNames"] == ["*.parquet"]
+        assert s["rowCount"] == 3
+
+    def test_folder_name_with_apostrophe(self):
+        """The path is interpolated into SQL, so a quote in the folder name
+        must be escaped rather than closing the string literal."""
+        folder = make_folder("o'brien", {"a.parquet": CITIES})
+        result = open_file(folder)
+        assert result["ok"] is True
+
+        s = state()
+        assert s["rowCount"] == 3
+        assert "''" in s["userSQL"], "the apostrophe is doubled for SQL"
+
+    def test_ai_prompt_queries_by_glob_path_not_table_name(self):
+        """A folder is not a database. The DB prompt would say "query tables by
+        name", and an agent following it writes SELECT * FROM *.parquet — a
+        parser error. The prompt must reference single-quoted glob paths."""
+        folder = make_folder("ai_prompt", {
+            "a.parquet": CITIES,
+            "b.parquet": CITIES,
+            "c.csv": CSV,
+        })
+        open_file(folder)
+
+        s = state()
+        assert s["aiPromptVisible"] is True
+        prompt = s["aiPrompt"]
+        assert "folder of data files" in prompt
+        assert f"Folder: {folder}" in prompt
+        assert "Database file:" not in prompt, "a directory is not a database file"
+        assert "Query tables by name" not in prompt, "globs cannot be named as tables"
+        assert "SELECT * FROM <table>" not in prompt
+        # The example query names a real glob, quoted as a path.
+        assert f"SELECT * FROM '{folder}/*.parquet'" in prompt
+        # Every pattern is listed with its file count and columns.
+        assert f"'{folder}/*.parquet' — 2 files (city VARCHAR, pop BIGINT)" in prompt
+        assert f"'{folder}/*.csv' — 1 file" in prompt
+        assert "ai_prompt" in prompt, "names the connection for /sql"
+
+    def test_ai_prompt_example_query_actually_runs(self):
+        """The glob in the prompt is executable as written, via /sql."""
+        folder = make_folder("ai_runnable", {"a.parquet": CITIES, "b.parquet": CITIES})
+        open_file(folder)
+
+        sql = f"SELECT * FROM '{folder}/*.parquet' LIMIT 10"
+        assert sql in state()["aiPrompt"]
+
+        r = SESSION.post(f"{BASE_URL}/sql", json={"sql": sql, "connection": "ai_runnable"}).json()
+        assert r.get("error") is None, r
+        assert r["total"] == 6
+        assert r["columns"] == ["city", "pop"]
+
+    def test_folder_name_with_glob_metacharacters(self):
+        """A folder whose own name contains * or [ must not be re-globbed."""
+        decoy = make_folder("q[1]", {"a.parquet": CITIES})
+        # A sibling that a naive glob would also match.
+        make_folder("q1", {"a.parquet": CITIES, "b.parquet": CITIES})
+
+        result = open_file(decoy)
+        assert result["ok"] is True
+        assert state()["rowCount"] == 3, "only the named folder's file is read"
+
+
+class TestLocalSQLRowLimits:
+    """A local file costs nothing to read, so /sql does not truncate it to a
+    page by default — only the 10,000-row ceiling that bounds memory applies.
+    (Remote/gateway connections keep a 100-row default; CI has no gateway.)
+    """
+
+    def sql(self, statement, connection="", **kw):
+        body = {"sql": statement}
+        if connection:
+            body["connection"] = connection
+        body.update(kw)
+        return SESSION.post(f"{BASE_URL}/sql", json=body).json()
+
+    def setup_method(self):
+        close_all_connections()
+        close_all_tabs()
+        post("new-tab")
+        time.sleep(0.3)
+
+    def test_no_limit_returns_every_row(self):
+        """sample.parquet has 500 rows — all 500 come back, not 100."""
+        open_file(SAMPLE)
+        r = self.sql(f"SELECT * FROM '{SAMPLE}'")
+        assert r.get("error") is None, r
+        assert r["total"] == 500
+        assert len(r["rows"]) == 500, "a local file must not be capped at 100 rows"
+
+    def test_explicit_limit_is_honoured(self):
+        open_file(SAMPLE)
+        r = self.sql(f"SELECT * FROM '{SAMPLE}'", limit=10)
+        assert r.get("error") is None, r
+        assert len(r["rows"]) == 10
+        assert r["total"] == 500, "total still reports the full count"
+
+    def test_limit_in_the_sql_is_honoured(self):
+        open_file(SAMPLE)
+        r = self.sql(f"SELECT * FROM '{SAMPLE}' LIMIT 7")
+        assert r.get("error") is None, r
+        assert len(r["rows"]) == 7
+
+    def test_row_ceiling_still_bounds_the_response(self):
+        """Unlimited is not unbounded: 10,000 rows is the memory ceiling."""
+        open_file(SAMPLE)
+        r = self.sql("SELECT * FROM range(12000)")
+        assert r.get("error") is None, r
+        assert r["total"] == 12000, "the count is not truncated"
+        assert len(r["rows"]) == 10000, "rows are capped at the ceiling"
+
+    def test_folder_connection_is_also_unlimited(self):
+        folder = make_folder("unlimited", {"a.parquet": SAMPLE, "b.parquet": SAMPLE})
+        open_file(folder)
+        r = self.sql(f"SELECT * FROM '{folder}/*.parquet'", connection="unlimited")
+        assert r.get("error") is None, r
+        assert r["total"] == 1000
+        assert len(r["rows"]) == 1000
+
+    def test_ai_prompt_describes_the_real_limits(self):
+        """The prompt used to promise a 100-row default and a 30-second
+        timeout. Neither was true: there is no server-side timeout at all."""
+        open_file(SAMPLE)
+        prompt = state()["aiPrompt"]
+        assert "10,000-row ceiling" in prompt
+        assert "no server-side timeout" in prompt
+        assert "time out after 30 seconds" not in prompt
+        assert "limited to 100 rows" not in prompt

@@ -1,6 +1,10 @@
 package db
 
-import "testing"
+import (
+	"context"
+	"fmt"
+	"testing"
+)
 
 func TestPaginate(t *testing.T) {
 	tests := []struct {
@@ -22,6 +26,13 @@ func TestPaginate(t *testing.T) {
 		// LIMIT nested in a subquery is not a trailing limit — page the outer query.
 		{"nested limit", "SELECT * FROM (SELECT * FROM t LIMIT 5) x", 0, 100,
 			"SELECT * FROM (SELECT * FROM t LIMIT 5) x LIMIT 100 OFFSET 0"},
+		// limit <= 0 means "no limit": emit no LIMIT clause at all, so a local
+		// query returns everything rather than being silently truncated.
+		{"no limit", "SELECT * FROM t", 0, 0, "SELECT * FROM t"},
+		{"no limit negative", "SELECT * FROM t", 0, -1, "SELECT * FROM t"},
+		{"no limit with offset", "SELECT * FROM t", 200, 0, "SELECT * FROM t OFFSET 200"},
+		{"no limit trailing semicolon", "SELECT * FROM t;", 0, 0, "SELECT * FROM t"},
+		{"no limit respects user limit", "SELECT * FROM t LIMIT 5", 0, 0, "SELECT * FROM t LIMIT 5"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -54,5 +65,38 @@ func TestHasTrailingLimit(t *testing.T) {
 		if hasTrailingLimit(s) {
 			t.Errorf("hasTrailingLimit(%q) = true, want false", s)
 		}
+	}
+}
+
+// TestQueryWithoutLimitReturnsEverything covers the local-connection default:
+// no limit means no truncation, up to the maxResultRows ceiling.
+func TestQueryWithoutLimitReturnsEverything(t *testing.T) {
+	d, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+
+	res, err := d.Query(context.Background(), "SELECT * FROM range(250)", 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Total != 250 {
+		t.Errorf("Total = %d, want 250", res.Total)
+	}
+	if len(res.Rows) != 250 {
+		t.Errorf("got %d rows, want all 250 — an unlimited query must not be paged", len(res.Rows))
+	}
+
+	// The ceiling still applies: it bounds memory no matter what was asked for.
+	res, err = d.Query(context.Background(), fmt.Sprintf("SELECT * FROM range(%d)", maxResultRows+500), 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Total != int64(maxResultRows+500) {
+		t.Errorf("Total = %d, want %d — the count is not truncated", res.Total, maxResultRows+500)
+	}
+	if len(res.Rows) != maxResultRows {
+		t.Errorf("got %d rows, want the %d-row ceiling", len(res.Rows), maxResultRows)
 	}
 }
