@@ -48,6 +48,10 @@ Test data lives in `testdata/` (parquet, CSV, JSON, TSV, .duckdb files).
 - `internal/db/` — DuckDB wrapper. `New()` creates in-memory DB, `OpenDB()` opens .duckdb files read-only. Handles schema inspection, paginated queries, and parquet metadata extraction.
 - `internal/models/` — `AppState` is the single source of truth per tab. Holds query text, schema, results, sort/pagination params, and a navigation stack (back/forward). `QueryHistory` persists query history to JSON in the user config dir.
 - `internal/ui/` — All Godot UI nodes implemented as Go extensions. `app.go` is the root node managing windows, menus, and keyboard shortcuts. `appwindow.go` manages tabs, sidebar, SQL panel, data grid, and row detail panel.
+- `internal/sshtun/` — SSH port forwarding (`ssh -L`) for connections that reach
+  their database through a jump host. Self-contained: `Start()` dials the host,
+  listens on an ephemeral local port, and forwards. Host keys are always
+  verified against `known_hosts`. See `docs/ssh-tunnel.md`.
 - `internal/control/` — HTTP server (dynamic port, printed to stdout) exposing endpoints for programmatic control (`/open`, `/query`, `/sort`, `/page`, `/state`, `/screenshot`, `/ui-tree`, etc.). Every request is gated by a temporary bearer key minted in `control.New` (`Authorization: Bearer <key>`); `requireAuth` wraps the mux in `Start`. Primarily used by integration tests and the copy-to-clipboard AI prompt.
 
 **UI extension pattern** (graphics.gd):

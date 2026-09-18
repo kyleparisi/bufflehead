@@ -20,9 +20,6 @@ const (
 	// KindPostgres connects directly to a reachable Postgres host (local, over
 	// a VPN, or a public endpoint). No AWS credentials or tunnel are used.
 	KindPostgres ConnKind = "postgres"
-	// KindSSHPostgres reaches a Postgres host through an SSH tunnel. Reserved
-	// for a future release.
-	KindSSHPostgres ConnKind = "ssh_postgres"
 	// KindBigQuery queries Google BigQuery via the native client. No tunnel and
 	// no AWS; auth is Application Default Credentials (the file gcloud wrote).
 	KindBigQuery ConnKind = "bigquery"
@@ -30,6 +27,11 @@ const (
 	// or a public endpoint). No AWS credentials or tunnel are used.
 	KindMySQL ConnKind = "mysql"
 )
+
+// Note: an SSH tunnel is deliberately NOT a ConnKind. It is an orthogonal
+// transport that any directly-dialled engine can use, so it rides on
+// GatewayEntry.SSH instead of multiplying kinds (ssh_postgres, ssh_mysql, …).
+// See GatewayEntry.SupportsSSHTunnel.
 
 // DefaultBQMaxBytesBilled caps bytes scanned per BigQuery query when a
 // connection doesn't set its own limit (~21.5 GB). BigQuery bills by bytes
@@ -64,6 +66,11 @@ type GatewayEntry struct {
 	AuthMode      string            `yaml:"auth_mode,omitempty"` // "password" (default) or "iam"
 	SSLMode       string            `yaml:"ssl_mode,omitempty"`  // direct Postgres: prefer|require|disable
 	SecretKind    SecretKind        `yaml:"secret_kind,omitempty"`
+
+	// SSH, when set, reaches RDSHost:RDSPort through an SSH jump host instead
+	// of dialling it directly. Valid only for kinds where SupportsSSHTunnel
+	// reports true (direct Postgres and MySQL).
+	SSH *SSHTunnel `yaml:"ssh,omitempty"`
 
 	// BigQuery (Kind == KindBigQuery).
 	GCPProject      string `yaml:"gcp_project,omitempty"`
@@ -102,6 +109,48 @@ func (g *GatewayEntry) IsMySQL() bool {
 // Postgres, direct MySQL, or BigQuery.
 func (g *GatewayEntry) IsNoAWS() bool {
 	return g.IsDirect() || g.IsMySQL() || g.IsBigQuery()
+}
+
+// SupportsSSHTunnel reports whether this connection kind can be reached through
+// an SSH jump host. Only the directly-dialled engines qualify: an AWS gateway
+// already tunnels via SSM, and BigQuery is an HTTPS API with no host to forward.
+func (g *GatewayEntry) SupportsSSHTunnel() bool {
+	return g.IsDirect() || g.IsMySQL()
+}
+
+// UsesSSH reports whether this entry reaches its database through an SSH tunnel.
+func (g *GatewayEntry) UsesSSH() bool {
+	return g.SSH != nil && g.SSH.Host != "" && g.SupportsSSHTunnel()
+}
+
+// DialTarget returns the host and port the database driver should connect to.
+// With an SSH tunnel established, that is the local end of the forward
+// (127.0.0.1:LocalPort); otherwise it is the database host itself.
+//
+// A tunneled entry with no local port is an error, never a fall back to
+// RDSHost:RDSPort. That fallback looks harmless but is the opposite: the common
+// `ssh -L ... localhost:5432` setup names the database "localhost", so falling
+// back silently connects to a database on the USER'S machine that happens to
+// share the address — wrong data, no warning.
+func (g *GatewayEntry) DialTarget() (string, int, error) {
+	if g.UsesSSH() {
+		if g.LocalPort <= 0 {
+			return "", 0, fmt.Errorf("connection %q reaches %s:%d through the SSH tunnel to %s, "+
+				"but the tunnel is not established (no local forward port) — reconnect to rebuild it",
+				g.Name, g.RDSHost, g.RDSPort, g.SSH.Describe())
+		}
+		return "127.0.0.1", g.LocalPort, nil
+	}
+	return g.RDSHost, g.RDSPort, nil
+}
+
+// ResolveSSHSecret returns the SSH passphrase/password for this entry, keyed by
+// the connection name. Empty when no tunnel is configured.
+func (g *GatewayEntry) ResolveSSHSecret() string {
+	if g.SSH == nil {
+		return ""
+	}
+	return g.SSH.ResolveSecret(g.Name)
 }
 
 // EffectiveTLSMode returns the go-sql-driver TLS mode for a direct MySQL

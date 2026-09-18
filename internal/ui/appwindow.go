@@ -11,6 +11,7 @@ import (
 	"bufflehead/internal/control"
 	"bufflehead/internal/db"
 	"bufflehead/internal/models"
+	"bufflehead/internal/sshtun"
 
 	"graphics.gd/variant/Color"
 
@@ -70,9 +71,12 @@ func (c *Connection) ConnKey() string {
 
 // GatewayConnection holds the gateway-specific state for a remote connection.
 type GatewayConnection struct {
-	Config        models.GatewayEntry
-	Auth          *bfaws.AuthManager
-	Tunnel        *bfaws.TunnelManager
+	Config models.GatewayEntry
+	Auth   *bfaws.AuthManager
+	Tunnel *bfaws.TunnelManager
+	// SSH is the jump-host forward a direct connection was opened through, nil
+	// when the database is dialled directly.
+	SSH           *sshtun.Tunnel
 	LastTunnelMsg string // tracks last displayed tunnel status to avoid redundant updates
 }
 
@@ -95,18 +99,25 @@ func connDBSegment(cfg models.GatewayEntry) string {
 	return cfg.DBName
 }
 
-// connPathFor returns the display URI for a gateway connection.
+// connPathFor returns the display URI for a gateway connection. The URI always
+// names the real database endpoint, not the local end of a tunnel, with the SSH
+// hop appended so a tunneled connection is never mistaken for a local one.
 func connPathFor(cfg models.GatewayEntry) string {
+	var path string
 	switch {
 	case cfg.IsBigQuery():
 		return fmt.Sprintf("bigquery://%s/%s", cfg.GCPProject, cfg.DefaultDataset)
 	case cfg.IsMySQL():
-		return fmt.Sprintf("mysql://%s:%d/%s", cfg.RDSHost, cfg.RDSPort, cfg.DBName)
+		path = fmt.Sprintf("mysql://%s:%d/%s", cfg.RDSHost, cfg.RDSPort, cfg.DBName)
 	case cfg.IsDirect():
-		return fmt.Sprintf("postgresql://%s:%d/%s", cfg.RDSHost, cfg.RDSPort, cfg.DBName)
+		path = fmt.Sprintf("postgresql://%s:%d/%s", cfg.RDSHost, cfg.RDSPort, cfg.DBName)
 	default:
 		return fmt.Sprintf("postgresql://localhost:%d/%s", cfg.LocalPort, cfg.DBName)
 	}
+	if cfg.UsesSSH() {
+		path += " via ssh://" + cfg.SSH.Describe()
+	}
+	return path
 }
 
 var nextTabID uint64
@@ -1664,12 +1675,21 @@ func (w *AppWindow) handleExtAction(ts *tabState, name string, install bool) {
 // wireConnButton sets up left-click (select) and right-click (context menu) on a rail button.
 // connHealthColor returns the footer status-dot color for a connection: green
 // when connected (all local connections, or a gateway with a live tunnel),
-// amber while a gateway tunnel is reconnecting, red on tunnel error.
+// amber while a gateway tunnel is reconnecting, red when either tunnel — SSM or
+// SSH — has failed.
 func connHealthColor(conn *Connection) Color.RGBA {
 	if conn == nil {
 		return colorStatusGray
 	}
-	if conn.Gateway == nil || conn.Gateway.Tunnel == nil {
+	if conn.Gateway == nil {
+		return colorStatusGreen
+	}
+	// A dead SSH forward is as fatal as a dead SSM tunnel: the pool above it is
+	// pointed at a local port with nothing on the other end.
+	if conn.Gateway.SSH != nil && !conn.Gateway.SSH.Alive() {
+		return colorStatusRed
+	}
+	if conn.Gateway.Tunnel == nil {
 		return colorStatusGreen
 	}
 	switch conn.Gateway.Tunnel.Status() {
@@ -2145,8 +2165,11 @@ func (w *AppWindow) closeConnection(idx int) {
 	if conn.worker != nil {
 		conn.worker.Stop()
 	}
-	if conn.Gateway != nil && conn.Gateway.Tunnel != nil {
-		conn.Gateway.Tunnel.Stop()
+	if conn.Gateway != nil {
+		if conn.Gateway.Tunnel != nil {
+			conn.Gateway.Tunnel.Stop()
+		}
+		conn.Gateway.SSH.Stop() // nil-safe
 	}
 	if conn.DB != nil {
 		conn.DB.Close()
@@ -2241,6 +2264,14 @@ func (w *AppWindow) handleOpenGatewayResult(res DBResult) {
 	name := gw.Config.Name
 	pgConn := res.Querier
 	tables := res.Tables
+	// A direct connection's SSH forward is opened in the worker goroutine; the
+	// connection owns it from here so closing the connection stops it. The
+	// entry comes back with it because establishing the tunnel assigned the
+	// LocalPort that later operations dial through.
+	gw.SSH = res.SSH
+	if res.Entry != nil {
+		gw.Config = *res.Entry
+	}
 
 	// Create worker
 	pgWorker := NewConnWorker(pgConn, w.results)
