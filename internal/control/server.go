@@ -69,12 +69,28 @@ type CloseConnectionData struct {
 	Index int `json:"index"`
 }
 
+// OpenGatewayData is the optional payload for "open_gateway": a connection
+// kind ("postgres", "mysql", "bigquery", or "" for the AWS gateway) to
+// preselect, so a caller lands on that form instead of the default. SSH
+// preselects the "via SSH" toggle on the direct-connection forms.
+type OpenGatewayData struct {
+	Kind string `json:"kind,omitempty"`
+	SSH  bool   `json:"ssh,omitempty"`
+}
+
 // CreateTestBookmarkData is the optional payload for "create_test_bookmark". A
 // custom label lets a test seed several distinct AWS bookmarks — the many-card
 // render path that overflowed graphics.gd's object pool. Empty label defaults
 // to "dummy-bookmark".
+//
+// SSHHost, when set, seeds a direct Postgres bookmark that reaches its database
+// through an SSH jump host instead of an AWS gateway, so tests can verify that
+// a tunnel survives a save/reload.
 type CreateTestBookmarkData struct {
-	Label string `json:"label,omitempty"`
+	Label   string `json:"label,omitempty"`
+	SSHHost string `json:"ssh_host,omitempty"`
+	SSHPort int    `json:"ssh_port,omitempty"`
+	SSHUser string `json:"ssh_user,omitempty"`
 }
 
 // SelectColumnsData is the payload for the "select_columns" action: the set of

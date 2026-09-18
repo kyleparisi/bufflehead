@@ -44,6 +44,11 @@ type Bookmark struct {
 	SSLMode       string            `json:"ssl_mode,omitempty"`
 	SecretKind    SecretKind        `json:"secret_kind,omitempty"`
 
+	// SSH, when set, reaches RDSHost:RDSPort through an SSH jump host. The
+	// passphrase/password is never in this file — it lives in the OS keychain
+	// under SSHSecretLabel(Label) or a named env var.
+	SSH *SSHTunnel `json:"ssh,omitempty"`
+
 	// BigQuery (Kind == KindBigQuery).
 	GCPProject      string `json:"gcp_project,omitempty"`
 	DefaultDataset  string `json:"default_dataset,omitempty"`
@@ -74,6 +79,7 @@ func (b *Bookmark) ToGatewayEntry(localPort int) GatewayEntry {
 		AuthMode:      b.AuthMode,
 		SSLMode:       b.SSLMode,
 		SecretKind:    b.SecretKind,
+		SSH:           b.SSH.Clone(),
 
 		GCPProject:      b.GCPProject,
 		DefaultDataset:  b.DefaultDataset,
@@ -134,6 +140,9 @@ func (bs *BookmarkStore) Remove(label string) error {
 			// Best-effort cleanup of any keychain secret for this bookmark.
 			if b.SecretKind == SecretKeychain {
 				_ = DeleteSecret(label)
+			}
+			if b.SSH != nil && b.SSH.SecretKind == SecretKeychain {
+				_ = DeleteSecret(SSHSecretLabel(label))
 			}
 			bs.Bookmarks = append(bs.Bookmarks[:i], bs.Bookmarks[i+1:]...)
 			bs.save()

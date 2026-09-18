@@ -146,6 +146,16 @@ def count_nodes_named(tscn_text, name):
     return sum(1 for n in parse_tscn(tscn_text) if n["path"].split("/")[-1] == name)
 
 
+def ssh_fields_visible(tscn_text):
+    """True if any visible SSHTunnelFields container is laid out (hidden Godot
+    containers keep a stale, unlaid-out size, so visibility is the signal)."""
+    return any(
+        n["path"].split("/")[-1] == "SSHTunnelFields"
+        and n["props"].get("visible") == "true"
+        for n in parse_tscn(tscn_text)
+    )
+
+
 def count_nodes_name_prefix(tscn_text, prefix):
     """Count nodes whose leaf name starts with `prefix` (e.g. per-item names
     like 'BookmarkCard_<label>')."""
@@ -1368,6 +1378,101 @@ class TestConnectionControls:
         finally:
             for label in labels:
                 post("delete-test-bookmark", {"label": label})
+
+        open_file(SAMPLE)
+
+    def test_ssh_section_on_direct_forms_only(self):
+        """An SSH tunnel is a transport, not a connection kind: it belongs on the
+        directly-dialled engines (Postgres, MySQL) and nowhere else. Open the
+        connection screen on each type and check where the section appears."""
+        close_all_connections()
+        close_all_tabs()
+        post("new-tab")
+        time.sleep(0.3)
+
+        for kind in ("postgres", "mysql"):
+            assert post("open-gateway", {"kind": kind})["ok"] is True
+            time.sleep(0.5)
+            tree = ui_tree()
+            assert find_node(tree, "GatewayScreen") is not None, (
+                f"gateway screen should render for kind={kind}"
+            )
+            assert has_node_named(tree, "SSHTunnelToggle"), (
+                f"the {kind} form should offer an SSH tunnel toggle"
+            )
+            assert has_node_named(tree, "SSHTunnelFields"), (
+                f"the {kind} form should carry the SSH tunnel fields"
+            )
+            assert not ssh_fields_visible(tree), (
+                f"the {kind} form should default to a direct connection, "
+                "with the SSH fields hidden"
+            )
+            assert post("close-gateway")["ok"] is True
+            time.sleep(0.3)
+
+            # Switching the toggle on is a state change projected by render():
+            # the fields appear, laid out at the form's real width.
+            assert post("open-gateway", {"kind": kind, "ssh": True})["ok"] is True
+            time.sleep(0.5)
+            tree = ui_tree()
+            assert ssh_fields_visible(tree), (
+                f"turning the {kind} form's SSH toggle on should reveal the fields"
+            )
+            assert post("close-gateway")["ok"] is True
+            time.sleep(0.3)
+
+        # BigQuery is an HTTPS API — there is no host to forward, so no tunnel.
+        assert post("open-gateway", {"kind": "bigquery"})["ok"] is True
+        time.sleep(0.5)
+        tree = ui_tree()
+        bq_screen = find_node(tree, "GatewayScreen")
+        assert bq_screen is not None, "gateway screen should render for BigQuery"
+        assert state() is not None, "app crashed on the BigQuery form"
+        assert post("close-gateway")["ok"] is True
+        time.sleep(0.3)
+
+        open_file(SAMPLE)
+
+    def test_ssh_tunnel_bookmark_round_trip(self):
+        """An SSH-tunneled connection is a direct Postgres bookmark carrying a
+        jump host, not a connection kind of its own. Seed one, reopen the
+        connection screen, and verify the card renders with its SSH badge — i.e.
+        the tunnel survived the save and reload."""
+        close_all_connections()
+        close_all_tabs()
+        post("new-tab")
+        time.sleep(0.3)
+
+        label = "ssh-tunneled"
+        try:
+            result = post("create-test-bookmark", {
+                "label": label,
+                "ssh_host": "bastion.example.com",
+                "ssh_port": 2222,
+                "ssh_user": "deploy",
+            })
+            assert result["ok"] is True
+
+            assert post("open-gateway")["ok"] is True
+            time.sleep(1.0)
+
+            tree = ui_tree()
+            assert find_node(tree, "GatewayScreen") is not None, (
+                "gateway screen should render with an SSH bookmark present"
+            )
+            assert has_node_named(tree, f"BookmarkCard_{label}"), (
+                "the tunneled bookmark should render as a card"
+            )
+            assert has_node_named(tree, "SSHBadge"), (
+                "a tunneled bookmark's card should carry an SSH badge"
+            )
+
+            assert state() is not None, "app crashed rendering an SSH bookmark"
+            assert post("close-gateway")["ok"] is True
+            time.sleep(0.3)
+            assert state() is not None, "app crashed during gateway teardown"
+        finally:
+            post("delete-test-bookmark", {"label": label})
 
         open_file(SAMPLE)
 

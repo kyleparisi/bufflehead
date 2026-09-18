@@ -118,12 +118,13 @@ type GatewayScreen struct {
 
 	// ── Connection-type selection (authoritative state) ──
 	connKind models.ConnKind
+	// initialSSH is the SSH toggle's starting state for the direct forms.
+	initialSSH bool
 
 	// Connection-type selector tiles
 	typeAWSBtn Button.Instance
 	typePGBtn  Button.Instance
 	typeMyBtn  Button.Instance
-	typeSSHBtn Button.Instance
 
 	// Panels toggled by connKind (AWS flow vs. direct Postgres form)
 	ssoPanel     PanelContainer.Instance
@@ -144,6 +145,7 @@ type GatewayScreen struct {
 	pgNoPass    bool // true = trust/no-password auth
 	pgPassBtn   Button.Instance
 	pgNoPassBtn Button.Instance
+	pgSSH       *sshSection
 
 	// BigQuery selector tile + form
 	typeBQBtn   Button.Instance
@@ -171,6 +173,7 @@ type GatewayScreen struct {
 	myNoPass    bool // true = no-password auth
 	myPassBtn   Button.Instance
 	myNoPassBtn Button.Instance
+	mySSH       *sshSection
 }
 
 // pgSSLModes lists the sslmode options for the direct Postgres form dropdown,
@@ -223,6 +226,15 @@ func (g *GatewayScreen) SetConfig(cfg *models.GatewayConfig) {
 
 func (g *GatewayScreen) SetBookmarks(store *models.BookmarkStore) {
 	g.bookmarks = store
+}
+
+// SetConnKind preselects a connection type, and whether the direct forms open
+// with their SSH tunnel switched on. It sets state only — Ready's render passes
+// project it onto the tiles, forms and fields — so it must be called before the
+// screen enters the tree.
+func (g *GatewayScreen) SetConnKind(kind models.ConnKind, ssh bool) {
+	g.connKind = kind
+	g.initialSSH = ssh
 }
 
 func (g *GatewayScreen) Ready() {
@@ -383,14 +395,14 @@ func (g *GatewayScreen) buildTypeSelector() VBoxContainer.Instance {
 	})
 	row.AsNode().AddChild(g.typeAWSBtn.AsNode())
 
-	g.typePGBtn = g.makeTypeTile("⛁  PostgreSQL", "Direct host — local, VPN, or public", false)
+	g.typePGBtn = g.makeTypeTile("⛁  PostgreSQL", "Direct host or via SSH tunnel", false)
 	g.typePGBtn.AsBaseButton().OnPressed(func() {
 		g.connKind = models.KindPostgres
 		g.renderConnKind()
 	})
 	row.AsNode().AddChild(g.typePGBtn.AsNode())
 
-	g.typeMyBtn = g.makeTypeTile("🐬  MySQL", "Direct host — local, VPN, or public", false)
+	g.typeMyBtn = g.makeTypeTile("🐬  MySQL", "Direct host or via SSH tunnel", false)
 	g.typeMyBtn.AsBaseButton().OnPressed(func() {
 		g.connKind = models.KindMySQL
 		g.renderConnKind()
@@ -403,10 +415,6 @@ func (g *GatewayScreen) buildTypeSelector() VBoxContainer.Instance {
 		g.renderConnKind()
 	})
 	row.AsNode().AddChild(g.typeBQBtn.AsNode())
-
-	g.typeSSHBtn = g.makeTypeTile("⌨  SSH + PostgreSQL", "Coming soon", true)
-	g.typeSSHBtn.AsBaseButton().SetDisabled(true)
-	row.AsNode().AddChild(g.typeSSHBtn.AsNode())
 
 	box.AsNode().AddChild(row.AsNode())
 	return box
@@ -467,10 +475,6 @@ func (g *GatewayScreen) renderConnKind() {
 	if g.typeBQBtn != (Button.Instance{}) {
 		applyTypeTileTheme(g.typeBQBtn.AsControl(), bq)
 	}
-	if g.typeSSHBtn != (Button.Instance{}) {
-		applyTypeTileTheme(g.typeSSHBtn.AsControl(), false)
-	}
-
 	if g.ssoPanel != (PanelContainer.Instance{}) {
 		g.ssoPanel.AsCanvasItem().SetVisible(aws)
 	}
@@ -1201,6 +1205,8 @@ func (g *GatewayScreen) buildPGForm() PanelContainer.Instance {
 	sslVBox.AsNode().AddChild(g.pgSSLMode.AsNode())
 	vbox.AsNode().AddChild(sslVBox.AsNode())
 
+	g.pgSSH = g.buildSSHSection(vbox)
+
 	// Helper text
 	helper := Label.New()
 	helper.SetText("Use this for local databases, VPN-reachable instances, or public endpoints. No AWS credentials needed.")
@@ -1272,12 +1278,18 @@ func (g *GatewayScreen) onPGTest() {
 		return
 	}
 
+	if _, err := g.pgSSH.config(); err != nil {
+		g.pgStatus.SetText(err.Error())
+		g.pgStatus.AsControl().AddThemeColorOverride("font_color", colorStatusRed)
+		return
+	}
+
 	host := valueOrDefault(g.pgHost.Text(), "localhost")
 	port := valueOrDefault(g.pgPort.Text(), "5432")
 	dbName := valueOrDefault(g.pgDBName.Text(), "postgres")
 	dbUser := valueOrDefault(g.pgDBUser.Text(), "postgres")
 
-	g.pgStatus.SetText(fmt.Sprintf("✓ Ready — will connect to %s@%s:%s/%s", dbUser, host, port, dbName))
+	g.pgStatus.SetText(fmt.Sprintf("✓ Ready — will connect to %s@%s:%s/%s%s", dbUser, host, port, dbName, g.pgSSH.describe()))
 	g.pgStatus.AsControl().AddThemeColorOverride("font_color", colorStatusGreen)
 }
 
@@ -1339,6 +1351,18 @@ func (g *GatewayScreen) onPGConnect() {
 
 	sslMode := g.selectedSSLMode()
 
+	// SSH tunnel (optional). Validate before touching the keychain so a typo in
+	// the jump host doesn't leave a half-saved bookmark behind.
+	sshTunnel, err := g.pgSSH.config()
+	if err != nil {
+		setErr(err.Error())
+		return
+	}
+	if warn := persistSSHSecret(sshTunnel, label); warn != "" {
+		g.pgStatus.SetText(warn)
+		g.pgStatus.AsControl().AddThemeColorOverride("font_color", colorStatusYellow)
+	}
+
 	// Determine secret storage: keychain when a password is provided.
 	secretKind := models.SecretNone
 	if !g.pgNoPass && dbPass != "" {
@@ -1362,6 +1386,7 @@ func (g *GatewayScreen) onPGConnect() {
 		DBPassword: dbPass, // in-memory only for this session
 		SSLMode:    sslMode,
 		SecretKind: secretKind,
+		SSH:        sshTunnel,
 	}
 
 	// Save/update a bookmark (raw password never written to the JSON file).
@@ -1376,6 +1401,7 @@ func (g *GatewayScreen) onPGConnect() {
 			DBUser:     dbUser,
 			SSLMode:    sslMode,
 			SecretKind: secretKind,
+			SSH:        sshTunnel.Redacted(),
 		}
 		g.bookmarks.Add(bm)
 	}
@@ -1487,6 +1513,8 @@ func (g *GatewayScreen) buildMySQLForm() PanelContainer.Instance {
 	tlsVBox.AsNode().AddChild(g.myTLSMode.AsNode())
 	vbox.AsNode().AddChild(tlsVBox.AsNode())
 
+	g.mySSH = g.buildSSHSection(vbox)
+
 	// Helper text
 	helper := Label.New()
 	helper.SetText("Use this for local databases, VPN-reachable instances, or public endpoints. No AWS credentials needed.")
@@ -1556,12 +1584,18 @@ func (g *GatewayScreen) onMySQLTest() {
 		return
 	}
 
+	if _, err := g.mySSH.config(); err != nil {
+		g.myStatus.SetText(err.Error())
+		g.myStatus.AsControl().AddThemeColorOverride("font_color", colorStatusRed)
+		return
+	}
+
 	host := valueOrDefault(g.myHost.Text(), "localhost")
 	port := valueOrDefault(g.myPort.Text(), "3306")
 	dbUser := valueOrDefault(g.myDBUser.Text(), "root")
 	dbName := g.myDBName.Text()
 
-	g.myStatus.SetText(fmt.Sprintf("✓ Ready — will connect to %s@%s:%s/%s", dbUser, host, port, dbName))
+	g.myStatus.SetText(fmt.Sprintf("✓ Ready — will connect to %s@%s:%s/%s%s", dbUser, host, port, dbName, g.mySSH.describe()))
 	g.myStatus.AsControl().AddThemeColorOverride("font_color", colorStatusGreen)
 }
 
@@ -1611,6 +1645,18 @@ func (g *GatewayScreen) onMySQLConnect() {
 
 	tlsMode := g.selectedTLSMode()
 
+	// SSH tunnel (optional). Validate before touching the keychain so a typo in
+	// the jump host doesn't leave a half-saved bookmark behind.
+	sshTunnel, err := g.mySSH.config()
+	if err != nil {
+		setErr(err.Error())
+		return
+	}
+	if warn := persistSSHSecret(sshTunnel, label); warn != "" {
+		g.myStatus.SetText(warn)
+		g.myStatus.AsControl().AddThemeColorOverride("font_color", colorStatusYellow)
+	}
+
 	// Determine secret storage: keychain when a password is provided.
 	secretKind := models.SecretNone
 	if !g.myNoPass && dbPass != "" {
@@ -1629,7 +1675,7 @@ func (g *GatewayScreen) onMySQLConnect() {
 		RDSPort:    port,
 		DBName:     dbName,
 		DBUser:     dbUser,
-		DBPassword: dbPass, // in-memory only for this session
+		DBPassword: dbPass,  // in-memory only for this session
 		SSLMode:    tlsMode, // SSLMode field stores the MySQL TLS mode
 		SecretKind: secretKind,
 	}
@@ -2317,6 +2363,15 @@ func (g *GatewayScreen) buildCardPanel(entry models.GatewayEntry, idx int) Panel
 }
 
 // envBadgeColor returns a color for an environment badge.
+// sshSuffix renders the jump host for a bookmark card's detail line, or "" when
+// the connection dials the database directly.
+func sshSuffix(tunnel *models.SSHTunnel) string {
+	if tunnel == nil || tunnel.Host == "" {
+		return ""
+	}
+	return " · via ssh " + tunnel.Describe()
+}
+
 func envBadgeColor(env string) Color.RGBA {
 	switch strings.ToLower(env) {
 	case "production", "prod":
@@ -2362,6 +2417,9 @@ func (g *GatewayScreen) buildBookmarkCard(bm models.Bookmark) PanelContainer.Ins
 	if bm.Env != "" {
 		row1.AsNode().AddChild(makeAccentChip(strings.ToUpper(bm.Env), envBadgeColor(bm.Env), "EnvBadge").AsNode())
 	}
+	if bm.SSH != nil && bm.SSH.Host != "" {
+		row1.AsNode().AddChild(makeAccentChip("SSH", colorAccent, "SSHBadge").AsNode())
+	}
 
 	isDirect := bm.Kind == models.KindPostgres
 	isMySQL := bm.Kind == models.KindMySQL
@@ -2394,9 +2452,9 @@ func (g *GatewayScreen) buildBookmarkCard(bm models.Bookmark) PanelContainer.Ins
 			profileLabel.SetText("BigQuery · gcloud ADC")
 		}
 	case isDirect:
-		profileLabel.SetText("Direct PostgreSQL · SSL: " + bm.SSLMode)
+		profileLabel.SetText("PostgreSQL · SSL: " + bm.SSLMode + sshSuffix(bm.SSH))
 	case isMySQL:
-		profileLabel.SetText("Direct MySQL · TLS: " + bm.SSLMode)
+		profileLabel.SetText("MySQL · TLS: " + bm.SSLMode + sshSuffix(bm.SSH))
 	default:
 		profileLabel.SetText("AWS Profile: " + bm.AWSProfile)
 	}

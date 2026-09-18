@@ -2476,11 +2476,12 @@ func (a *App) initMainWindow() {
 	}
 }
 
-func (a *App) showGatewayScreen() {
+func (a *App) showGatewayScreen(kind models.ConnKind, ssh bool) {
 	w := a.mainWin
 	screen := new(GatewayScreen)
 	screen.SetConfig(a.GatewayConfig)
 	screen.SetBookmarks(a.BookmarkStore)
+	screen.SetConnKind(kind, ssh)
 	screen.OnConnect = func(entry models.GatewayEntry, auth *bfaws.AuthManager, tunnel *bfaws.TunnelManager) {
 		// Replace gateway screen with loading indicator
 		w.gatewayScreenOpen = false
@@ -2560,31 +2561,19 @@ func (a *App) onGatewayConnected(entry models.GatewayEntry, auth *bfaws.AuthMana
 		return
 	}
 
+	if entry.IsDirect() || entry.IsMySQL() {
+		// Direct Postgres/MySQL: no AWS auth. RunOpenDirect brings up the SSH
+		// tunnel first when the entry names a jump host.
+		RunOpenDirect(entry, nextTabID, 0, w.results, func(msg string) {
+			w.gatewayLoadingMsg = msg
+		})
+		nextTabID++
+
+		w.pendingGateway = &GatewayConnection{Config: entry}
+		return
+	}
+
 	password := entry.ResolvePassword()
-
-	if entry.IsDirect() {
-		// Direct Postgres: dial the real host:port with no tunnel or AWS auth.
-		RunOpenPostgres(entry.RDSHost, entry.RDSPort, entry.DBName, entry.DBUser, password,
-			entry.EffectiveSSLMode(), nextTabID, 0, w.results, func(msg string) {
-				w.gatewayLoadingMsg = msg
-			})
-		nextTabID++
-
-		w.pendingGateway = &GatewayConnection{Config: entry}
-		return
-	}
-
-	if entry.IsMySQL() {
-		// Direct MySQL: dial the real host:port with no tunnel or AWS auth.
-		RunOpenMySQL(entry.RDSHost, entry.RDSPort, entry.DBName, entry.DBUser, password,
-			entry.EffectiveTLSMode(), nextTabID, 0, w.results, func(msg string) {
-				w.gatewayLoadingMsg = msg
-			})
-		nextTabID++
-
-		w.pendingGateway = &GatewayConnection{Config: entry}
-		return
-	}
 
 	// For IAM auth, pass the AWS config; for password auth, pass nil
 	var awsCfg *aws.Config
@@ -2611,7 +2600,14 @@ func (a *App) onGatewayConnected(entry models.GatewayEntry, auth *bfaws.AuthMana
 	}
 }
 
+// openGatewayScreen opens the connection screen on its default connection type.
 func (a *App) openGatewayScreen() {
+	a.openGatewayScreenWithKind(models.KindAWSGateway, false)
+}
+
+// openGatewayScreenWithKind opens the connection screen with a connection type
+// preselected.
+func (a *App) openGatewayScreenWithKind(kind models.ConnKind, ssh bool) {
 	// Reload config from disk each time so edits are picked up
 	cfg, err := models.LoadGatewayConfig()
 	if err != nil {
@@ -2622,7 +2618,7 @@ func (a *App) openGatewayScreen() {
 	}
 
 	a.GatewayConfig = cfg
-	a.showGatewayScreen()
+	a.showGatewayScreen(kind, ssh)
 
 	// Show the empty view (which now contains the gateway screen)
 	w := a.mainWin
@@ -2635,8 +2631,11 @@ func (a *App) stopGatewayTunnels() {
 		return
 	}
 	for _, conn := range a.mainWin.connections {
-		if conn.Gateway != nil && conn.Gateway.Tunnel != nil {
-			conn.Gateway.Tunnel.Stop()
+		if conn.Gateway != nil {
+			if conn.Gateway.Tunnel != nil {
+				conn.Gateway.Tunnel.Stop()
+			}
+			conn.Gateway.SSH.Stop() // nil-safe
 		}
 	}
 }
@@ -3007,7 +3006,28 @@ func (a *App) pollResults() {
 
 		// Monitor active gateway tunnels for reconnection status
 		for _, conn := range w.connections {
-			if conn.Gateway == nil || conn.Gateway.Tunnel == nil {
+			if conn.Gateway == nil {
+				continue
+			}
+			// An SSH forward has no reconnect loop of its own — when it drops,
+			// the connection stays down until the user reconnects, so say so
+			// rather than leaving a green dot over a dead tunnel.
+			if ssh := conn.Gateway.SSH; ssh != nil && !ssh.Alive() {
+				msg := conn.Name + ": SSH tunnel closed"
+				if err := ssh.Err(); err != nil {
+					msg = conn.Name + ": SSH tunnel lost — " + err.Error()
+				}
+				applyConnTileErrorTheme(conn.button.AsControl())
+				if w.activeConnIdx < len(w.connections) && w.connections[w.activeConnIdx] == conn {
+					w.statusBar.SetConnectionDot(colorStatusRed)
+				}
+				if msg != conn.Gateway.LastTunnelMsg {
+					conn.Gateway.LastTunnelMsg = msg
+					w.statusBar.SetStatus(msg + " — use Reconnect to re-establish it")
+				}
+				continue
+			}
+			if conn.Gateway.Tunnel == nil {
 				continue
 			}
 			tunnel := conn.Gateway.Tunnel
@@ -3387,7 +3407,11 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 		cmd.Respond(control.Result{OK: true})
 
 	case "open_gateway":
-		a.openGatewayScreen()
+		var d control.OpenGatewayData
+		if len(cmd.Data) > 0 {
+			json.Unmarshal(cmd.Data, &d)
+		}
+		a.openGatewayScreenWithKind(models.ConnKind(d.Kind), d.SSH)
 		cmd.Respond(control.Result{OK: true})
 
 	case "preview_connecting":
@@ -3470,8 +3494,8 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 			return
 		}
 		label := "dummy-bookmark"
+		var d control.CreateTestBookmarkData
 		if len(cmd.Data) > 0 {
-			var d control.CreateTestBookmarkData
 			if err := json.Unmarshal(cmd.Data, &d); err == nil && d.Label != "" {
 				label = d.Label
 			}
@@ -3486,6 +3510,15 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 			DBName:     "testdb",
 			DBUser:     "tester",
 			AuthMode:   "password",
+		}
+		if d.SSHHost != "" {
+			// A tunneled direct-Postgres bookmark instead of an AWS gateway.
+			bm.Kind = models.KindPostgres
+			bm.AWSProfile = ""
+			bm.AWSRegion = ""
+			bm.AuthMode = ""
+			bm.SSLMode = "prefer"
+			bm.SSH = &models.SSHTunnel{Host: d.SSHHost, Port: d.SSHPort, User: d.SSHUser}
 		}
 		if err := a.BookmarkStore.Add(bm); err != nil {
 			cmd.Respond(control.Result{Error: err.Error()})

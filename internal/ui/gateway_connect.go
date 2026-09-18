@@ -11,10 +11,56 @@ import (
 	"bufflehead/internal/control"
 	"bufflehead/internal/db"
 	"bufflehead/internal/models"
+	"bufflehead/internal/sshtun"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"google.golang.org/api/option"
 )
+
+// establishSSHTunnel opens an SSH port-forward for a direct connection whose
+// entry names a jump host, and returns the entry updated with the local end of
+// the forward in LocalPort — so entry.DialTarget() then points the database
+// driver at 127.0.0.1 instead of the unreachable database host.
+//
+// Entries with no tunnel pass through untouched (nil tunnel, nil error), so
+// every direct-connect path can call this unconditionally.
+func establishSSHTunnel(ctx context.Context, entry models.GatewayEntry, logf func(string)) (*sshtun.Tunnel, models.GatewayEntry, error) {
+	if !entry.UsesSSH() {
+		return nil, entry, nil
+	}
+	if err := entry.SSH.Validate(); err != nil {
+		return nil, entry, err
+	}
+
+	cfg := sshtun.Config{
+		Host:       entry.SSH.Host,
+		Port:       entry.SSH.EffectivePort(),
+		User:       entry.SSH.EffectiveUser(),
+		Method:     string(entry.SSH.AuthMethod),
+		KeyPath:    entry.SSH.KeyPath,
+		Secret:     entry.ResolveSSHSecret(),
+		RemoteHost: entry.RDSHost,
+		RemotePort: entry.RDSPort,
+	}
+
+	tunnel, err := sshtun.Start(ctx, cfg, logf)
+	if err != nil {
+		return nil, entry, fmt.Errorf("SSH tunnel: %w", err)
+	}
+	entry.LocalPort = tunnel.LocalPort()
+	return tunnel, entry, nil
+}
+
+// openDirectDB opens a direct (non-AWS, non-BigQuery) database connection and
+// loads its tables and schemas, picking the engine from the entry's Kind. The
+// entry must already carry LocalPort when an SSH tunnel is in play — DialTarget
+// reads it — so callers run establishSSHTunnel first.
+func openDirectDB(entry models.GatewayEntry) (db.Querier, []db.TableInfo, error) {
+	if entry.IsMySQL() {
+		return openDirectMySQLDB(entry)
+	}
+	return openDirectPostgresDB(entry)
+}
 
 // establishTunnel allocates a local port, resolves the bastion instance, and
 // starts + waits for an SSM tunnel for the given gateway entry. It returns the
@@ -142,6 +188,7 @@ func (w *AppWindow) reconnectConnection(idx int, cmd *control.Command) {
 	entry := conn.Gateway.Config
 	auth := conn.Gateway.Auth
 	oldTunnel := conn.Gateway.Tunnel
+	oldSSH := conn.Gateway.SSH
 
 	var steps []control.ReconnectStep
 	addStep := func(step string, err error) {
@@ -180,6 +227,13 @@ func (w *AppWindow) reconnectConnection(idx int, cmd *control.Command) {
 			addStep("stop_tunnel", nil)
 		}
 	}
+	if oldSSH != nil {
+		if err := oldSSH.Stop(); err != nil {
+			addStep("stop_ssh_tunnel", err) // non-fatal; keep going
+		} else {
+			addStep("stop_ssh_tunnel", nil)
+		}
+	}
 
 	// ── Rebuild (background goroutine) ──────────────────────────────────────
 	go func() {
@@ -203,27 +257,27 @@ func (w *AppWindow) reconnectConnection(idx int, cmd *control.Command) {
 			return
 		}
 
-		// Direct Postgres: no tunnel or AWS auth — just reopen the DB.
-		if entry.IsDirect() {
-			pgConn, tables, err := openDirectPostgresDB(entry)
+		// Direct Postgres/MySQL: no AWS auth. Rebuild the SSH tunnel first when
+		// the connection uses one — the old one was just stopped, so the local
+		// forward port is reassigned here.
+		if entry.IsDirect() || entry.IsMySQL() {
+			tunnel, updated, err := establishSSHTunnel(context.Background(), entry, nil)
 			if err != nil {
 				outcome.Steps = append(outcome.Steps, control.ReconnectStep{
-					Step: "connect_db", OK: false, Error: err.Error(),
+					Step: "start_ssh_tunnel", OK: false, Error: err.Error(),
 				})
 				finish()
 				return
 			}
-			outcome.Steps = append(outcome.Steps, control.ReconnectStep{Step: "connect_db", OK: true})
-			outcome.Querier = pgConn
-			outcome.Tables = tables
-			finish()
-			return
-		}
+			if tunnel != nil {
+				outcome.Steps = append(outcome.Steps, control.ReconnectStep{Step: "start_ssh_tunnel", OK: true})
+				outcome.SSH = tunnel
+			}
 
-		// Direct MySQL: no tunnel or AWS auth — just reopen the DB.
-		if entry.IsMySQL() {
-			myConn, tables, err := openDirectMySQLDB(entry)
+			dbConn, tables, err := openDirectDB(updated)
 			if err != nil {
+				tunnel.Stop()
+				outcome.SSH = nil
 				outcome.Steps = append(outcome.Steps, control.ReconnectStep{
 					Step: "connect_db", OK: false, Error: err.Error(),
 				})
@@ -231,8 +285,9 @@ func (w *AppWindow) reconnectConnection(idx int, cmd *control.Command) {
 				return
 			}
 			outcome.Steps = append(outcome.Steps, control.ReconnectStep{Step: "connect_db", OK: true})
-			outcome.Querier = myConn
+			outcome.Querier = dbConn
 			outcome.Tables = tables
+			outcome.Entry = &updated // carries the rebuilt tunnel's LocalPort
 			finish()
 			return
 		}
@@ -290,8 +345,8 @@ func (w *AppWindow) reconnectConnection(idx int, cmd *control.Command) {
 
 // switchDatabase re-points a connection at a different database on the same
 // server. For Postgres it reuses the reconnect teardown+rebuild plumbing but
-// KEEPS the SSM tunnel (host:port is database-agnostic) — only the DB pool is
-// swapped for one bound to the new dbname. For BigQuery it swaps the default
+// KEEPS any tunnel, SSM or SSH (host:port is database-agnostic) — only the DB
+// pool is swapped for one bound to the new dbname. For BigQuery it swaps the default
 // dataset and reopens the client. The new schema/tables repopulate via the
 // shared ReqReconnect result handler (which reads the updated Config).
 func (w *AppWindow) switchDatabase(idx int, dbName string) {
@@ -334,7 +389,9 @@ func (w *AppWindow) switchDatabase(idx int, dbName string) {
 
 	// ── Rebuild (goroutine): open a new pool/client for the new target. ──
 	go func() {
-		outcome := &ReconnectOutcome{ConnIdx: idx, Steps: steps, Tunnel: conn.Gateway.Tunnel}
+		// Both tunnels are deliberately kept: host:port is database-agnostic, so
+		// only the pool below them is swapped.
+		outcome := &ReconnectOutcome{ConnIdx: idx, Steps: steps, Tunnel: conn.Gateway.Tunnel, SSH: conn.Gateway.SSH}
 		finish := func() { w.results <- DBResult{Kind: ReqReconnect, Reconnect: outcome} }
 
 		if isBQ {
@@ -351,35 +408,32 @@ func (w *AppWindow) switchDatabase(idx int, dbName string) {
 			return
 		}
 
-		if entry.IsMySQL() {
-			myConn, tables, err := openDirectMySQLDB(entry)
+		if entry.IsMySQL() || entry.IsDirect() {
+			// The entry keeps its LocalPort, so a tunneled connection re-opens
+			// through the SSH forward that is still standing.
+			dbConn, tables, err := openDirectDB(entry)
 			if err != nil {
 				outcome.Steps = append(outcome.Steps, control.ReconnectStep{Step: "connect_db", OK: false, Error: err.Error()})
 				finish()
 				return
 			}
 			outcome.Steps = append(outcome.Steps, control.ReconnectStep{Step: "connect_db", OK: true})
-			outcome.Querier = myConn
+			outcome.Querier = dbConn
 			outcome.Tables = tables
+			outcome.Entry = &entry // the new DBName, same tunnel
 			finish()
 			return
 		}
 
-		var pgConn *db.PostgresDB
-		var tables []db.TableInfo
-		var err error
-		if entry.IsDirect() {
-			pgConn, tables, err = openDirectPostgresDB(entry)
-		} else {
-			var awsCfg *aws.Config
-			if entry.UseIAMAuth() && conn.Gateway.Auth != nil {
-				cfg := conn.Gateway.Auth.Config()
-				awsCfg = &cfg
-			}
-			rdsEndpoint := fmt.Sprintf("%s:%d", entry.RDSHost, entry.RDSPort)
-			pgConn, tables, err = openGatewayDB("127.0.0.1", entry.LocalPort, rdsEndpoint,
-				entry.DBName, entry.DBUser, entry.ResolvePassword(), awsCfg)
+		// AWS gateway: reopen through the SSM tunnel, which is still standing.
+		var awsCfg *aws.Config
+		if entry.UseIAMAuth() && conn.Gateway.Auth != nil {
+			cfg := conn.Gateway.Auth.Config()
+			awsCfg = &cfg
 		}
+		rdsEndpoint := fmt.Sprintf("%s:%d", entry.RDSHost, entry.RDSPort)
+		pgConn, tables, err := openGatewayDB("127.0.0.1", entry.LocalPort, rdsEndpoint,
+			entry.DBName, entry.DBUser, entry.ResolvePassword(), awsCfg)
 		if err != nil {
 			outcome.Steps = append(outcome.Steps, control.ReconnectStep{Step: "connect_db", OK: false, Error: err.Error()})
 			finish()
@@ -445,20 +499,23 @@ func openDirectPostgresDB(entry models.GatewayEntry) (*db.PostgresDB, []db.Table
 		conn *db.PostgresDB
 		err  error
 	}
+	host, port, err := entry.DialTarget()
+	if err != nil {
+		return nil, nil, err
+	}
 	ch := make(chan pgResult, 1)
 	go func() {
-		pgConn, err := db.NewPostgresDirect(entry.RDSHost, entry.RDSPort,
+		pgConn, err := db.NewPostgresDirect(host, port,
 			entry.DBName, entry.DBUser, entry.ResolvePassword(), entry.EffectiveSSLMode())
 		ch <- pgResult{pgConn, err}
 	}()
 
 	var pgConn *db.PostgresDB
-	var err error
 	select {
 	case r := <-ch:
 		pgConn, err = r.conn, r.err
 	case <-time.After(30 * time.Second):
-		return nil, nil, fmt.Errorf("connection timed out after 30s — host may be unreachable")
+		return nil, nil, directTimeoutErr(entry)
 	}
 	if err != nil {
 		return nil, nil, err
@@ -484,20 +541,23 @@ func openDirectMySQLDB(entry models.GatewayEntry) (*db.MySQLDB, []db.TableInfo, 
 		conn *db.MySQLDB
 		err  error
 	}
+	host, port, err := entry.DialTarget()
+	if err != nil {
+		return nil, nil, err
+	}
 	ch := make(chan myResult, 1)
 	go func() {
-		myConn, err := db.NewMySQLDirect(entry.RDSHost, entry.RDSPort,
+		myConn, err := db.NewMySQLDirect(host, port,
 			entry.DBName, entry.DBUser, entry.ResolvePassword(), entry.EffectiveTLSMode())
 		ch <- myResult{myConn, err}
 	}()
 
 	var myConn *db.MySQLDB
-	var err error
 	select {
 	case r := <-ch:
 		myConn, err = r.conn, r.err
 	case <-time.After(30 * time.Second):
-		return nil, nil, fmt.Errorf("connection timed out after 30s — host may be unreachable")
+		return nil, nil, directTimeoutErr(entry)
 	}
 	if err != nil {
 		return nil, nil, err
@@ -513,6 +573,17 @@ func openDirectMySQLDB(entry models.GatewayEntry) (*db.MySQLDB, []db.TableInfo, 
 		return nil, nil, fmt.Errorf("load schemas: %w", err)
 	}
 	return myConn, tables, nil
+}
+
+// directTimeoutErr explains a stalled direct connection, pointing at the SSH
+// jump host when the dial went through one — the database can be listening and
+// still be unreachable if the jump host cannot see it.
+func directTimeoutErr(entry models.GatewayEntry) error {
+	if entry.UsesSSH() {
+		return fmt.Errorf("connection timed out after 30s — the SSH tunnel is open, but %s:%d is not answering from %s",
+			entry.RDSHost, entry.RDSPort, entry.SSH.Describe())
+	}
+	return fmt.Errorf("connection timed out after 30s — host may be unreachable")
 }
 
 // openBigQueryDB opens a BigQuery connection (no tunnel, no AWS) and loads the
@@ -590,6 +661,10 @@ func (w *AppWindow) handleReconnectResult(res DBResult) {
 			conn.Tables = oc.Tables
 			if conn.Gateway != nil {
 				conn.Gateway.Tunnel = oc.Tunnel
+				conn.Gateway.SSH = oc.SSH
+				if oc.Entry != nil {
+					conn.Gateway.Config = *oc.Entry
+				}
 				conn.Gateway.LastTunnelMsg = ""
 			}
 			worker := NewConnWorker(conn.DB, w.results)

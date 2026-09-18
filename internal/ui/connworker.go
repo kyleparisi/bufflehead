@@ -11,6 +11,7 @@ import (
 	"bufflehead/internal/control"
 	"bufflehead/internal/db"
 	"bufflehead/internal/models"
+	"bufflehead/internal/sshtun"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 )
@@ -72,6 +73,14 @@ type DBResult struct {
 	UserSQL    string
 	VirtualSQL string
 	Reconnect  *ReconnectOutcome // for ReqReconnect
+	// SSH is the jump-host forward a direct connection was opened through, so
+	// the main thread can store it on the Connection and stop it on close.
+	SSH *sshtun.Tunnel
+	// Entry is the connection config as the connect left it — notably with
+	// LocalPort set to the tunnel's forward port. The main thread must store it,
+	// or later operations that reuse the standing tunnel (a database switch)
+	// would read LocalPort 0 and fail to find the tunnel.
+	Entry *models.GatewayEntry
 	// Folder marks a ReqOpenDB result that came from a dropped folder, so the
 	// connection is created with glob patterns instead of tables.
 	Folder bool
@@ -87,6 +96,9 @@ type ReconnectOutcome struct {
 	Querier db.Querier
 	Tables  []db.TableInfo
 	Tunnel  *bfaws.TunnelManager
+	SSH     *sshtun.Tunnel
+	// Entry carries the rebuilt config (its LocalPort names the new tunnel).
+	Entry *models.GatewayEntry
 }
 
 // ConnWorker owns a db.Querier handle and processes requests sequentially.
@@ -561,7 +573,7 @@ func pluralFiles(n int) string {
 
 // RunOpenBigQuery connects to BigQuery in a one-shot goroutine (no tunnel, no
 // AWS), listing tables and schemas for the default dataset, then sending the
-// result down the shared results channel. Mirrors RunOpenPostgres.
+// result down the shared results channel. Mirrors RunOpenDirect.
 func RunOpenBigQuery(entry models.GatewayEntry, tabID, generation uint64,
 	results chan DBResult, statusFunc func(string)) {
 	go func() {
@@ -583,57 +595,34 @@ func RunOpenBigQuery(entry models.GatewayEntry, tabID, generation uint64,
 	}()
 }
 
-// RunOpenPostgres connects directly to a reachable Postgres host in a one-shot
-// goroutine (no SSM tunnel), listing tables and schemas, then sending the
-// result. Used by the direct Postgres connection type. statusFunc is an
-// optional progress callback (may be nil).
-func RunOpenPostgres(host string, port int, dbName, user, password, sslMode string,
-	tabID, generation uint64, results chan DBResult, statusFunc func(string)) {
+// RunOpenDirect connects to a directly-dialled database (Postgres or MySQL) in
+// a one-shot goroutine — no AWS, no SSO. When the entry names an SSH jump host
+// the forward is established first and the driver dials its local end. The
+// result carries the tunnel so the main thread can stop it when the connection
+// closes. statusFunc is an optional progress callback (may be nil).
+func RunOpenDirect(entry models.GatewayEntry, tabID, generation uint64,
+	results chan DBResult, statusFunc func(string)) {
 	go func() {
-		if statusFunc != nil {
-			statusFunc("Connecting to database...")
+		status := func(msg string) {
+			if statusFunc != nil {
+				statusFunc(msg)
+			}
 		}
-
-		type pgResult struct {
-			conn *db.PostgresDB
-			err  error
-		}
-		ch := make(chan pgResult, 1)
-		go func() {
-			pgConn, err := db.NewPostgresDirect(host, port, dbName, user, password, sslMode)
-			ch <- pgResult{pgConn, err}
-		}()
-
-		var pgConn *db.PostgresDB
-		var err error
-		select {
-		case r := <-ch:
-			pgConn, err = r.conn, r.err
-		case <-time.After(30 * time.Second):
-			err = fmt.Errorf("connection timed out after 30s — host may be unreachable")
-		}
-
-		if err != nil {
+		fail := func(err error) {
 			results <- DBResult{Kind: ReqOpenGateway, TabID: tabID, Generation: generation, Err: err}
+		}
+
+		tunnel, entry, err := establishSSHTunnel(context.Background(), entry, status)
+		if err != nil {
+			fail(err)
 			return
 		}
 
-		if statusFunc != nil {
-			statusFunc("Loading tables...")
-		}
-		tables, err := pgConn.Tables()
+		status("Connecting to database...")
+		dbConn, tables, err := openDirectDB(entry)
 		if err != nil {
-			pgConn.Close()
-			results <- DBResult{Kind: ReqOpenGateway, TabID: tabID, Generation: generation, Err: err}
-			return
-		}
-
-		if statusFunc != nil {
-			statusFunc(fmt.Sprintf("Loading schema for %d tables...", len(tables)))
-		}
-		if err := pgConn.AllTableSchemas(tables); err != nil {
-			pgConn.Close()
-			results <- DBResult{Kind: ReqOpenGateway, TabID: tabID, Generation: generation, Err: fmt.Errorf("load schemas: %w", err)}
+			tunnel.Stop()
+			fail(err)
 			return
 		}
 
@@ -641,72 +630,10 @@ func RunOpenPostgres(host string, port int, dbName, user, password, sslMode stri
 			Kind:       ReqOpenGateway,
 			TabID:      tabID,
 			Generation: generation,
-			Querier:    pgConn,
+			Querier:    dbConn,
 			Tables:     tables,
-		}
-	}()
-}
-
-// RunOpenMySQL connects directly to a reachable MySQL host in a one-shot
-// goroutine (no SSM tunnel), listing tables and schemas, then sending the
-// result. Mirrors RunOpenPostgres for the direct MySQL connection type.
-// statusFunc is an optional progress callback (may be nil).
-func RunOpenMySQL(host string, port int, dbName, user, password, tlsMode string,
-	tabID, generation uint64, results chan DBResult, statusFunc func(string)) {
-	go func() {
-		if statusFunc != nil {
-			statusFunc("Connecting to database...")
-		}
-
-		type myResult struct {
-			conn *db.MySQLDB
-			err  error
-		}
-		ch := make(chan myResult, 1)
-		go func() {
-			myConn, err := db.NewMySQLDirect(host, port, dbName, user, password, tlsMode)
-			ch <- myResult{myConn, err}
-		}()
-
-		var myConn *db.MySQLDB
-		var err error
-		select {
-		case r := <-ch:
-			myConn, err = r.conn, r.err
-		case <-time.After(30 * time.Second):
-			err = fmt.Errorf("connection timed out after 30s — host may be unreachable")
-		}
-
-		if err != nil {
-			results <- DBResult{Kind: ReqOpenGateway, TabID: tabID, Generation: generation, Err: err}
-			return
-		}
-
-		if statusFunc != nil {
-			statusFunc("Loading tables...")
-		}
-		tables, err := myConn.Tables()
-		if err != nil {
-			myConn.Close()
-			results <- DBResult{Kind: ReqOpenGateway, TabID: tabID, Generation: generation, Err: err}
-			return
-		}
-
-		if statusFunc != nil {
-			statusFunc(fmt.Sprintf("Loading schema for %d tables...", len(tables)))
-		}
-		if err := myConn.AllTableSchemas(tables); err != nil {
-			myConn.Close()
-			results <- DBResult{Kind: ReqOpenGateway, TabID: tabID, Generation: generation, Err: fmt.Errorf("load schemas: %w", err)}
-			return
-		}
-
-		results <- DBResult{
-			Kind:       ReqOpenGateway,
-			TabID:      tabID,
-			Generation: generation,
-			Querier:    myConn,
-			Tables:     tables,
+			SSH:        tunnel,
+			Entry:      &entry,
 		}
 	}()
 }
