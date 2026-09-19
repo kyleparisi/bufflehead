@@ -1846,7 +1846,16 @@ func (w *AppWindow) presentDatabaseSwitcher(res *dbListResult) {
 	popup.AsNode().AddChild(content.AsNode())
 
 	w.titleBar.AsNode().AddChild(popup.AsNode())
-	popup.AsWindow().SetPosition(DisplayServer.MouseGetPosition())
+	// Anchor under the breadcrumb segment that opens it rather than at the
+	// cursor. The switcher is a dropdown, not a context menu, and its own
+	// "Refresh list" footer re-presents it — at the cursor that meant the panel
+	// hopped to wherever the footer had just been, walking across the screen on
+	// every refresh. Anchored, it reappears exactly where it was.
+	pos := DisplayServer.MouseGetPosition()
+	if anchor, ok := w.titleBar.DatabaseAnchor(); ok {
+		pos = Vector2i.XY{X: int32(anchor.X), Y: int32(anchor.Y)}
+	}
+	popup.AsWindow().SetPosition(pos)
 	popup.AsWindow().Popup()
 	w.statusBar.SetStatus("")
 }

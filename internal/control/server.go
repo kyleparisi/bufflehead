@@ -364,6 +364,12 @@ func buildMux(s *Server) *http.ServeMux {
 		s.handleCommand(w, r, "preview_connecting")
 	})
 
+	// Render the database-switcher popover with canned data, so its placement
+	// can be checked without a live database.
+	mux.HandleFunc("POST /preview-database-switcher", func(w http.ResponseWriter, r *http.Request) {
+		s.handleCommand(w, r, "preview_database_switcher")
+	})
+
 	// Show + populate the query history panel (normally opened via the sidebar
 	// "History" tab) — used by integration tests and manual UI inspection.
 	mux.HandleFunc("POST /show-history", func(w http.ResponseWriter, r *http.Request) {
