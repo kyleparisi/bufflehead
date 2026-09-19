@@ -126,10 +126,13 @@ func (p *GatewayInfoPanel) Ready() {
 	pythonCopy := fmt.Sprintf(`engine = create_engine("%s")`, connURLCopy)
 	content.AsNode().AddChild(p.makeSnippet("Python", pythonSnippet, pythonCopy).AsNode())
 
-	// Claude MCP config
-	mcpConfig := fmt.Sprintf(`{"mcpServers":{"pg":{"command":"npx","args":["-y","@modelcontextprotocol/server-postgres","%s"]}}}`, connURLCopy)
-	mcpDisplay := fmt.Sprintf(`{"mcpServers":{"pg":{"command":"npx","args":["-y","@modelcontextprotocol/server-postgres","%s"]}}}`, connURL)
-	content.AsNode().AddChild(p.makeSnippet("Claude MCP config", mcpDisplay, mcpConfig).AsNode())
+	// Claude MCP config — Bufflehead's own MCP server (the bundled stdio
+	// bridge), which reaches this connection through the app, so no
+	// credentials leave the app.
+	mcpConfig := mcpConfigSnippet()
+	content.AsNode().AddChild(p.makeSnippet("Claude Desktop MCP config", mcpConfig, mcpConfig).AsNode())
+	mcpCmd := mcpClaudeCodeCommand()
+	content.AsNode().AddChild(p.makeSnippet("Claude Code", mcpCmd, mcpCmd).AsNode())
 
 	// AI Prompt snippet (placeholder — populated when SetTables is called)
 	p.aiSnippetBox = VBoxContainer.New()

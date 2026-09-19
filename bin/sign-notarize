@@ -195,17 +195,25 @@ else
 fi
 [ -d "$APP" ] || { echo "Error: $APP not found" >&2; exit 1; }
 
+# The MCP stdio bridge ships inside the bundle so Claude Desktop can launch it.
+# Built here (not by gd) as a universal Mach-O; the signing loop below picks it
+# up like any other nested binary.
+if [ "$SKIP_BUILD" != "1" ] || [ ! -f "$APP/Contents/MacOS/bufflehead-mcp" ]; then
+    echo "==> Building MCP bridge..."
+    "$ROOT/bin/build-mcp-bridge" darwin "$APP/Contents/MacOS"
+fi
+
 # The DMG ships to users on both architectures — a thin build here would
 # silently exclude every Intel Mac, so fail loudly instead.
-MAIN_BIN="$APP/Contents/MacOS/Bufflehead"
-if [ -f "$MAIN_BIN" ]; then
+for MAIN_BIN in "$APP/Contents/MacOS/Bufflehead" "$APP/Contents/MacOS/bufflehead-mcp"; do
+    [ -f "$MAIN_BIN" ] || continue
     archs="$(lipo -archs "$MAIN_BIN" 2>/dev/null || true)"
-    echo "==> Architectures: ${archs:-unknown}"
+    echo "==> Architectures ($(basename "$MAIN_BIN")): ${archs:-unknown}"
     case "$archs" in
         *x86_64*arm64*|*arm64*x86_64*) ;;
         *) echo "Error: $MAIN_BIN is not universal (got '${archs:-unknown}')" >&2; exit 1 ;;
     esac
-fi
+done
 
 # --- 2. Sign every nested Mach-O binary, deepest-first ----------------------
 # Hardened runtime + secure timestamp + our entitlements. Signing inside-out is

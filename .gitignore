@@ -3,3 +3,7 @@ viewer
 releases/
 __pycache__/
 bufflehead
+
+# Dev build of the MCP stdio bridge (go build -o bufflehead-mcp ./cmd/bufflehead-mcp)
+/bufflehead-mcp
+/bufflehead-mcp.exe

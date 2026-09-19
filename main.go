@@ -5,8 +5,11 @@ import (
 	"log"
 	"os"
 
+	"bufflehead/internal/buildinfo"
+	"bufflehead/internal/configdir"
 	"bufflehead/internal/control"
 	"bufflehead/internal/db"
+	"bufflehead/internal/mcpserver"
 	"bufflehead/internal/models"
 	"bufflehead/internal/ui"
 	"bufflehead/internal/updater"
@@ -60,7 +63,27 @@ func main() {
 	}
 
 	ctrlServer := control.New(0)
+	// MCP tools run in-process against the control server itself; /mcp sits
+	// behind the same bearer key as every other control route.
+	ctrlServer.SetMCPHandler(mcpserver.NewHTTPHandler(mcpserver.New(ctrlServer, buildinfo.Version)))
 	ctrlServer.Start()
+
+	// Publish addr+key so the bufflehead-mcp stdio bridge (spawned by Claude
+	// Desktop) can find this instance without per-launch configuration. The
+	// file is owner-only and removed on exit; see control.Discovery.
+	if ctrlServer.Addr() != "" {
+		dir := configdir.Dir()
+		err := control.WriteDiscovery(dir, control.Discovery{
+			Addr:    ctrlServer.Addr(),
+			Key:     ctrlServer.APIKey(),
+			PID:     os.Getpid(),
+			Version: buildinfo.Version,
+		})
+		if err != nil {
+			log.Printf("mcp discovery: %v", err)
+		}
+		defer control.RemoveDiscoveryIfOwned(dir, os.Getpid())
+	}
 
 	bookmarkStore := models.NewBookmarkStore()
 

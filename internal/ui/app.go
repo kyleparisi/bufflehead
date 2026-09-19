@@ -15,6 +15,7 @@ import (
 	bfaws "bufflehead/internal/aws"
 	"bufflehead/internal/completion"
 
+	"bufflehead/internal/configdir"
 	"bufflehead/internal/control"
 	"bufflehead/internal/db"
 	"bufflehead/internal/models"
@@ -2247,6 +2248,9 @@ func (a *App) initMainWindow() {
 		rootWin.OnCloseRequested(func() {
 			// Stop any gateway tunnels
 			a.stopGatewayTunnels()
+			// Drop the MCP discovery file before the process goes away, so a
+			// bridge launched later fails fast instead of probing a dead port.
+			control.RemoveDiscoveryIfOwned(configdir.Dir(), os.Getpid())
 			tree.Quit()
 		})
 	}
@@ -2289,6 +2293,9 @@ func (a *App) initMainWindow() {
 			a.renderUpdate()
 		},
 		OnQuit: a.quit,
+		OnCopyMCPConfig: func() {
+			DisplayServer.ClipboardSet(mcpConfigSnippet())
+		},
 	}
 	a.appMenu.Setup()
 	a.attachMenuBar(a.mainWin)
@@ -2310,22 +2317,9 @@ func (a *App) initMainWindow() {
 				return nil, fmt.Errorf("no active window")
 			}
 
-			// Find connection by name (empty = active connection)
-			var conn *Connection
-			if connName == "" {
-				if w.activeConnIdx >= 0 && w.activeConnIdx < len(w.connections) {
-					conn = w.connections[w.activeConnIdx]
-				}
-			} else {
-				for _, c := range w.connections {
-					if c.Name == connName {
-						conn = c
-						break
-					}
-				}
-			}
-			if conn == nil {
-				return nil, fmt.Errorf("connection %q not found", connName)
+			conn, err := w.findConnection(connName)
+			if err != nil {
+				return nil, err
 			}
 			if conn.worker == nil {
 				return nil, fmt.Errorf("connection %q has no worker", conn.Name)
@@ -2386,21 +2380,9 @@ func (a *App) initMainWindow() {
 			if w == nil {
 				return fmt.Errorf("no active window")
 			}
-			var conn *Connection
-			if connName == "" {
-				if w.activeConnIdx >= 0 && w.activeConnIdx < len(w.connections) {
-					conn = w.connections[w.activeConnIdx]
-				}
-			} else {
-				for _, c := range w.connections {
-					if c.Name == connName {
-						conn = c
-						break
-					}
-				}
-			}
-			if conn == nil {
-				return fmt.Errorf("connection %q not found", connName)
+			conn, err := w.findConnection(connName)
+			if err != nil {
+				return err
 			}
 			// Cancellation reaches the in-flight job out-of-band (the worker is
 			// blocked reading results). Only BigQuery supports explicit cancel;
@@ -2419,22 +2401,9 @@ func (a *App) initMainWindow() {
 				return nil, fmt.Errorf("no active window")
 			}
 
-			// Find connection by name (empty = active connection)
-			var conn *Connection
-			if req.Connection == "" {
-				if w.activeConnIdx >= 0 && w.activeConnIdx < len(w.connections) {
-					conn = w.connections[w.activeConnIdx]
-				}
-			} else {
-				for _, c := range w.connections {
-					if c.Name == req.Connection {
-						conn = c
-						break
-					}
-				}
-			}
-			if conn == nil {
-				return nil, fmt.Errorf("connection %q not found", req.Connection)
+			conn, err := w.findConnection(req.Connection)
+			if err != nil {
+				return nil, err
 			}
 			if conn.Gateway == nil || conn.Gateway.Auth == nil {
 				return nil, fmt.Errorf("connection %q has no AWS credentials", conn.Name)
@@ -3372,6 +3341,23 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 			ts.schema.SetCheckedColumns(d.Columns)
 		}
 		w.runCurrentQuery(cmd)
+
+	case "connections":
+		// Snapshot every open connection for GET /connections and the MCP
+		// list_connections / get_schema tools. Cheap unless columns are asked for.
+		var d control.ConnectionsData
+		if len(cmd.Data) > 0 {
+			if err := json.Unmarshal(cmd.Data, &d); err != nil {
+				cmd.Respond(control.Result{Error: err.Error()})
+				return
+			}
+		}
+		data, err := json.Marshal(w.connectionsSnapshot(d.IncludeColumns))
+		if err != nil {
+			cmd.Respond(control.Result{Error: err.Error()})
+			return
+		}
+		cmd.Respond(control.Result{OK: true, Data: data})
 
 	case "reconnect":
 		var d control.ReconnectData

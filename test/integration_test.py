@@ -6,6 +6,7 @@ needs the temporary bearer key: set BUFFLEHEAD_CONTROL_KEY to the same value the
 app was launched with (integration_test.sh pins one for both sides).
 Run via: test/integration_test.sh (which builds, launches Godot, then runs pytest)
 """
+import json
 import os
 import re
 import shutil
@@ -2057,3 +2058,122 @@ class TestLocalSQLRowLimits:
         assert "no server-side timeout" in prompt
         assert "time out after 30 seconds" not in prompt
         assert "limited to 100 rows" not in prompt
+
+
+# ── MCP: /connections, /mcp, discovery file ──────────────────────────────
+
+class TestMCP:
+    """Bufflehead as an MCP server. /connections is the per-connection schema
+    snapshot the MCP tools are built on; /mcp is the Streamable HTTP endpoint
+    (the stdio bridge in cmd/bufflehead-mcp speaks to the same tool set)."""
+
+    def setup_method(self):
+        close_all_connections()
+        close_all_tabs()
+        post("new-tab")
+        time.sleep(0.3)
+
+    # JSON-RPC over Streamable HTTP, stateless: every request stands alone,
+    # but the spec still wants initialize + initialized before tools calls.
+    def rpc(self, method, params=None, id=1):
+        body = {"jsonrpc": "2.0", "id": id, "method": method}
+        if params is not None:
+            body["params"] = params
+        r = SESSION.post(f"{BASE_URL}/mcp", json=body, headers={
+            "Accept": "application/json, text/event-stream",
+        })
+        assert r.status_code == 200, (r.status_code, r.text)
+        ctype = r.headers.get("Content-Type", "")
+        if ctype.startswith("text/event-stream"):
+            for line in r.text.splitlines():
+                if line.startswith("data:"):
+                    return json.loads(line[5:].strip())
+            raise AssertionError(f"no data frame in SSE body: {r.text!r}")
+        return r.json()
+
+    def call_tool(self, name, arguments=None):
+        self.rpc("initialize", {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": {"name": "pytest", "version": "0"},
+        })
+        res = self.rpc("tools/call", {"name": name, "arguments": arguments or {}})
+        assert "error" not in res, res
+        return res["result"]
+
+    def test_connections_lists_open_file_with_columns(self):
+        open_file(SAMPLE)
+        conns = SESSION.get(f"{BASE_URL}/connections?columns=1").json()
+        assert isinstance(conns, list) and conns, conns
+        mem = conns[0]
+        assert mem["name"] == "Memory" and mem["kind"] == "memory" and mem["active"]
+        assert mem["dialect"] == "duckdb"
+        assert mem["default_limit"] == 0, "local: no default limit"
+        files = [t["name"] for t in mem["tables"]]
+        assert SAMPLE in files, files
+        cols = next(t for t in mem["tables"] if t["name"] == SAMPLE)["columns"]
+        assert cols and all("name" in c and "type" in c for c in cols)
+
+    def test_connections_without_columns_is_light(self):
+        open_file(SAMPLE)
+        conns = SESSION.get(f"{BASE_URL}/connections").json()
+        t = next(t for t in conns[0]["tables"] if t["name"] == SAMPLE)
+        assert "columns" not in t or not t["columns"]
+
+    def test_connections_covers_a_database_connection(self):
+        open_file(DUCKDB)
+        conns = SESSION.get(f"{BASE_URL}/connections?columns=1").json()
+        kinds = {c["name"]: c["kind"] for c in conns}
+        db = next(c for c in conns if c["kind"] == "duckdb")
+        assert db["active"], kinds
+        assert db["path"] == DUCKDB
+        assert any(t["columns"] for t in db["tables"]), db["tables"]
+
+    def test_mcp_requires_the_key(self):
+        r = requests.post(f"{BASE_URL}/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "ping"})
+        assert r.status_code == 401
+
+    def test_mcp_initialize_and_list_tools(self):
+        init = self.rpc("initialize", {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": {"name": "pytest", "version": "0"},
+        })
+        assert init["result"]["serverInfo"]["name"] == "bufflehead"
+        assert "list_connections" in init["result"]["instructions"]
+        tools = self.rpc("tools/list", {})["result"]["tools"]
+        names = sorted(t["name"] for t in tools)
+        assert names == ["cancel_sql", "get_s3_object", "get_schema",
+                         "list_connections", "reconnect", "run_sql"]
+
+    def test_mcp_run_sql_on_open_file(self):
+        open_file(SAMPLE)
+        res = self.call_tool("run_sql", {"sql": f"SELECT count(*) AS n FROM '{SAMPLE}'"})
+        assert not res.get("isError"), res
+        assert res["structuredContent"]["rows"] == [["500"]]
+        assert "| n |" in res["content"][0]["text"]
+
+    def test_mcp_get_schema_lists_the_file(self):
+        open_file(SAMPLE)
+        res = self.call_tool("get_schema", {})
+        assert not res.get("isError"), res
+        assert SAMPLE in res["content"][0]["text"]
+        assert "single-quoted path" in res["content"][0]["text"]
+
+    def test_mcp_errors_are_tool_errors(self):
+        open_file(SAMPLE)
+        res = self.call_tool("run_sql", {"sql": "SELECT FROM nowhere"})
+        assert res.get("isError") is True, res
+        res = self.call_tool("get_s3_object", {"bucket": "b", "key": "k"})
+        assert res.get("isError") is True and "AWS" in res["content"][0]["text"]
+
+    def test_discovery_file_names_this_server(self):
+        cfg = os.environ.get("BUFFLEHEAD_CONFIG_DIR")
+        if not cfg:
+            pytest.skip("harness did not pin BUFFLEHEAD_CONFIG_DIR")
+        p = Path(cfg) / "control.json"
+        assert p.exists(), p
+        d = json.loads(p.read_text())
+        assert d["addr"].endswith(f":{_PORT}")
+        assert d["key"] == _KEY
+        assert (p.stat().st_mode & 0o777) == 0o600

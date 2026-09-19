@@ -39,6 +39,10 @@ curl -H "Authorization: Bearer <key>" http://localhost:<port>/state
 
 Test data lives in `testdata/` (parquet, CSV, JSON, TSV, .duckdb files).
 
+The harness also sets `BUFFLEHEAD_CONFIG_DIR` to a scratch directory so the
+app's config files (bookmarks, history, and the MCP discovery file
+`control.json`) never touch a real install.
+
 ## Architecture
 
 **Entry point**: `main.go` (repo root) — initializes the Godot scene tree, creates a DuckDB instance, starts the control server, registers UI classes, and creates the main window.
@@ -52,7 +56,10 @@ Test data lives in `testdata/` (parquet, CSV, JSON, TSV, .duckdb files).
   their database through a jump host. Self-contained: `Start()` dials the host,
   listens on an ephemeral local port, and forwards. Host keys are always
   verified against `known_hosts`. See `docs/ssh-tunnel.md`.
-- `internal/control/` — HTTP server (dynamic port, printed to stdout) exposing endpoints for programmatic control (`/open`, `/query`, `/sort`, `/page`, `/state`, `/screenshot`, `/ui-tree`, etc.). Every request is gated by a temporary bearer key minted in `control.New` (`Authorization: Bearer <key>`); `requireAuth` wraps the mux in `Start`. Primarily used by integration tests and the copy-to-clipboard AI prompt.
+- `internal/control/` — HTTP server (dynamic port, printed to stdout) exposing endpoints for programmatic control (`/open`, `/query`, `/sort`, `/page`, `/state`, `/connections`, `/sql`, `/screenshot`, `/ui-tree`, `/mcp`, etc.). Every request is gated by a temporary bearer key minted in `control.New` (`Authorization: Bearer <key>`); `requireAuth` wraps the mux in `Start`. Primarily used by integration tests, the copy-to-clipboard AI prompt, and the MCP server. `*control.Server` and `*control.Client` (a REST client) share method signatures — `Connections`, `ExecSQL`, `CancelSQL`, `GetS3Object`, `Reconnect` — so both satisfy `mcpserver.Backend`. `discovery.go` writes/reads the `control.json` the MCP bridge uses to find a running app. This package must stay free of `internal/db` (cgo).
+- `internal/mcpserver/` — the MCP tool set (`list_connections`, `get_schema`, `run_sql`, `cancel_sql`, `get_s3_object`, `reconnect`), defined once against `Backend`. Served in-process at `/mcp` and by the stdio bridge. See `docs/mcp.md`.
+- `cmd/bufflehead-mcp/` — the stdio bridge Claude Desktop spawns (`CGO_ENABLED=0`; must not import `internal/db` or `internal/ui`). Finds the app via `control.ReadDiscovery`, then runs `mcpserver.New(control.Client)`. Built into the app bundle by `bin/build-mcp-bridge`, which the release scripts call.
+- `internal/configdir/`, `internal/buildinfo/` — cgo-free leaf packages (config dir lookup with a `BUFFLEHEAD_CONFIG_DIR` override; the version constant, tested against `export_presets.cfg`).
 
 **UI extension pattern** (graphics.gd):
 ```go

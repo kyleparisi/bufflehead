@@ -1,0 +1,46 @@
+#!/bin/bash
+# Build the bufflehead-mcp stdio bridge (cmd/bufflehead-mcp) for one platform
+# and drop it into an output directory next to the app binary.
+#
+# Usage: bin/build-mcp-bridge <darwin|linux|windows> <outdir> [goarch]
+#
+# darwin ignores goarch and produces a universal (arm64 + x86_64) binary via
+# lipo, because the DMG ships to both architectures. The bridge is pure Go
+# (CGO_ENABLED=0), so cross-compiling is a plain `go build`.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+PLATFORM="${1:?platform (darwin|linux|windows)}"
+OUT="${2:?output directory}"
+GOARCH_ARG="${3:-}"
+
+mkdir -p "$OUT"
+cd "$ROOT"
+
+build() { # goos goarch outfile
+    CGO_ENABLED=0 GOOS="$1" GOARCH="$2" go build -trimpath -ldflags="-s -w" \
+        -o "$3" ./cmd/bufflehead-mcp
+}
+
+case "$PLATFORM" in
+    darwin)
+        tmp="$(mktemp -d)"
+        trap 'rm -rf "$tmp"' EXIT
+        build darwin arm64 "$tmp/arm64"
+        build darwin amd64 "$tmp/amd64"
+        lipo -create -output "$OUT/bufflehead-mcp" "$tmp/arm64" "$tmp/amd64"
+        echo "==> bufflehead-mcp: $(lipo -archs "$OUT/bufflehead-mcp")"
+        ;;
+    linux)
+        build linux "${GOARCH_ARG:-$(go env GOARCH)}" "$OUT/bufflehead-mcp"
+        echo "==> bufflehead-mcp: linux/${GOARCH_ARG:-$(go env GOARCH)}"
+        ;;
+    windows)
+        build windows "${GOARCH_ARG:-amd64}" "$OUT/bufflehead-mcp.exe"
+        echo "==> bufflehead-mcp.exe: windows/${GOARCH_ARG:-amd64}"
+        ;;
+    *)
+        echo "unknown platform: $PLATFORM" >&2
+        exit 2
+        ;;
+esac

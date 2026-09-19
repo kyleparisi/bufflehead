@@ -32,15 +32,16 @@ type AppMenu struct {
 	hasNative    bool
 	recentPaths  []string
 
-	ActiveWindow   func() *AppWindow
-	OnOpenFile     func(w *AppWindow)              // triggers native file dialog
-	OnOpenRecent   func(w *AppWindow, path string) // opens a specific recent file
-	OnNewTab       func(w *AppWindow)              // creates new tab (⌘T)
-	OnCloseTab     func(w *AppWindow)              // closes current tab (⌘W)
-	OnNewWindow    func()                          // creates new window (⌘N)
-	OnOpenGateway  func()                          // shows gateway connection screen
-	OnCheckUpdates func()                          // manual "Check for Updates…"
-	OnQuit         func()                          // quits the app (⌘Q)
+	ActiveWindow    func() *AppWindow
+	OnOpenFile      func(w *AppWindow)              // triggers native file dialog
+	OnOpenRecent    func(w *AppWindow, path string) // opens a specific recent file
+	OnNewTab        func(w *AppWindow)              // creates new tab (⌘T)
+	OnCloseTab      func(w *AppWindow)              // closes current tab (⌘W)
+	OnNewWindow     func()                          // creates new window (⌘N)
+	OnOpenGateway   func()                          // shows gateway connection screen
+	OnCopyMCPConfig func()                          // copies the Claude Desktop MCP config snippet
+	OnCheckUpdates  func()                          // manual "Check for Updates…"
+	OnQuit          func()                          // quits the app (⌘Q)
 }
 
 // menuRole places an item that platforms file in different spots.
@@ -90,6 +91,7 @@ func (m *AppMenu) spec() []menuDef {
 			{label: "New Tab", key: Input.KeyT, action: perWindow(m.OnNewTab)},
 			{label: "Open…", key: Input.KeyO, action: perWindow(m.OnOpenFile)},
 			{label: "Connect to Gateway…", key: Input.KeyG, action: global(m.OnOpenGateway)},
+			{label: "Copy Claude MCP Config", action: global(m.OnCopyMCPConfig)},
 			{sep: true},
 			{label: "Close Tab", key: Input.KeyW, action: perWindow(m.OnCloseTab)},
 			{sep: true},
