@@ -1381,6 +1381,46 @@ class TestConnectionControls:
 
         open_file(SAMPLE)
 
+    def test_database_switcher_anchors_to_the_breadcrumb(self):
+        """Regression: the switcher popover was placed at the mouse cursor. Its
+        own "Refresh list" footer re-presents it, so each refresh moved the panel
+        to wherever that footer had just been, walking it across the screen. It
+        must sit under the database breadcrumb instead, which makes its position
+        independent of the pointer and therefore stable across refreshes."""
+        close_all_connections()
+        close_all_tabs()
+        post("new-tab")
+        time.sleep(0.3)
+
+        result = post("preview-database-switcher")
+        assert result["ok"] is True
+        time.sleep(0.5)
+
+        popups = [n for n in parse_tscn(ui_tree()) if n["type"] == "PopupPanel"]
+        assert popups, "the switcher popover should render"
+        pos = popups[-1]["props"].get("position")
+        assert pos is not None, "the popover's position should be observable"
+
+        m = re.search(r"\((-?\d+),\s*(-?\d+)\)", pos)
+        assert m, f"could not parse popover position {pos!r}"
+        px, py = int(m.group(1)), int(m.group(2))
+
+        # Compared against the breadcrumb's own screen position, not against
+        # whatever the popover was told — otherwise the assertion would agree
+        # with itself even if placement went back to following the cursor. A
+        # small tolerance covers the panel's drop shadow inflating the window;
+        # the cursor is hundreds of px away, so the regression is still caught.
+        data = result["data"]
+        drift = max(abs(px - data["anchor_x"]), abs(py - data["anchor_y"]))
+        assert drift <= 16, (
+            f"popover at {pos}, but the breadcrumb anchor is "
+            f'Vector2i({data["anchor_x"]}, {data["anchor_y"]}) — '
+            "it is not anchored to the control that opens it"
+        )
+
+        assert state() is not None, "app crashed showing the switcher"
+        open_file(SAMPLE)
+
     def test_ssh_section_on_direct_forms_only(self):
         """An SSH tunnel is a transport, not a connection kind: it belongs on the
         directly-dialled engines (Postgres, MySQL) and nowhere else. Open the

@@ -59,6 +59,7 @@ import (
 	"graphics.gd/variant/Color"
 	"graphics.gd/variant/Float"
 	"graphics.gd/variant/Object"
+	"graphics.gd/variant/Transform2D"
 	"graphics.gd/variant/Vector2"
 	"graphics.gd/variant/Vector2i"
 )
@@ -302,6 +303,27 @@ func (t *TitleBar) SetConnectionInfo(driver, name, dbName string) {
 	t.dbBtn.SetText(dbName + "  ▾")
 	t.dbBtn.AsCanvasItem().SetVisible(true)
 	t.refitPill()
+}
+
+// DatabaseAnchor returns the screen point just below the database breadcrumb
+// segment, for placing the switcher popover under the control that opens it.
+// ok is false when the segment is hidden (no database connection).
+//
+// It only reads dbBtn — a long-lived child of the title bar — and stores
+// nothing, so it introduces no object whose lifetime has to be tracked.
+//
+// The button's size is in content-scale units, so it is mapped through the
+// screen transform rather than added to the screen position directly;
+// otherwise the offset is wrong on a HiDPI display.
+func (t *TitleBar) DatabaseAnchor() (Vector2.XY, bool) {
+	if t.dbBtn == (Button.Instance{}) || !t.dbBtn.AsCanvasItem().IsVisibleInTree() {
+		return Vector2.XY{}, false
+	}
+	below := Transform2D.BasisTransform(
+		t.dbBtn.AsCanvasItem().GetScreenTransform(),
+		Vector2.New(0, t.dbBtn.AsControl().Size().Y+scaled(4)),
+	)
+	return Vector2.Add(t.dbBtn.AsControl().GetScreenPosition(), below), true
 }
 
 // refitPill sizes the breadcrumb pill to its content, capped at pillMaxWidth: a
@@ -3484,6 +3506,33 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 		w.exitGatewayScreen()
 		cmd.Respond(control.Result{OK: true})
 
+	case "preview_database_switcher":
+		// Test/preview hook: render the switcher popover without a live
+		// database, and report the breadcrumb's own screen position so a test
+		// can assert the popover was anchored to it rather than to the cursor.
+		w := a.activeWindow()
+		if w == nil {
+			cmd.Respond(control.Result{Error: "no active window"})
+			return
+		}
+		w.titleBar.SetConnectionInfo("PostgreSQL", "preview", "zeplo")
+		w.presentDatabaseSwitcher(&dbListResult{
+			connIdx: w.activeConnIdx,
+			current: "zeplo",
+			dbs: []db.DatabaseInfo{
+				{Name: "postgres", IsSystem: true},
+				{Name: "template1", IsSystem: true},
+				{Name: "zeplo"},
+				{Name: "zeplo_dev"},
+			},
+		})
+		anchorX, anchorY := 0, 0
+		if anchor, ok := w.titleBar.DatabaseAnchor(); ok {
+			anchorX, anchorY = int(anchor.X), int(anchor.Y)
+		}
+		payload, _ := json.Marshal(map[string]any{"anchor_x": anchorX, "anchor_y": anchorY})
+		cmd.Respond(control.Result{OK: true, Data: payload})
+
 	case "create_test_bookmark":
 		// Test hook: write a dummy bookmark so persistence can be verified
 		// across restarts / platforms (esp. Windows). Idempotent per label. An
@@ -3613,6 +3662,12 @@ func walkNode(buf *bytes.Buffer, node Node.Instance, parentPath string) {
 	if ctrl, ok := Object.As[Control.Instance](node); ok {
 		size := ctrl.Size()
 		fmt.Fprintf(buf, "size = Vector2(%v, %v)\n", size.X, size.Y)
+	}
+	// Popups are Windows, not Controls, so without this their placement is
+	// invisible to tests — and placement is the whole point of a popover.
+	if win, ok := Object.As[Window.Instance](node); ok {
+		pos := win.Position()
+		fmt.Fprintf(buf, "position = Vector2i(%v, %v)\n", pos.X, pos.Y)
 	}
 
 	// Emit type-specific properties
