@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -96,6 +97,16 @@ func TestScanFolderEmptyAndMissing(t *testing.T) {
 }
 
 func TestFolderQueryQuoting(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		for _, dir := range []string{`C:\data\sales`, `C:\data\sales\`, `C:/data/sales/`} {
+			if got, want := FolderGlobPath(dir, "*.csv"), "C:/data/sales/*.csv"; got != want {
+				t.Errorf("FolderGlobPath(%q) = %q, want %q", dir, got, want)
+			}
+		}
+		if got, want := FolderGlobPath(`\\server\share\sales\`, "*.csv"), "//server/share/sales/*.csv"; got != want {
+			t.Errorf("FolderGlobPath UNC = %q, want %q", got, want)
+		}
+	}
 	if got, want := FolderQuery("/data/sales", "*.parquet"), `SELECT * FROM '/data/sales/*.parquet'`; got != want {
 		t.Errorf("FolderQuery = %q, want %q", got, want)
 	}
@@ -127,7 +138,13 @@ func TestFolderQueryAgainstDuckDB(t *testing.T) {
 	defer d.Close()
 
 	base := t.TempDir()
-	for _, dirName := range []string{"plain", "a*b", "q[1]", "o'brien"} {
+	dirNames := []string{"plain", "q[1]", "o'brien"}
+	// Windows forbids '*' in directory names. Literal-star escaping is still
+	// checked by TestFolderQueryQuoting on every platform.
+	if runtime.GOOS != "windows" {
+		dirNames = append(dirNames, "a*b")
+	}
+	for _, dirName := range dirNames {
 		dir := filepath.Join(base, dirName)
 		writeTestFile(t, dir, "one.parquet")
 		writeTestFile(t, dir, "two.parquet")
