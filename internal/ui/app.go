@@ -18,6 +18,7 @@ import (
 	"bufflehead/internal/control"
 	"bufflehead/internal/db"
 	"bufflehead/internal/models"
+	"bufflehead/internal/updater"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 
@@ -2190,6 +2191,7 @@ type App struct {
 	ControlServer *control.Server       `gd:"-"`
 	GatewayConfig *models.GatewayConfig `gd:"-"`
 	BookmarkStore *models.BookmarkStore `gd:"-"`
+	Version       string                `gd:"-"` // running release, e.g. "0.29.0"
 
 	// Legacy accessor — points to active window's active tab state
 	State *models.AppState `gd:"-"`
@@ -2202,6 +2204,12 @@ type App struct {
 	prevKeys    map[Input.Key]bool   `gd:"-"`
 	escPrev     bool                 `gd:"-"` // Escape key state for the connection screen
 	cachedState json.RawMessage      `gd:"-"` // updated on main thread each frame
+
+	update            updater.State             `gd:"-"` // self-update flow (see update_modal.go)
+	updateEvents      chan func(*updater.State) `gd:"-"` // results from update goroutines
+	updateOverlay     Control.Instance          `gd:"-"`
+	updateRenderKey   string                    `gd:"-"`
+	quittingForUpdate bool                      `gd:"-"`
 }
 
 func (a *App) activeWindow() *AppWindow {
@@ -2216,6 +2224,7 @@ func (a *App) activeWindow() *AppWindow {
 
 func (a *App) Ready() {
 	a.history = models.NewQueryHistory()
+	a.updateEvents = make(chan func(*updater.State), 4)
 	a.pendingInit = true
 }
 
@@ -2285,8 +2294,13 @@ func (a *App) initMainWindow() {
 		OnOpenGateway: func() {
 			a.openGatewayScreen()
 		},
+		OnCheckUpdates: func() {
+			a.checkForUpdates(true)
+			a.renderUpdate()
+		},
 	}
 	a.appMenu.Setup()
+	a.autoCheckForUpdates()
 
 	// Wire up control server state provider — returns cached state
 	// computed on the main thread each frame (avoids Godot thread-safety errors).
@@ -2680,6 +2694,7 @@ func (a *App) updateCachedState() {
 		state["windowCount"] = 1 + len(a.secondWins)
 	}
 	state["activeConnIdx"] = w.activeConnIdx
+	state["update"] = map[string]any{"version": a.Version, "phase": a.update.Phase.String(), "open": a.update.Open}
 	connNames := make([]string, 0, len(w.connections))
 	for _, c := range w.connections {
 		connNames = append(connNames, c.Name)
@@ -2955,6 +2970,12 @@ func (a *App) Process(delta Float.X) {
 
 	// Poll async DB results from all windows
 	a.pollResults()
+
+	a.drainUpdateEvents()
+	a.renderUpdate()
+	if a.update.Phase == updater.Restarting {
+		a.quitForUpdate()
+	}
 
 	// Update cached state snapshot (safe to access Godot nodes here on the main thread)
 	a.updateCachedState()
@@ -3485,6 +3506,21 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 			pd.Detail = "Error: Status 401 - Unauthorized (Session Token Revoked)"
 		}
 		w.promptReLogin(pd.DB, pd.Detail)
+		cmd.Respond(control.Result{OK: true})
+
+	case "check_updates":
+		a.checkForUpdates(true)
+		a.renderUpdate()
+		cmd.Respond(control.Result{OK: true})
+
+	case "download_update":
+		a.downloadUpdate()
+		a.renderUpdate()
+		cmd.Respond(control.Result{OK: true})
+
+	case "install_update":
+		a.installUpdate()
+		a.renderUpdate()
 		cmd.Respond(control.Result{OK: true})
 
 	case "show_extensions":
