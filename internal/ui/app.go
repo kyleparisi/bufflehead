@@ -2251,13 +2251,11 @@ func (a *App) initMainWindow() {
 		})
 	}
 
-	// Setup native menu bar
+	// Setup the app menu: the native menu bar on macOS, an in-window menu bar
+	// on Windows (see menu.go).
 	a.appMenu = &AppMenu{
-		OnOpenFile: func() {
-			w := a.activeWindow()
-			if w == nil {
-				return
-			}
+		ActiveWindow: a.activeWindow,
+		OnOpenFile: func(w *AppWindow) {
 			DisplayServer.FileDialogShow(
 				"Open Parquet File",
 				"",
@@ -2273,21 +2271,13 @@ func (a *App) initMainWindow() {
 				0,
 			)
 		},
-		OnOpenRecent: func(path string) {
-			if w := a.activeWindow(); w != nil {
-				w.onFileSelected(path)
-			}
+		OnOpenRecent: func(w *AppWindow, path string) {
+			w.onFileSelected(path)
 		},
-		OnNewTab: func() {
-			if w := a.activeWindow(); w != nil {
-				w.addNewTab()
-			}
+		OnNewTab: func(w *AppWindow) {
+			w.addNewTab()
 		},
-		OnCloseTab: func() {
-			if w := a.activeWindow(); w != nil {
-				w.closeTab(w.activeTab)
-			}
-		},
+		OnCloseTab: a.closeTabOrWindow,
 		OnNewWindow: func() {
 			a.newWindow()
 		},
@@ -2298,8 +2288,10 @@ func (a *App) initMainWindow() {
 			a.checkForUpdates(true)
 			a.renderUpdate()
 		},
+		OnQuit: a.quit,
 	}
 	a.appMenu.Setup()
+	a.attachMenuBar(a.mainWin)
 	a.autoCheckForUpdates()
 
 	// Wire up control server state provider — returns cached state
@@ -2694,6 +2686,7 @@ func (a *App) updateCachedState() {
 		state["windowCount"] = 1 + len(a.secondWins)
 	}
 	state["activeConnIdx"] = w.activeConnIdx
+	state["inWindowMenu"] = useInWindowMenu()
 	state["update"] = map[string]any{"version": a.Version, "phase": a.update.Phase.String(), "open": a.update.Open}
 	connNames := make([]string, 0, len(w.connections))
 	for _, c := range w.connections {
@@ -2816,6 +2809,7 @@ func (a *App) newWindow() {
 		aw.controlKey = a.ControlServer.APIKey()
 	}
 	a.secondWins = append(a.secondWins, aw)
+	a.attachMenuBar(aw)
 
 	if tree, ok := Object.As[SceneTree.Instance](Engine.GetMainLoop()); ok {
 		root := tree.Root()
@@ -2847,9 +2841,7 @@ func (a *App) newWindow() {
 func (a *App) handleShortcut(key Input.Key, w *AppWindow) {
 	switch key {
 	case Input.KeyQ:
-		if tree, ok := Object.As[SceneTree.Instance](Engine.GetMainLoop()); ok {
-			tree.Quit()
-		}
+		a.quit()
 	case Input.KeyN:
 		a.newWindow()
 	case Input.KeyT:
@@ -2858,22 +2850,11 @@ func (a *App) handleShortcut(key Input.Key, w *AppWindow) {
 		}
 	case Input.KeyW:
 		if w != nil {
-			if len(w.tabs) <= 1 && w != a.mainWin {
-				// Close secondary windows when last tab is closed
-				for i, sw := range a.secondWins {
-					if sw == w {
-						a.secondWins = append(a.secondWins[:i], a.secondWins[i+1:]...)
-						break
-					}
-				}
-				w.window.AsNode().QueueFree()
-			} else if len(w.tabs) > 0 {
-				w.closeTab(w.activeTab)
-			}
+			a.closeTabOrWindow(w)
 		}
 	case Input.KeyO:
-		if a.appMenu != nil && a.appMenu.OnOpenFile != nil {
-			a.appMenu.OnOpenFile()
+		if w != nil && a.appMenu != nil && a.appMenu.OnOpenFile != nil {
+			a.appMenu.OnOpenFile(w)
 		}
 	case Input.KeyG:
 		a.openGatewayScreen()
@@ -2886,6 +2867,43 @@ func (a *App) handleShortcut(key Input.Key, w *AppWindow) {
 			w.navForward()
 		}
 	}
+}
+
+// closeTabOrWindow closes w's current tab; closing the last tab of a secondary
+// window closes that window.
+func (a *App) closeTabOrWindow(w *AppWindow) {
+	if len(w.tabs) <= 1 && w != a.mainWin {
+		for i, sw := range a.secondWins {
+			if sw == w {
+				a.secondWins = append(a.secondWins[:i], a.secondWins[i+1:]...)
+				break
+			}
+		}
+		w.window.AsNode().QueueFree()
+	} else if len(w.tabs) > 0 {
+		w.closeTab(w.activeTab)
+	}
+}
+
+// quit stops gateway tunnels and exits (⌘Q / File › Exit).
+func (a *App) quit() {
+	a.stopGatewayTunnels()
+	if tree, ok := Object.As[SceneTree.Instance](Engine.GetMainLoop()); ok {
+		tree.Quit()
+	}
+}
+
+// attachMenuBar gives w its own menu bar row above the title bar on platforms
+// without a global menu. No-op on macOS, which uses the native menu bar.
+func (a *App) attachMenuBar(w *AppWindow) {
+	if w == nil || a.appMenu == nil || !useInWindowMenu() {
+		return
+	}
+	row, bar := a.appMenu.BuildMenuBar(w)
+	w.menuBar = bar
+	w.hasMenuBar = true
+	w.outerVBox.AsNode().AddChild(row.AsNode())
+	w.outerVBox.AsNode().MoveChild(row.AsNode(), 0)
 }
 
 func (a *App) justPressed(key Input.Key) bool {
@@ -3222,6 +3240,23 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 
 	case "close_tab":
 		w.closeTab(w.activeTab)
+		cmd.Respond(control.Result{OK: true})
+
+	case "menu":
+		// Press an item in the window's in-window menu bar (Windows), as a click.
+		var d control.MenuData
+		if err := json.Unmarshal(cmd.Data, &d); err != nil {
+			cmd.Respond(control.Result{Error: err.Error()})
+			return
+		}
+		if !w.hasMenuBar {
+			cmd.Respond(control.Result{Error: "window has no in-window menu bar"})
+			return
+		}
+		if err := a.appMenu.ActivateInWindow(w, w.menuBar, d.Menu, d.Item); err != nil {
+			cmd.Respond(control.Result{Error: err.Error()})
+			return
+		}
 		cmd.Respond(control.Result{OK: true})
 
 	case "close_connection":
@@ -3713,6 +3748,17 @@ func walkNode(buf *bytes.Buffer, node Node.Instance, parentPath string) {
 			c := lbl.AsControl().GetThemeColor("font_color")
 			fmt.Fprintf(buf, "font_color = Color(%v, %v, %v, %v)\n", c.R, c.G, c.B, c.A)
 		}
+	}
+	if pm, ok := Object.As[PopupMenu.Instance](node); ok {
+		labels := make([]string, pm.ItemCount())
+		for i := range labels {
+			if pm.IsItemSeparator(i) {
+				labels[i] = "---"
+			} else {
+				labels[i] = pm.GetItemText(i)
+			}
+		}
+		fmt.Fprintf(buf, "items = %q\n", strings.Join(labels, "|"))
 	}
 	if sc, ok := Object.As[ScrollContainer.Instance](node); ok {
 		fmt.Fprintf(buf, "horizontal_scroll_mode = %d\n", int(sc.HorizontalScrollMode()))

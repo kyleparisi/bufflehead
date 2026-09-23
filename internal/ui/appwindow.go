@@ -28,6 +28,7 @@ import (
 	"graphics.gd/classdb/Label"
 	"graphics.gd/classdb/LineEdit"
 	"graphics.gd/classdb/MarginContainer"
+	"graphics.gd/classdb/MenuBar"
 	"graphics.gd/classdb/PanelContainer"
 	"graphics.gd/classdb/PopupMenu"
 	"graphics.gd/classdb/PopupPanel"
@@ -135,7 +136,11 @@ type AppWindow struct {
 	duck    *db.DB // in-memory DuckDB for file queries
 	history *models.QueryHistory
 
-	titleBar *TitleBar
+	titleBar  *TitleBar
+	outerVBox VBoxContainer.Instance // window chrome column: [menu bar] title bar, body, status bar
+
+	menuBar    MenuBar.Instance // in-window menu bar (Windows); valid when hasMenuBar
+	hasMenuBar bool
 	// toolbar removed
 	statusBar  *StatusBar
 	tabBar     TabBar.Instance
@@ -222,6 +227,7 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 	applyPanelBg(bg.AsControl(), colorBg)
 
 	outerVBox := VBoxContainer.New()
+	w.outerVBox = outerVBox
 	outerVBox.AsControl().SetAnchorsAndOffsetsPreset(Control.PresetFullRect)
 	outerVBox.AsControl().SetSizeFlagsHorizontal(Control.SizeExpandFill)
 	outerVBox.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
