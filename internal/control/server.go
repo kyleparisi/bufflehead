@@ -69,6 +69,13 @@ type CloseConnectionData struct {
 	Index int `json:"index"`
 }
 
+// MenuData is the payload for "menu": press the item labelled Item in the
+// in-window menu titled Menu (e.g. {"menu":"File","item":"New Tab"}).
+type MenuData struct {
+	Menu string `json:"menu"`
+	Item string `json:"item"`
+}
+
 // OpenGatewayData is the optional payload for "open_gateway": a connection
 // kind ("postgres", "mysql", "bigquery", or "" for the AWS gateway) to
 // preselect, so a caller lands on that form instead of the default. SSH
@@ -348,6 +355,10 @@ func buildMux(s *Server) *http.ServeMux {
 
 	mux.HandleFunc("POST /close-tab", func(w http.ResponseWriter, r *http.Request) {
 		s.handleCommand(w, r, "close_tab")
+	})
+
+	mux.HandleFunc("POST /menu", func(w http.ResponseWriter, r *http.Request) {
+		s.handleCommand(w, r, "menu")
 	})
 
 	mux.HandleFunc("POST /new-window", func(w http.ResponseWriter, r *http.Request) {

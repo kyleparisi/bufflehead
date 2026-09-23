@@ -13,6 +13,7 @@ import tempfile
 import time
 from pathlib import Path
 
+import pytest
 import requests
 
 _PORT = os.environ.get("CONTROL_PORT", "9900")
@@ -683,6 +684,81 @@ class TestUITree:
     def test_tree_at_custom_size(self):
         tree = ui_tree(width=800, height=600)
         assert find_node(tree, "Window") is not None
+
+
+class TestMenuBar:
+    """The in-window menu bar (File / Help) that stands in for the macOS menu
+    bar on Windows. It only exists in in-window mode: Windows, or any platform
+    launched with BUFFLEHEAD_INWINDOW_MENU=1. Exercise it on macOS with:
+
+        BUFFLEHEAD_INWINDOW_MENU=1 ./test/integration_test.sh -k MenuBar
+    """
+
+    FILE_ITEMS = [
+        "New Window", "New Tab", "Open…", "Connect to Gateway…", "---",
+        "Close Tab", "---", "Open Recent", "---", "Exit",
+    ]
+
+    @staticmethod
+    def require_in_window():
+        if not state().get("inWindowMenu"):
+            pytest.skip("in-window menu bar is off (not Windows; set BUFFLEHEAD_INWINDOW_MENU=1)")
+
+    @staticmethod
+    def menu_items(tree, title):
+        for n in parse_tscn(tree):
+            if n["type"] == "PopupMenu" and n["path"].endswith("MenuBar/" + title):
+                return n["props"]["items"].strip('"').split("|")
+        return None
+
+    def test_present_only_in_in_window_mode(self):
+        """Native-menu platforms (macOS) must not get a second, in-window bar."""
+        tree = ui_tree()
+        assert (find_node(tree, "MenuBar") is not None) == bool(state()["inWindowMenu"])
+
+    def test_sits_above_title_bar(self):
+        self.require_in_window()
+        nodes = parse_tscn(ui_tree())
+        row = next(i for i, n in enumerate(nodes) if n["path"].endswith("/MenuBarRow"))
+        title = next(i for i, n in enumerate(nodes) if n["type"] == "TitleBar")
+        assert row < title, "menu row is laid out before (above) the title bar"
+        row, title = nodes[row], nodes[title]
+        assert row["path"].rsplit("/", 1)[0] == title["path"].rsplit("/", 1)[0], \
+            "menu row and title bar share the window chrome column"
+
+    @staticmethod
+    def assert_labels(actual, expected):
+        # graphics.gd truncates non-ASCII strings read back from Godot
+        # ("Open…" → "Open\\xe2"), so compare "…" labels by their ASCII stem.
+        assert actual is not None and len(actual) == len(expected), actual
+        for a, e in zip(actual, expected):
+            assert a == e or (e.endswith("…") and a.startswith(e[:-1])), (a, e)
+
+    def test_menus_mirror_mac_menu(self):
+        self.require_in_window()
+        tree = ui_tree()
+        self.assert_labels(self.menu_items(tree, "File"), self.FILE_ITEMS)
+        self.assert_labels(self.menu_items(tree, "Help"), ["Check for Updates…"])
+
+    def test_new_tab_and_close_tab(self):
+        self.require_in_window()
+        close_all_tabs()
+        post("new-tab")
+        wait()
+        before = state()["tabCount"]
+        r = post("menu", {"menu": "File", "item": "New Tab"})
+        assert r.get("ok"), r
+        wait()
+        assert state()["tabCount"] == before + 1
+        r = post("menu", {"menu": "File", "item": "Close Tab"})
+        assert r.get("ok"), r
+        wait()
+        assert state()["tabCount"] == before
+
+    def test_unknown_item_is_an_error(self):
+        self.require_in_window()
+        r = post("menu", {"menu": "File", "item": "Nope"})
+        assert not r.get("ok")
 
 
 class TestMultiRowSelect:

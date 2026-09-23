@@ -5,8 +5,10 @@ import (
 	"graphics.gd/classdb/Font"
 	"graphics.gd/classdb/Image"
 	"graphics.gd/classdb/ImageTexture"
+	"graphics.gd/classdb/PopupMenu"
 	"graphics.gd/classdb/StyleBoxEmpty"
 	"graphics.gd/classdb/StyleBoxFlat"
+	"graphics.gd/classdb/StyleBoxLine"
 	"graphics.gd/classdb/SystemFont"
 	"graphics.gd/classdb/Texture2D"
 	"graphics.gd/variant/Color"
@@ -442,6 +444,75 @@ var (
 
 func applyTitleBarTheme(c Control.Instance) {
 	applyPanelBg(c, colorTitleBar)
+}
+
+// applyMenuBarRowTheme styles the strip behind the in-window (Windows)
+// menu bar: the title bar's surface, with a little inset so the menu titles
+// line up with the title bar content below.
+func applyMenuBarRowTheme(c Control.Instance) {
+	sb := makeStyleBox(colorTitleBar, 0, 0, colorTitleBar)
+	sb.AsStyleBox().SetContentMarginLeft(4)
+	sb.AsStyleBox().SetContentMarginRight(4)
+	sb.AsStyleBox().SetContentMarginTop(2)
+	c.AddThemeStyleboxOverride("panel", sb.AsStyleBox())
+}
+
+// applyMenuBarTheme styles the menu titles (File, Help) as flat ghost buttons.
+func applyMenuBarTheme(c Control.Instance) {
+	transparent := Color.RGBA{}
+	normal := makeStyleBox(transparent, 3, 0, transparent)
+	hover := makeStyleBox(colorBtnHover, 3, 0, colorBtnHover)
+	for _, sb := range []StyleBoxFlat.Instance{normal, hover} {
+		sb.AsStyleBox().SetContentMarginLeft(8)
+		sb.AsStyleBox().SetContentMarginRight(8)
+		sb.AsStyleBox().SetContentMarginTop(3)
+		sb.AsStyleBox().SetContentMarginBottom(3)
+	}
+	c.AddThemeStyleboxOverride("normal", normal.AsStyleBox())
+	c.AddThemeStyleboxOverride("hover", hover.AsStyleBox())
+	c.AddThemeStyleboxOverride("pressed", hover.AsStyleBox())
+	c.AddThemeStyleboxOverride("hover_pressed", hover.AsStyleBox())
+	c.AddThemeStyleboxOverride("focus", StyleBoxEmpty.New().AsStyleBox())
+	c.AddThemeColorOverride("font_color", colorTextMuted)
+	c.AddThemeColorOverride("font_hover_color", colorText)
+	c.AddThemeColorOverride("font_pressed_color", colorTextBright)
+	c.AddThemeColorOverride("font_hover_pressed_color", colorTextBright)
+	c.AddThemeFontSizeOverride("font_size", fontSize(12))
+	c.AddThemeConstantOverride("h_separation", 0)
+}
+
+// Dropdown menu surface: two tonal steps above the window background so the
+// pane stands clear of the content behind it.
+var (
+	colorMenuPane   = Color.RGBA{R: 0.1882, G: 0.1843, B: 0.2, A: 1}    // #302F33
+	colorMenuBorder = Color.RGBA{R: 0.3647, G: 0.3608, B: 0.4353, A: 1} // #5D5C6F — opaque outline
+)
+
+// applyPopupMenuTheme styles a dropdown menu: raised surface with a solid
+// outline and drop shadow, indigo hover row, dim accelerator hints.
+func applyPopupMenuTheme(p PopupMenu.Instance) {
+	w := p.AsWindow()
+	panel := makeStyleBoxPadded(colorMenuPane, 6, 1, colorMenuBorder, 4)
+	panel.SetShadowColor(Color.RGBA{A: 0.45})
+	panel.SetShadowSize(8)
+	hover := makeStyleBox(colorSelected, 4, 0, colorSelected)
+	sep := StyleBoxLine.New()
+	sep.SetColor(colorMenuBorder)
+	sep.SetThickness(1)
+	sep.AsStyleBox().SetContentMarginTop(3)
+	sep.AsStyleBox().SetContentMarginBottom(3)
+	w.AddThemeStyleboxOverride("panel", panel.AsStyleBox())
+	w.AddThemeStyleboxOverride("hover", hover.AsStyleBox())
+	w.AddThemeStyleboxOverride("separator", sep.AsStyleBox())
+	w.AddThemeColorOverride("font_color", colorTextBright)
+	w.AddThemeColorOverride("font_hover_color", colorTextBright)
+	w.AddThemeColorOverride("font_disabled_color", colorTextDim)
+	w.AddThemeColorOverride("font_accelerator_color", colorTextMuted)
+	w.AddThemeFontSizeOverride("font_size", fontSize(12))
+	w.AddThemeConstantOverride("v_separation", 8)
+	w.AddThemeConstantOverride("item_start_padding", 10)
+	w.AddThemeConstantOverride("item_end_padding", 12)
+	w.AddThemeConstantOverride("h_separation", 24)
 }
 
 func applyPillTheme(c Control.Instance) {
