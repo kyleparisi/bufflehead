@@ -19,12 +19,13 @@ type AppMenu struct {
 	recentMenu  RID.NativeMenu
 	recentPaths []string
 
-	OnOpenFile    func()            // triggers native file dialog
-	OnOpenRecent  func(path string) // opens a specific recent file
-	OnNewTab      func()            // creates new tab (⌘T)
-	OnCloseTab    func()            // closes current tab (⌘W)
-	OnNewWindow   func()            // creates new window (⌘N)
-	OnOpenGateway func()            // shows gateway connection screen
+	OnOpenFile     func()            // triggers native file dialog
+	OnOpenRecent   func(path string) // opens a specific recent file
+	OnNewTab       func()            // creates new tab (⌘T)
+	OnCloseTab     func()            // closes current tab (⌘W)
+	OnNewWindow    func()            // creates new window (⌘N)
+	OnOpenGateway  func()            // shows gateway connection screen
+	OnCheckUpdates func()            // manual "Check for Updates…"
 }
 
 func (m *AppMenu) Setup() {
@@ -32,6 +33,15 @@ func (m *AppMenu) Setup() {
 
 	// Get the main menu bar
 	mainMenu := NativeMenu.GetSystemMenu(NativeMenu.MainMenuId)
+
+	// "Check for Updates…" goes in the application (Bufflehead) menu, macOS only;
+	// other platforms have no native menu bar.
+	appMenu := NativeMenu.GetSystemMenu(NativeMenu.ApplicationMenuId)
+	NativeMenu.AddItemOptions(appMenu, "Check for Updates…", func(tag any) {
+		if m.OnCheckUpdates != nil {
+			m.OnCheckUpdates()
+		}
+	}, nil, nil, 0, 1)
 
 	// Create File menu
 	m.fileMenu = NativeMenu.CreateMenu()

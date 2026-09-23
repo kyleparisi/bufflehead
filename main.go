@@ -1,12 +1,15 @@
 package main
 
 import (
+	_ "embed"
 	"log"
+	"os"
 
 	"bufflehead/internal/control"
 	"bufflehead/internal/db"
 	"bufflehead/internal/models"
 	"bufflehead/internal/ui"
+	"bufflehead/internal/updater"
 
 	"graphics.gd/classdb/DisplayServer"
 	"graphics.gd/classdb/Engine"
@@ -16,6 +19,12 @@ import (
 	"graphics.gd/variant/Object"
 	"graphics.gd/variant/Vector2i"
 )
+
+// The export presets are where releases bump the version, so the running app
+// reads its own version from the same file.
+//
+//go:embed graphics/export_presets.cfg
+var exportPresets []byte
 
 func main() {
 	startup.LoadingScene()
@@ -60,6 +69,10 @@ func main() {
 	app.ControlServer = ctrlServer
 	app.GatewayConfig = gatewayCfg
 	app.BookmarkStore = bookmarkStore
+	app.Version = updater.PresetVersion(exportPresets)
+	if v := os.Getenv("BUFFLEHEAD_VERSION"); v != "" {
+		app.Version = v // pretend to be another release, e.g. to test updates
+	}
 	SceneTree.Add(app.AsNode())
 
 	startup.Scene()

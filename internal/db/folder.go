@@ -124,8 +124,10 @@ func escapeGlobLiteral(s string) string {
 // FolderGlobPath joins a folder with one of its globs into the path DuckDB
 // should read. The directory part is escaped as a literal; the glob is not.
 func FolderGlobPath(dir, glob string) string {
-	return escapeGlobLiteral(strings.TrimRight(dir, string(filepath.Separator))) +
-		string(filepath.Separator) + glob
+	// DuckDB accepts forward slashes on Windows too. Normalize before trimming
+	// so both native paths and paths already using slashes join consistently.
+	dir = filepath.ToSlash(dir)
+	return escapeGlobLiteral(strings.TrimRight(dir, "/")) + "/" + glob
 }
 
 // FolderQuery is the default query for one glob in a dropped folder.

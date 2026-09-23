@@ -106,6 +106,16 @@ If the `gopls` and `godoc` MCP servers are available, use them for Go workspace 
 
 Bump the version in `graphics/export_presets.cfg` (macOS `application/short_version`
 + `application/version`, and the Windows presets' `file_version`/`product_version`).
+The app embeds `short_version` as its own version for the in-app update check
+(`docs/self-updater.md`), so it must be bumped for every release.
+
+Release assets **must** be named `Bufflehead-<ver>-macOS.dmg`,
+`Bufflehead-<ver>-Setup.exe`, `Bufflehead-<ver>-x86_64.AppImage` and
+`Bufflehead-<ver>-aarch64.AppImage` — the updater looks up exactly these names
+and reports "release has no asset" otherwise. The build scripts write unversioned
+names (`releases/Bufflehead.dmg`), and `gh release upload file#label` only sets a
+display label, so copy to the versioned name before uploading:
+`cp releases/Bufflehead.dmg releases/Bufflehead-X.Y.Z-macOS.dmg`.
 
 **Signed + notarized DMG (Developer ID — this is what ships to users):**
 `bin/sign-notarize` builds the app, deep-signs every nested Mach-O with the
@@ -117,7 +127,8 @@ workflow (`.github/workflows/build-macos.yml`) runs it on a macOS runner with th
 signing credentials as repo secrets. Trigger it and download the DMG with:
 ```bash
 ./bin/release-dmg-ci
-gh release upload vX.Y.Z releases/Bufflehead.dmg --clobber
+cp releases/Bufflehead.dmg releases/Bufflehead-X.Y.Z-macOS.dmg
+gh release upload vX.Y.Z releases/Bufflehead-X.Y.Z-macOS.dmg --clobber
 ```
 Required repo secrets — `MACOS_CERT_P12_BASE64`, `MACOS_CERT_PASSWORD` (the
 Developer ID cert as a base64 `.p12`), plus `APPLE_API_KEY_P8_BASE64`,
@@ -131,7 +142,8 @@ imported into a throwaway keychain that is deleted on exit.
 ```bash
 SIGN_IDENTITY="Developer ID Application: Kyle Parisi (63GMD6U4J2)" \
 NOTARY_PROFILE="bufflehead-notary" ./bin/sign-notarize
-gh release create vX.Y.Z releases/Bufflehead.dmg --title "vX.Y.Z" --notes "..."
+cp releases/Bufflehead.dmg releases/Bufflehead-X.Y.Z-macOS.dmg
+gh release create vX.Y.Z releases/Bufflehead-X.Y.Z-macOS.dmg --title "vX.Y.Z" --notes "..."
 ```
 Entitlements live in `packaging/macos/entitlements.plist`; `disable-library-validation`
 is required so the hardened runtime can load DuckDB's downloaded extension dylibs.

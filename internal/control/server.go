@@ -459,6 +459,18 @@ func buildMux(s *Server) *http.ServeMux {
 		s.handleCommand(w, r, "show_relogin")
 	})
 
+	// Drive the self-update flow as the menu item and modal buttons would.
+	// /state reports the resulting phase under "update".
+	mux.HandleFunc("POST /check-updates", func(w http.ResponseWriter, r *http.Request) {
+		s.handleCommand(w, r, "check_updates")
+	})
+	mux.HandleFunc("POST /download-update", func(w http.ResponseWriter, r *http.Request) {
+		s.handleCommand(w, r, "download_update")
+	})
+	mux.HandleFunc("POST /install-update", func(w http.ResponseWriter, r *http.Request) {
+		s.handleCommand(w, r, "install_update")
+	})
+
 	mux.HandleFunc("GET /screenshot", func(w http.ResponseWriter, r *http.Request) {
 		cmd := &Command{
 			Action: "screenshot",
