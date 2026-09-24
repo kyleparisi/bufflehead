@@ -60,16 +60,27 @@ GOOS=web gd build
 ```
 bufflehead/
 ├── main.go              # Entrypoint
+├── cmd/
+│   └── bufflehead-mcp/  # stdio MCP bridge Claude Desktop launches (cgo-free)
 ├── internal/
 │   ├── db/
 │   │   └── duck.go      # DuckDB wrapper (schema, query, metadata)
 │   ├── models/
 │   │   └── state.go     # Shared app state
+│   ├── control/         # HTTP control API (+ /mcp, /connections, discovery file)
+│   ├── mcpserver/       # MCP tools, defined once, served in-process and via the bridge
 │   └── ui/
 │       └── app.go       # Godot UI built in Go via graphics.gd
 ├── go.mod
 └── README.md
 ```
+
+## MCP server
+
+Bufflehead is also an MCP server: add the bundled `bufflehead-mcp` bridge to
+Claude Desktop (**File → Copy Claude MCP Config**) or Claude Code and query
+whatever you have open with `list_connections`, `get_schema` and `run_sql`.
+See [docs/mcp.md](docs/mcp.md).
 
 ## Docs
 

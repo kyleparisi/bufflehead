@@ -2459,6 +2459,7 @@ func buildAIPrompt(entry models.GatewayEntry, tables []db.TableInfo, controlAddr
 	b.WriteString("  {\"connection\":\"...\",\"ok\":BOOL,\"tables\":N,\"steps\":[{\"step\":\"cancel_queries\",\"ok\":true},{\"step\":\"start_tunnel\",\"ok\":false,\"error\":\"...\"},...]}\n")
 	b.WriteString("Steps in order: cancel_queries, close_db, stop_tunnel, refresh_credentials (IAM only), start_tunnel, connect_db.\n")
 	b.WriteString("If \"refresh_credentials\" or a step mentions expired SSO, the user must log in again (aws sso login) before a reconnect can succeed.\n")
+	b.WriteString(mcpPromptNote(connName))
 
 	if len(tables) > 0 {
 		b.WriteString("\nSchema:\n")
@@ -2511,6 +2512,7 @@ func buildBigQueryAIPrompt(entry models.GatewayEntry, tables []db.TableInfo, con
 	b.WriteString(fmt.Sprintf("- List datasets:  SELECT schema_name FROM `%s`.INFORMATION_SCHEMA.SCHEMATA ORDER BY schema_name\n", entry.GCPProject))
 	b.WriteString(fmt.Sprintf("- List tables in a dataset:  SELECT table_name FROM `%s.DATASET`.INFORMATION_SCHEMA.TABLES ORDER BY table_name\n", entry.GCPProject))
 	b.WriteString(fmt.Sprintf("- List a table's columns:  SELECT column_name, data_type FROM `%s.DATASET`.INFORMATION_SCHEMA.COLUMNS WHERE table_name = 'TABLE'\n", entry.GCPProject))
+	b.WriteString(mcpPromptNote(connName))
 
 	if len(tables) > 0 {
 		b.WriteString(fmt.Sprintf("\nDefault dataset (%s) schema:\n", entry.DefaultDataset))
@@ -2544,6 +2546,7 @@ func buildFileAIPrompt(filePath, connName string, schema []db.Column, controlAdd
 	b.WriteString("\nEvery row the query returns is sent, up to a 10,000-row ceiling — this is a local file, so nothing is truncated to a page by default. Add \"limit\": N to the request (or your own LIMIT) to cap it.\n")
 	b.WriteString("There is no server-side timeout; disconnecting cancels the query.\n")
 	b.WriteString("Response format: {\"columns\":[...],\"rows\":[[...],...],\"total\":N}\n")
+	b.WriteString(mcpPromptNote(connName))
 
 	if len(schema) > 0 {
 		b.WriteString("\nSchema:\n")
@@ -2583,6 +2586,7 @@ func buildFolderAIPrompt(connName, dir string, tables []db.TableInfo, controlAdd
 	b.WriteString("\nEvery row the query returns is sent, up to a 10,000-row ceiling — this is a local file, so nothing is truncated to a page by default. Add \"limit\": N to the request (or your own LIMIT) to cap it.\n")
 	b.WriteString("There is no server-side timeout; disconnecting cancels the query.\n")
 	b.WriteString("Response format: {\"columns\":[...],\"rows\":[[...],...],\"total\":N}\n")
+	b.WriteString(mcpPromptNote(connName))
 
 	if len(tables) > 0 {
 		b.WriteString("\nPatterns in this folder:\n")
@@ -2620,6 +2624,7 @@ func buildDBAIPrompt(connName, dbPath string, tables []db.TableInfo, controlAddr
 	b.WriteString("\nEvery row the query returns is sent, up to a 10,000-row ceiling — this is a local file, so nothing is truncated to a page by default. Add \"limit\": N to the request (or your own LIMIT) to cap it.\n")
 	b.WriteString("There is no server-side timeout; disconnecting cancels the query.\n")
 	b.WriteString("Response format: {\"columns\":[...],\"rows\":[[...],...],\"total\":N}\n")
+	b.WriteString(mcpPromptNote(connName))
 
 	if len(tables) > 0 {
 		b.WriteString("\nSchema:\n")
@@ -2929,4 +2934,113 @@ func createSecondaryWindow(duck *db.DB, history *models.QueryHistory, onNewWindo
 	})
 
 	return aw
+}
+
+// findConnection resolves a connection by name; empty means the active one.
+// Shared by the /sql, /sql/cancel and /s3/get-object executors, which are
+// called from HTTP goroutines — they only read the slice, matching existing
+// practice for those endpoints.
+func (w *AppWindow) findConnection(name string) (*Connection, error) {
+	if name == "" {
+		if w.activeConnIdx >= 0 && w.activeConnIdx < len(w.connections) {
+			return w.connections[w.activeConnIdx], nil
+		}
+		return nil, fmt.Errorf("no active connection")
+	}
+	for _, c := range w.connections {
+		if c.Name == name {
+			return c, nil
+		}
+	}
+	return nil, fmt.Errorf("connection %q not found", name)
+}
+
+// connectionsSnapshot projects every open connection into the plain JSON shape
+// the control API and MCP tools hand to agents. It runs on the main thread (via
+// the "connections" control command) so it can read tab state safely.
+//
+// The in-memory connection has no tables of its own: its "tables" are the data
+// files open in its tabs, keyed by path, since that is how an agent must
+// reference them in SQL.
+func (w *AppWindow) connectionsSnapshot(includeColumns bool) []control.ConnectionInfo {
+	out := make([]control.ConnectionInfo, 0, len(w.connections))
+	for i, c := range w.connections {
+		info := control.ConnectionInfo{
+			Name:   c.Name,
+			Path:   c.Path,
+			Active: i == w.activeConnIdx,
+			Tables: []control.TableInfo{},
+		}
+		info.Kind, info.Dialect = connectionKind(c)
+		if c.Gateway != nil {
+			info.DefaultLimit = defaultRemoteSQLLimit
+			info.SupportsS3 = c.Gateway.Auth != nil
+			_, info.SupportsCancel = c.DB.(*db.BigQueryDB)
+			info.Path = "" // remote: nothing meaningful to show
+		}
+
+		if i == 0 && c.Path == ":memory:" {
+			seen := map[string]bool{}
+			for _, ts := range w.tabs {
+				if ts.connIdx != 0 || ts.State == nil || ts.State.FilePath == "" || seen[ts.State.FilePath] {
+					continue
+				}
+				seen[ts.State.FilePath] = true
+				t := control.TableInfo{Name: ts.State.FilePath, Type: "file"}
+				if includeColumns {
+					t.Columns = toColumnInfo(ts.State.Schema)
+				}
+				info.Tables = append(info.Tables, t)
+			}
+		} else {
+			for _, t := range c.Tables {
+				ti := control.TableInfo{Name: t.Name, Type: t.Type, Detail: t.Detail}
+				if c.IsFolder {
+					// Agents reference folder entries by full glob path.
+					ti.Name = db.FolderGlobPath(c.Path, t.Name)
+					ti.Type = "pattern"
+				}
+				if includeColumns {
+					ti.Columns = toColumnInfo(t.Columns)
+				}
+				info.Tables = append(info.Tables, ti)
+			}
+		}
+		out = append(out, info)
+	}
+	return out
+}
+
+// connectionKind classifies a connection for agents: (kind, SQL dialect).
+func connectionKind(c *Connection) (string, string) {
+	if c.Gateway != nil {
+		switch {
+		case c.Gateway.Config.IsBigQuery():
+			return "bigquery", "bigquery"
+		case c.Gateway.Config.IsMySQL():
+			return "mysql", "mysql"
+		case c.Gateway.Config.IsDirect():
+			return "postgres", "postgres"
+		default:
+			return "aws-postgres", "postgres"
+		}
+	}
+	switch {
+	case c.Path == ":memory:":
+		return "memory", "duckdb"
+	case c.IsFolder:
+		return "folder", "duckdb"
+	}
+	if _, ok := c.DB.(*db.SQLiteDB); ok {
+		return "sqlite", "sqlite"
+	}
+	return "duckdb", "duckdb"
+}
+
+func toColumnInfo(cols []db.Column) []control.ColumnInfo {
+	out := make([]control.ColumnInfo, len(cols))
+	for i, c := range cols {
+		out[i] = control.ColumnInfo{Name: c.Name, DataType: c.DataType, Nullable: c.Nullable}
+	}
+	return out
 }

@@ -1,7 +1,7 @@
 [configuration]
 
 entry_symbol = "cgo_extension_init"
-compatibility_minimum = "4.6.1.stable.official.14d19694e"
+compatibility_minimum = "4.6.2.stable.official.71f334935"
 
 [libraries]
 
@@ -13,5 +13,6 @@ macos.arm64    = "darwin_arm64.dylib"
 macos.amd64    = "darwin_amd64.dylib"
 ios.arm64      = "go.xcframework"
 android.arm64  = "libandroid_arm64.so"
+android.x86_64 = "libandroid_amd64.so"
 linux.x86_64   = "linux_amd64.so"
 linux.arm64    = "linux_arm64.so"

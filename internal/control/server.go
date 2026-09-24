@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -192,10 +193,14 @@ type Server struct {
 	sqlExecutor    SQLExecutor
 	cancelExecutor CancelExecutor
 	s3Executor     S3Executor
+	mcpHandler     http.Handler
 	port           int
 	addr           string
 	apiKey         string
 	mu             sync.Mutex
+	// sqlSem limits SQL to 2 in flight (1 processing + 1 queued) across both
+	// /sql and the MCP run_sql tool. Extra requests get ErrBusy.
+	sqlSem chan struct{}
 }
 
 // New creates a control server on the given port. Use 0 for a random available port.
@@ -211,6 +216,7 @@ func New(port int) *Server {
 		commands: make(chan *Command, 16),
 		port:     port,
 		apiKey:   generateKey(),
+		sqlSem:   make(chan struct{}, 2),
 	}
 }
 
@@ -302,9 +308,155 @@ func (s *Server) Commands() <-chan *Command {
 	return s.commands
 }
 
+// SetMCPHandler mounts an MCP Streamable HTTP handler at /mcp. It sits inside
+// the authenticated mux, so MCP clients present the same bearer key.
+func (s *Server) SetMCPHandler(h http.Handler) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mcpHandler = h
+}
+
 // Respond sends a result back to the HTTP handler.
 func (c *Command) Respond(r Result) {
 	c.result <- r
+}
+
+// dispatch queues a main-thread command and waits for its result, giving up
+// (and leaving the command to be answered into its buffered channel) when ctx
+// ends first.
+func (s *Server) dispatch(ctx context.Context, action string, data json.RawMessage) (Result, error) {
+	cmd := &Command{
+		Action: action,
+		Data:   data,
+		result: make(chan Result, 1),
+	}
+	select {
+	case s.commands <- cmd:
+	case <-ctx.Done():
+		return Result{}, ctx.Err()
+	}
+	select {
+	case res := <-cmd.result:
+		return res, nil
+	case <-ctx.Done():
+		return Result{}, ctx.Err()
+	}
+}
+
+// The methods below are the backend the HTTP handlers and the in-process MCP
+// server share. *Server and *Client (client.go) deliberately have the same
+// signatures so either can back the MCP tool set.
+
+// State returns the cached app-state snapshot (GET /state).
+func (s *Server) State(ctx context.Context) (json.RawMessage, error) {
+	s.mu.Lock()
+	sp := s.stateProvider
+	s.mu.Unlock()
+	if sp == nil {
+		return nil, fmt.Errorf("no state provider")
+	}
+	return sp()
+}
+
+// Connections snapshots every open connection on the main thread via the
+// "connections" command. Columns are included only when asked for, since a
+// wide remote schema is expensive to marshal on every list call.
+func (s *Server) Connections(ctx context.Context, includeColumns bool) ([]ConnectionInfo, error) {
+	data, _ := json.Marshal(ConnectionsData{IncludeColumns: includeColumns})
+	res, err := s.dispatch(ctx, "connections", data)
+	if err != nil {
+		return nil, err
+	}
+	if !res.OK {
+		return nil, fmt.Errorf("%s", res.Error)
+	}
+	var conns []ConnectionInfo
+	if len(res.Data) > 0 {
+		if err := json.Unmarshal(res.Data, &conns); err != nil {
+			return nil, fmt.Errorf("decode connections: %w", err)
+		}
+	}
+	if conns == nil {
+		conns = []ConnectionInfo{}
+	}
+	return conns, nil
+}
+
+// ExecSQL runs a query through the installed SQL executor, holding one of the
+// two SQL slots for its duration. Returns ErrBusy when both are taken.
+func (s *Server) ExecSQL(ctx context.Context, req SQLRequest) (*SQLResult, error) {
+	if req.SQL == "" {
+		return nil, fmt.Errorf("sql is required")
+	}
+	select {
+	case s.sqlSem <- struct{}{}:
+		defer func() { <-s.sqlSem }()
+	default:
+		return nil, ErrBusy
+	}
+
+	s.mu.Lock()
+	executor := s.sqlExecutor
+	s.mu.Unlock()
+	if executor == nil {
+		return nil, fmt.Errorf("no sql executor configured")
+	}
+	// A missing limit is passed through as 0 ("unspecified"). The executor
+	// applies the right default for the connection: none for local files and
+	// databases, a modest page for remote ones, which are slow or billed.
+	//
+	// No server-side timeout — the caller manages its own timeouts by
+	// cancelling ctx, which the executor's worker detects and cancels the query.
+	return executor(ctx, req.Connection, req.SQL, req.Limit)
+}
+
+// CancelSQL cancels the in-flight query on a named connection.
+func (s *Server) CancelSQL(ctx context.Context, conn string) error {
+	s.mu.Lock()
+	cancel := s.cancelExecutor
+	s.mu.Unlock()
+	if cancel == nil {
+		return fmt.Errorf("no cancel executor configured")
+	}
+	return cancel(conn)
+}
+
+// GetS3Object fetches an S3 object with a connection's AWS credentials.
+func (s *Server) GetS3Object(ctx context.Context, req S3GetObjectRequest) (*S3GetObjectResult, error) {
+	s.mu.Lock()
+	executor := s.s3Executor
+	s.mu.Unlock()
+	if executor == nil {
+		return nil, fmt.Errorf("no s3 executor configured")
+	}
+	if req.Bucket == "" {
+		return nil, fmt.Errorf("bucket is required")
+	}
+	if req.Key == "" {
+		return nil, fmt.Errorf("key is required")
+	}
+	return executor(req)
+}
+
+// Reconnect tears down and re-establishes a connection via the main-thread
+// "reconnect" command and returns the per-step outcome.
+func (s *Server) Reconnect(ctx context.Context, conn string) (*ReconnectResult, error) {
+	data, _ := json.Marshal(ReconnectData{Connection: conn})
+	res, err := s.dispatch(ctx, "reconnect", data)
+	if err != nil {
+		return nil, err
+	}
+	var rr ReconnectResult
+	if len(res.Data) > 0 {
+		if err := json.Unmarshal(res.Data, &rr); err != nil {
+			return nil, fmt.Errorf("decode reconnect result: %w", err)
+		}
+	}
+	if !res.OK && rr.Connection == "" {
+		// Failed before producing a step report (e.g. unknown connection).
+		return nil, fmt.Errorf("%s", res.Error)
+	}
+	return &rr, nil
 }
 
 // buildMux creates the HTTP handler with all routes registered.
@@ -312,15 +464,7 @@ func buildMux(s *Server) *http.ServeMux {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /state", func(w http.ResponseWriter, r *http.Request) {
-		s.mu.Lock()
-		sp := s.stateProvider
-		s.mu.Unlock()
-
-		if sp == nil {
-			http.Error(w, "no state provider", 500)
-			return
-		}
-		data, err := sp()
+		data, err := s.State(r.Context())
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return
@@ -328,6 +472,35 @@ func buildMux(s *Server) *http.ServeMux {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(data)
 	})
+
+	// Every open connection, with its tables (and columns when ?columns=1).
+	// Unlike /state this covers all connections, not just the active tab.
+	mux.HandleFunc("GET /connections", func(w http.ResponseWriter, r *http.Request) {
+		cols := r.URL.Query().Get("columns")
+		conns, err := s.Connections(r.Context(), cols == "1" || cols == "true")
+		w.Header().Set("Content-Type", "application/json")
+		if err != nil {
+			w.WriteHeader(500)
+			json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": err.Error()})
+			return
+		}
+		json.NewEncoder(w).Encode(conns)
+	})
+
+	// MCP Streamable HTTP endpoint (see internal/mcpserver). Registered inside
+	// the mux so requireAuth gates it like every other route.
+	mcp := func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		h := s.mcpHandler
+		s.mu.Unlock()
+		if h == nil {
+			http.Error(w, "mcp not configured", http.StatusServiceUnavailable)
+			return
+		}
+		h.ServeHTTP(w, r)
+	}
+	mux.HandleFunc("/mcp", mcp)
+	mux.HandleFunc("/mcp/", mcp)
 
 	mux.HandleFunc("POST /open", func(w http.ResponseWriter, r *http.Request) {
 		s.handleCommand(w, r, "open")
@@ -528,98 +701,43 @@ func buildMux(s *Server) *http.ServeMux {
 	})
 
 	mux.HandleFunc("POST /s3/get-object", func(w http.ResponseWriter, r *http.Request) {
-		s.mu.Lock()
-		executor := s.s3Executor
-		s.mu.Unlock()
-
-		if executor == nil {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(500)
-			json.NewEncoder(w).Encode(S3GetObjectResult{Error: "no s3 executor configured"})
-			return
-		}
-
+		w.Header().Set("Content-Type", "application/json")
 		var req S3GetObjectRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(400)
 			json.NewEncoder(w).Encode(S3GetObjectResult{Error: "bad json: " + err.Error()})
 			return
 		}
-		if req.Bucket == "" {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(400)
-			json.NewEncoder(w).Encode(S3GetObjectResult{Error: "bucket is required"})
-			return
-		}
-		if req.Key == "" {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(400)
-			json.NewEncoder(w).Encode(S3GetObjectResult{Error: "key is required"})
-			return
-		}
-
-		result, err := executor(req)
-		w.Header().Set("Content-Type", "application/json")
+		result, err := s.GetS3Object(r.Context(), req)
 		if err != nil {
-			w.WriteHeader(400)
+			w.WriteHeader(s3Status(err))
 			json.NewEncoder(w).Encode(S3GetObjectResult{Error: err.Error()})
 			return
 		}
 		json.NewEncoder(w).Encode(result)
 	})
 
-	// Limit to 2 concurrent /sql requests (1 processing + 1 queued).
-	// Additional requests get 429 so agents back off instead of
-	// flooding the worker queue and starving UI operations.
-	sqlSem := make(chan struct{}, 2)
-
 	mux.HandleFunc("POST /sql", func(w http.ResponseWriter, r *http.Request) {
-		select {
-		case sqlSem <- struct{}{}:
-			defer func() { <-sqlSem }()
-		default:
-			w.Header().Set("Content-Type", "application/json")
-			w.Header().Set("Retry-After", "5")
-			w.WriteHeader(429)
-			json.NewEncoder(w).Encode(SQLResult{Error: "too many concurrent SQL requests, retry later"})
-			return
-		}
-
-		s.mu.Lock()
-		executor := s.sqlExecutor
-		s.mu.Unlock()
-
-		if executor == nil {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(500)
-			json.NewEncoder(w).Encode(SQLResult{Error: "no sql executor configured"})
-			return
-		}
-
+		w.Header().Set("Content-Type", "application/json")
 		var req SQLRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(400)
 			json.NewEncoder(w).Encode(SQLResult{Error: "bad json: " + err.Error()})
 			return
 		}
-		if req.SQL == "" {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(400)
-			json.NewEncoder(w).Encode(SQLResult{Error: "sql is required"})
-			return
-		}
-		// A missing limit is passed through as 0 ("unspecified"). The executor
-		// applies the right default for the connection: none for local files and
-		// databases, a modest page for remote ones, which are slow or billed.
-
-		// No server-side timeout — the agent manages its own timeouts
-		// by disconnecting, which baseCtx detects and cancels the query.
-		result, err := executor(r.Context(), req.Connection, req.SQL, req.Limit)
-		w.Header().Set("Content-Type", "application/json")
+		// ExecSQL holds one of the two SQL slots; a third concurrent caller
+		// gets 429 so agents back off instead of starving UI operations.
+		result, err := s.ExecSQL(r.Context(), req)
 		if err != nil {
-			w.WriteHeader(400)
+			switch {
+			case errors.Is(err, ErrBusy):
+				w.Header().Set("Retry-After", "5")
+				w.WriteHeader(429)
+			case err.Error() == "no sql executor configured":
+				w.WriteHeader(500)
+			default:
+				w.WriteHeader(400)
+			}
 			json.NewEncoder(w).Encode(SQLResult{Error: err.Error()})
 			return
 		}
@@ -628,25 +746,18 @@ func buildMux(s *Server) *http.ServeMux {
 
 	mux.HandleFunc("POST /sql/cancel", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-
-		s.mu.Lock()
-		cancel := s.cancelExecutor
-		s.mu.Unlock()
-		if cancel == nil {
-			w.WriteHeader(500)
-			json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": "no cancel executor configured"})
-			return
-		}
-
 		var req CancelRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
 			w.WriteHeader(400)
 			json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": "bad json: " + err.Error()})
 			return
 		}
-
-		if err := cancel(req.Connection); err != nil {
-			w.WriteHeader(400)
+		if err := s.CancelSQL(r.Context(), req.Connection); err != nil {
+			if err.Error() == "no cancel executor configured" {
+				w.WriteHeader(500)
+			} else {
+				w.WriteHeader(400)
+			}
 			json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": err.Error()})
 			return
 		}
@@ -654,6 +765,12 @@ func buildMux(s *Server) *http.ServeMux {
 	})
 
 	return mux
+}
+
+// Handler returns the complete, bearer-gated HTTP handler — what Start serves.
+// Exposed so other packages' tests can stand the control API up on httptest.
+func (s *Server) Handler() http.Handler {
+	return s.requireAuth(buildMux(s))
 }
 
 // Start launches the HTTP server in a goroutine.
@@ -701,4 +818,13 @@ func (s *Server) handleCommand(w http.ResponseWriter, r *http.Request, action st
 		w.WriteHeader(400)
 	}
 	json.NewEncoder(w).Encode(res)
+}
+
+// s3Status picks the HTTP status for a GetS3Object failure: 500 when the app
+// never installed an executor, 400 for everything the caller can fix.
+func s3Status(err error) int {
+	if err.Error() == "no s3 executor configured" {
+		return 500
+	}
+	return 400
 }

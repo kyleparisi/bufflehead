@@ -44,6 +44,11 @@ echo "Build OK"
 # startup; the harness sends it as the Authorization header).
 export BUFFLEHEAD_CONTROL_KEY="integration-test-key"
 
+# Point the app's config dir at a scratch directory so the MCP discovery file
+# (control.json) it writes on startup doesn't clobber a real install's, and so
+# the test can assert on it.
+export BUFFLEHEAD_CONFIG_DIR="$(mktemp -d)"
+
 # Start headless and capture stdout to parse the dynamic port
 LOGFILE=$(mktemp)
 cd "$ROOT/graphics"
@@ -54,6 +59,7 @@ cleanup() {
     kill $PID 2>/dev/null || true
     wait $PID 2>/dev/null || true
     rm -f "$LOGFILE"
+    rm -rf "$BUFFLEHEAD_CONFIG_DIR"
 }
 trap cleanup EXIT
 
@@ -76,4 +82,5 @@ echo "Control server on port $PORT"
 # Run pytest with the dynamic port
 cd "$ROOT"
 CONTROL_PORT="$PORT" BUFFLEHEAD_CONTROL_KEY="$BUFFLEHEAD_CONTROL_KEY" \
+    BUFFLEHEAD_CONFIG_DIR="$BUFFLEHEAD_CONFIG_DIR" \
     python3 -m pytest test/integration_test.py -v "$@"

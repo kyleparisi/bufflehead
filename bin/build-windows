@@ -133,6 +133,10 @@ for d in libstdc++-6.dll libgcc_s_seh-1.dll libwinpthread-1.dll; do
   cp -f "$GCCDIR/bin/$d" "$OUT/"
 done
 
+# MCP stdio bridge beside the exe; the installer globs the whole folder.
+step "build MCP bridge"
+bin/build-mcp-bridge windows "$OUT" amd64
+
 # --- verify the shipped folder is self-contained -----------------------------
 # Fail if any MinGW (lib*.dll) dependency can't be resolved from within the
 # folder — that would be an "Error 126" at launch on a clean machine.
@@ -197,7 +201,7 @@ sign_files() {   # sign_files <file>...
 # installer wraps already-signed files. Signing must be the last write to each
 # PE — icon/metadata are already applied above.
 step "sign bundle binaries"
-sign_files "$OUT/Bufflehead.exe" "$OUT/windows_amd64.dll" \
+sign_files "$OUT/Bufflehead.exe" "$OUT/bufflehead-mcp.exe" "$OUT/windows_amd64.dll" \
   "$OUT/libstdc++-6.dll" "$OUT/libgcc_s_seh-1.dll" "$OUT/libwinpthread-1.dll"
 
 # --- one-click installer (Inno Setup) ----------------------------------------

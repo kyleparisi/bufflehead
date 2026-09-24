@@ -8,6 +8,12 @@ cd "$(dirname "$0")/.."
 echo "=== Unit tests ==="
 go test ./...
 
+# The MCP bridge must stay cgo-free (it ships as a plain binary Claude Desktop
+# spawns); a stray import of internal/db or internal/ui would break this.
+echo ""
+echo "=== MCP bridge (CGO_ENABLED=0) ==="
+CGO_ENABLED=0 go build -o /dev/null ./cmd/bufflehead-mcp
+
 echo ""
 echo "=== Integration tests ==="
 go install graphics.gd/cmd/gd@release

@@ -18,6 +18,9 @@ if [ ! -d "$APP" ]; then
     exit 1
 fi
 
+echo "Building MCP bridge..."
+"$ROOT/bin/build-mcp-bridge" darwin "$APP/Contents/MacOS"
+
 if ! python3 -c 'import dmgbuild' >/dev/null 2>&1; then
     echo "Error: python package 'dmgbuild' is required to create the styled DMG." >&2
     echo "Install it with: python3 -m pip install --user dmgbuild" >&2
