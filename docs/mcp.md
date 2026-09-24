@@ -25,10 +25,11 @@ Config** in Bufflehead puts the right snippet on the clipboard):
 ```
 
 Restart Claude Desktop. The entry is static: it keeps working across
-Bufflehead restarts because the bridge discovers the running app each time it
-starts (see *How discovery works*). If Bufflehead isn't running, the bridge
-exits with a clear message and Claude Desktop shows the server as unavailable;
-start Bufflehead and reconnect.
+Bufflehead restarts because the bridge re-discovers the running app on every
+tool call (see *How discovery works*). If Bufflehead isn't running — at Claude
+Desktop launch or after a mid-session quit — the bridge stays connected and
+tool calls return a "Bufflehead is not running" error; start (or restart)
+Bufflehead and the next call succeeds, no reconnect needed.
 
 ### Claude Code
 
@@ -102,9 +103,10 @@ on Windows, `~/.config/bufflehead` on Linux):
 ```
 
 The file is created owner-only (0600) and removed when the app exits. The
-bridge reads it, checks the pid is alive, and pings `/state` with the key
-before serving anything, so a stale file fails fast with a "not running"
-message instead of hanging.
+bridge repeats discovery on every tool call — read the file, check the pid is
+alive, ping `/state` with the key — so a stale file fails fast with a "not
+running" tool error instead of hanging, and one long-lived bridge process
+follows the app across restarts, picking up each launch's fresh port and key.
 
 **Security note.** The control key otherwise never touches disk. With
 discovery it lives in that owner-only file for the lifetime of the app

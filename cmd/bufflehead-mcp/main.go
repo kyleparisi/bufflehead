@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 
 	"bufflehead/internal/buildinfo"
 	"bufflehead/internal/configdir"
@@ -53,21 +54,86 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	client, err := resolveTarget(ctx, os.Getenv, configdir.Dir())
-	if err != nil {
-		log.Fatal(err)
-	}
+	backend := &lazyBackend{getenv: os.Getenv, dir: configdir.Dir()}
 
 	if *check {
+		client, err := backend.resolve(ctx)
+		if err != nil {
+			log.Fatal(err)
+		}
 		fmt.Printf("Bufflehead reachable at %s (key accepted)\n", client.BaseURL)
 		return
 	}
 
-	srv := mcpserver.New(client, buildinfo.Version)
+	// Don't exit if the app isn't up: the MCP client keeps this process alive
+	// for its whole session, so serve anyway and let each tool call re-resolve.
+	if _, err := backend.resolve(ctx); err != nil {
+		log.Printf("%v — serving anyway; each tool call retries discovery", err)
+	}
+
+	srv := mcpserver.New(backend, buildinfo.Version)
 	if err := srv.Run(ctx, &mcp.StdioTransport{}); err != nil && !errors.Is(err, context.Canceled) {
 		log.Fatal(err)
 	}
 }
+
+// lazyBackend implements mcpserver.Backend by resolving the running app on
+// every tool call instead of once at startup: the MCP client keeps this
+// process alive for a whole session, while Bufflehead's control port and key
+// rotate each launch. Resolution is one small file read plus a localhost ping,
+// so a failed call heals itself as soon as the app is running again.
+type lazyBackend struct {
+	getenv func(string) string
+	dir    string
+}
+
+func (b *lazyBackend) resolve(ctx context.Context) (*control.Client, error) {
+	return resolveTarget(ctx, b.getenv, b.dir)
+}
+
+func (b *lazyBackend) Connections(ctx context.Context, includeColumns bool) ([]control.ConnectionInfo, error) {
+	c, err := b.resolve(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return c.Connections(ctx, includeColumns)
+}
+
+func (b *lazyBackend) ExecSQL(ctx context.Context, req control.SQLRequest) (*control.SQLResult, error) {
+	c, err := b.resolve(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return c.ExecSQL(ctx, req)
+}
+
+func (b *lazyBackend) CancelSQL(ctx context.Context, conn string) error {
+	c, err := b.resolve(ctx)
+	if err != nil {
+		return err
+	}
+	return c.CancelSQL(ctx, conn)
+}
+
+func (b *lazyBackend) GetS3Object(ctx context.Context, req control.S3GetObjectRequest) (*control.S3GetObjectResult, error) {
+	c, err := b.resolve(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return c.GetS3Object(ctx, req)
+}
+
+func (b *lazyBackend) Reconnect(ctx context.Context, conn string) (*control.ReconnectResult, error) {
+	c, err := b.resolve(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return c.Reconnect(ctx, conn)
+}
+
+// versionWarn keeps the bridge/app version-mismatch warning to one line per
+// process, since resolveTarget now runs on every tool call.
+var versionWarn sync.Once
 
 // resolveTarget builds a control client for the running app and proves it is
 // reachable. BUFFLEHEAD_CONTROL_ADDR + BUFFLEHEAD_CONTROL_KEY (as set by the
@@ -106,7 +172,9 @@ func resolveTarget(ctx context.Context, getenv func(string) string, dir string) 
 		return nil, fmt.Errorf("Bufflehead is not reachable at %s (from %s): %v. Start Bufflehead and retry", client.BaseURL, source, err)
 	}
 	if d != nil && d.Version != "" && d.Version != buildinfo.Version {
-		log.Printf("warning: bridge %s talking to Bufflehead %s", buildinfo.Version, d.Version)
+		versionWarn.Do(func() {
+			log.Printf("warning: bridge %s talking to Bufflehead %s", buildinfo.Version, d.Version)
+		})
 	}
 	return client, nil
 }

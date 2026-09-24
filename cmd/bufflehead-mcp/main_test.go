@@ -90,6 +90,56 @@ func TestResolveTarget_Unreachable(t *testing.T) {
 	}
 }
 
+// TestLazyBackend_SurvivesAppRestart drives one lazyBackend across an app
+// restart: app A serves, exits (port and key gone, discovery file removed),
+// then app B starts with a fresh port and key. The same backend must fail
+// clearly in the gap and succeed against B without any reconstruction.
+func TestLazyBackend_SurvivesAppRestart(t *testing.T) {
+	dir := t.TempDir()
+	backend := &lazyBackend{getenv: env(nil), dir: dir}
+	ctx := context.Background()
+
+	serveConnections := func(s *control.Server, name string) {
+		go func() {
+			for cmd := range s.Commands() {
+				data, _ := json.Marshal([]control.ConnectionInfo{{Name: name, Kind: "memory", Active: true}})
+				cmd.Respond(control.Result{OK: true, Data: data})
+			}
+		}()
+	}
+	writeDiscovery := func(s *control.Server, ts *httptest.Server) {
+		t.Helper()
+		err := control.WriteDiscovery(dir, control.Discovery{
+			Addr: strings.TrimPrefix(ts.URL, "http://"), Key: s.APIKey(), PID: os.Getpid(),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	sA, tsA := fakeApp(t)
+	serveConnections(sA, "A")
+	writeDiscovery(sA, tsA)
+	conns, err := backend.Connections(ctx, false)
+	if err != nil || len(conns) != 1 || conns[0].Name != "A" {
+		t.Fatalf("app A: conns=%v err=%v", conns, err)
+	}
+
+	tsA.Close()
+	os.Remove(control.DiscoveryPath(dir))
+	if _, err := backend.Connections(ctx, false); err == nil || !strings.Contains(err.Error(), "not running") {
+		t.Fatalf("after app A exit: err=%v", err)
+	}
+
+	sB, tsB := fakeApp(t)
+	serveConnections(sB, "B")
+	writeDiscovery(sB, tsB)
+	conns, err = backend.Connections(ctx, false)
+	if err != nil || len(conns) != 1 || conns[0].Name != "B" {
+		t.Fatalf("app B: conns=%v err=%v", conns, err)
+	}
+}
+
 func TestConfigSnippet(t *testing.T) {
 	var cfg struct {
 		Servers map[string]struct{ Command string } `json:"mcpServers"`
