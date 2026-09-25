@@ -688,8 +688,9 @@ class TestUITree:
 
 class TestMenuBar:
     """The in-window menu bar (File / Help) that stands in for the macOS menu
-    bar on Windows. It only exists in in-window mode: Windows, or any platform
-    launched with BUFFLEHEAD_INWINDOW_MENU=1. Exercise it on macOS with:
+    bar on Windows and Linux. It only exists in in-window mode: any non-macOS
+    platform, or macOS launched with BUFFLEHEAD_INWINDOW_MENU=1. Exercise it
+    on macOS with:
 
         BUFFLEHEAD_INWINDOW_MENU=1 ./test/integration_test.sh -k MenuBar
     """
@@ -702,7 +703,7 @@ class TestMenuBar:
     @staticmethod
     def require_in_window():
         if not state().get("inWindowMenu"):
-            pytest.skip("in-window menu bar is off (not Windows; set BUFFLEHEAD_INWINDOW_MENU=1)")
+            pytest.skip("in-window menu bar is off (macOS; set BUFFLEHEAD_INWINDOW_MENU=1)")
 
     @staticmethod
     def menu_items(tree, title):
