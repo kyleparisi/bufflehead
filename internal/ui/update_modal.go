@@ -1,3 +1,5 @@
+//go:build !mas
+
 package ui
 
 import (

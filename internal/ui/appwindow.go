@@ -639,6 +639,7 @@ func (w *AppWindow) addNewTab() {
 
 	schemaBtn.AsBaseButton().OnPressed(func() { w.showSchemaSidebar(ts) })
 	historyBtn.AsBaseButton().OnPressed(func() { w.showHistorySidebar(ts) })
+	extBtn.AsCanvasItem().SetVisible(!storeBuild)
 	extBtn.AsBaseButton().OnPressed(func() { w.showExtensionsSidebar(ts) })
 
 	sidebarVBox.AsNode().AddChild(selectorRow.AsNode())
@@ -1251,6 +1252,14 @@ func (w *AppWindow) onFileSelected(path string) {
 }
 
 func (w *AppWindow) onFileSelectedWithCmd(path string, cmd *control.Command) {
+	if err := fileAccess.Open(path, cmd == nil); err != nil {
+		if cmd != nil {
+			cmd.Respond(control.Result{Error: err.Error()})
+		} else {
+			w.statusBar.SetStatus(err.Error())
+		}
+		return
+	}
 	// A directory is not a file DuckDB can read: `SELECT * FROM '<dir>'` can't
 	// infer a format and falls back to resolving the path as a table name,
 	// which fails with a baffling "Table with name /Users/... does not exist".

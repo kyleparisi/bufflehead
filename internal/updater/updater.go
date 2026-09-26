@@ -1,3 +1,5 @@
+//go:build !mas
+
 // Package updater discovers and stages Bufflehead releases. It does not install them.
 package updater
 

@@ -39,8 +39,9 @@ type AppMenu struct {
 	OnCloseTab     func(w *AppWindow)              // closes current tab (⌘W)
 	OnNewWindow    func()                          // creates new window (⌘N)
 	OnOpenGateway  func()                          // shows gateway connection screen
-	OnCheckUpdates func()                          // manual "Check for Updates…"
-	OnQuit         func()                          // quits the app (⌘Q)
+	OnLicenses     func()
+	OnCheckUpdates func() // manual "Check for Updates…"
+	OnQuit         func() // quits the app (⌘Q)
 }
 
 // menuRole places an item that platforms file in different spots.
@@ -84,7 +85,7 @@ func (m *AppMenu) spec() []menuDef {
 			}
 		}
 	}
-	return []menuDef{
+	menus := []menuDef{
 		{title: "File", items: []menuItem{
 			{label: "New Window", key: Input.KeyN, action: global(m.OnNewWindow)},
 			{label: "New Tab", key: Input.KeyT, action: perWindow(m.OnNewTab)},
@@ -98,9 +99,13 @@ func (m *AppMenu) spec() []menuDef {
 			{label: "Exit", key: Input.KeyQ, action: global(m.OnQuit), role: roleQuit},
 		}},
 		{title: "Help", items: []menuItem{
-			{label: "Check for Updates…", action: global(m.OnCheckUpdates), role: roleAppMenu},
+			{label: "Third-Party Licenses…", action: global(m.OnLicenses)},
 		}},
 	}
+	if !storeBuild {
+		menus[1].items = append(menus[1].items, menuItem{label: "Check for Updates…", action: global(m.OnCheckUpdates), role: roleAppMenu})
+	}
+	return menus
 }
 
 // useInWindowMenu reports whether windows should draw their own menu bar: on

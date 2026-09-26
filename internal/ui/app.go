@@ -2288,7 +2288,8 @@ func (a *App) initMainWindow() {
 			a.checkForUpdates(true)
 			a.renderUpdate()
 		},
-		OnQuit: a.quit,
+		OnLicenses: a.showLicenses,
+		OnQuit:     a.quit,
 	}
 	a.appMenu.Setup()
 	a.attachMenuBar(a.mainWin)
@@ -3544,21 +3545,37 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 		cmd.Respond(control.Result{OK: true})
 
 	case "check_updates":
+		if storeBuild {
+			cmd.Respond(control.Result{Error: "Updates are managed by the Mac App Store"})
+			return
+		}
 		a.checkForUpdates(true)
 		a.renderUpdate()
 		cmd.Respond(control.Result{OK: true})
 
 	case "download_update":
+		if storeBuild {
+			cmd.Respond(control.Result{Error: "Updates are managed by the Mac App Store"})
+			return
+		}
 		a.downloadUpdate()
 		a.renderUpdate()
 		cmd.Respond(control.Result{OK: true})
 
 	case "install_update":
+		if storeBuild {
+			cmd.Respond(control.Result{Error: "Updates are managed by the Mac App Store"})
+			return
+		}
 		a.installUpdate()
 		a.renderUpdate()
 		cmd.Respond(control.Result{OK: true})
 
 	case "show_extensions":
+		if storeBuild {
+			cmd.Respond(control.Result{Error: "Runtime extensions are unavailable in this build"})
+			return
+		}
 		ts := w.currentTab()
 		if ts == nil || ts.extPanel == nil {
 			cmd.Respond(control.Result{Error: "no active tab"})

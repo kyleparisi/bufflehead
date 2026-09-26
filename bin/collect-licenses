@@ -1,0 +1,50 @@
+#!/usr/bin/env python3
+"""Collect exact local license texts for the current target's linked Go graph.
+Requires matching DuckDB source. No license classification is inferred as legal advice.
+"""
+import argparse,hashlib,json,pathlib,re,shutil,subprocess,sys
+p=argparse.ArgumentParser();p.add_argument('--duckdb-source',required=True);p.add_argument('--output',default='packaging/licenses/generated');p.add_argument('--tags',default='');a=p.parse_args()
+root=pathlib.Path(__file__).resolve().parent.parent
+out=(root/a.output).resolve();out.mkdir(parents=True,exist_ok=True)
+def run(*args):return subprocess.check_output(args,cwd=root,text=True)
+def records(text):
+ d=json.JSONDecoder()
+ while text.strip():
+  text=text.lstrip();v,n=d.raw_decode(text);yield v;text=text[n:]
+cmd=['go','list','-deps','-json']
+if a.tags:cmd+=['-tags',a.tags]
+mods={}
+for v in records(run(*cmd,'.')):
+ m=v.get('Module',{});m=m.get('Replace',m)
+ if m.get('Dir') and not m.get('Main'):mods[m['Path']]=m
+entries=[];texts=[]
+pattern=re.compile(r'^(licen[cs]e|notice|notices|copying|copyright|authors|ofl)([.\-_].*|$)',re.I)
+def collect(label,version,base,paths):
+ files=[]
+ for f in sorted(set(paths)):
+  data=f.read_bytes();rel=str(f.relative_to(base));files.append({'path':rel,'sha256':hashlib.sha256(data).hexdigest()})
+  texts.append('\n'+'='*78+'\n'+label+' '+version+' — '+rel+'\n'+'='*78+'\n'+data.decode('utf-8',errors='replace'))
+ if not files:raise SystemExit('Missing license evidence: '+label)
+ entries.append({'component':label,'version':version,'files':files})
+for name,m in sorted(mods.items()):
+ base=pathlib.Path(m['Dir']);paths=[f for f in base.rglob('*') if f.is_file() and pattern.match(f.name) and not (name == 'modernc.org/libc' and 'testdata' in f.relative_to(base).parts)]
+ collect(name,m.get('Version','local'),base,paths)
+base=pathlib.Path(a.duckdb_source).resolve()
+commit=subprocess.check_output(['git','-C',str(base),'rev-parse','HEAD'],text=True).strip()
+if commit!='19864453f7d0ed095256d848b46e7b8630989bac':raise SystemExit('Expected DuckDB v1.1.3 source')
+paths=[base/'LICENSE']
+for sub in ['third_party','src','extension/json','extension/parquet']:
+ paths += [f for f in (base/sub).rglob('*') if f.is_file() and pattern.match(f.name)]
+collect('DuckDB including bundled third-party sources','v1.1.3 '+commit,base,paths)
+base=root/'packaging/licenses/upstream'
+collect('Godot including bundled third-party sources','4.6.1-stable',base,list(base.glob('godot-*')))
+collect('LLVM libc++ header license','Apple SDK headers reference https://llvm.org/LICENSE.txt',base,[base/'llvm-libcxx-LICENSE.txt'])
+base=pathlib.Path(run('go','env','GOROOT').strip());collect('Go toolchain/runtime',run('go','env','GOVERSION').strip(),base,[base/'LICENSE']+[f for f in (base/'src/vendor').rglob('*') if f.is_file() and pattern.match(f.name)])
+# MPL-covered driver is unmodified; ship the exact module source for recipients.
+mysql=mods['github.com/go-sql-driver/mysql'];info=json.loads(run('go','mod','download','-json',mysql['Path']+'@'+mysql['Version']))
+sources=out/'sources';sources.mkdir(exist_ok=True);source=sources/('mysql-'+mysql['Version']+'.zip');shutil.copyfile(info['Zip'],source)
+header='Bufflehead — Third-party notices\n\nThis file preserves upstream copyright, license and NOTICE texts for the build dependency inventory. Bundled upstream inventories may include optional components not used by this build. Bufflehead itself is not relicensed by this file.\n\nMySQL driver source (MPL-2.0): on macOS, use Finder > Show Package Contents > Contents/Resources/Licenses/sources/'+source.name+' contains the exact unmodified source used. See its LICENSE for recipient rights.\n\n'
+(out/'THIRD-PARTY-NOTICES.txt').write_text(header+'\n'.join(texts))
+manifest={'target':run('go','env','GOOS','GOARCH').splitlines(),'tags':a.tags,'go_modules':len(mods),'components':entries,'source_archives':[{'path':'sources/'+source.name,'sha256':hashlib.sha256(source.read_bytes()).hexdigest()}]}
+(out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
+print(f'Collected {len(mods)} Go modules and native/runtime notices into {out}')
