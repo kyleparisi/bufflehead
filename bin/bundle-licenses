@@ -1,0 +1,13 @@
+#!/usr/bin/env python3
+"""Copy verified notices and corresponding source into a macOS app BEFORE signing."""
+import hashlib,json,pathlib,shutil,sys
+root=pathlib.Path(__file__).resolve().parent.parent
+src=root/'packaging/licenses/generated';app=pathlib.Path(sys.argv[1]).resolve()
+if not (app/'Contents/Info.plist').is_file():raise SystemExit('Expected a macOS app bundle')
+m=json.loads((src/'manifest.json').read_text())
+for item in m['source_archives']:
+ if hashlib.sha256((src/item['path']).read_bytes()).hexdigest()!=item['sha256']:raise SystemExit('License source archive hash mismatch')
+dst=app/'Contents/Resources/Licenses';dst.mkdir(parents=True,exist_ok=True)
+for name in ['THIRD-PARTY-NOTICES.txt','manifest.json']:shutil.copyfile(src/name,dst/name)
+shutil.copytree(src/'sources',dst/'sources',dirs_exist_ok=True)
+print('Bundled notices and source archives:',dst)

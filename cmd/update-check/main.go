@@ -1,3 +1,5 @@
+//go:build !mas
+
 // update-check is an exploration tool, not an installer.
 package main
 

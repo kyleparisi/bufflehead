@@ -1,0 +1,18 @@
+#!/usr/bin/env python3
+"""Clean pinned DuckDB build; never patches a prebuilt archive."""
+import argparse,hashlib,json,pathlib,subprocess,platform
+p=argparse.ArgumentParser();p.add_argument('--source',required=True);p.add_argument('--output',required=True);p.add_argument('--arch',choices=['x86_64','arm64'],default=platform.machine());p.add_argument('--jobs',type=int,default=1);p.add_argument('--configure-only',action='store_true');a=p.parse_args()
+src=pathlib.Path(a.source).resolve();out=pathlib.Path(a.output).resolve();build=out/'build'
+def run(*args):subprocess.run(args,check=True)
+commit=subprocess.check_output(['git','-C',str(src),'rev-parse','HEAD'],text=True).strip()
+if commit!='19864453f7d0ed095256d848b46e7b8630989bac':raise SystemExit('Expected DuckDB v1.1.3 pinned commit')
+if subprocess.check_output(['git','-C',str(src),'status','--porcelain','--untracked-files=no'],text=True).strip():raise SystemExit('DuckDB tracked source must be clean')
+sdk=subprocess.check_output(['xcrun','--sdk','macosx','--show-sdk-path'],text=True).strip()
+run('cmake','-S',str(src),'-B',str(build),'-G','Ninja','-DCMAKE_BUILD_TYPE=Release','-DCMAKE_OSX_SYSROOT='+sdk,'-DCMAKE_OSX_ARCHITECTURES='+a.arch,'-DCMAKE_OSX_DEPLOYMENT_TARGET=11.0','-DCMAKE_CXX_FLAGS=-isystem '+sdk+'/usr/include/c++/v1','-DDISABLE_EXTENSION_LOAD=ON','-DEXTENSION_STATIC_BUILD=ON','-DBUILD_EXTENSIONS=json;parquet','-DBUILD_UNITTESTS=OFF','-DBUILD_SHELL=OFF','-DENABLE_SANITIZER=OFF','-DENABLE_UBSAN=OFF')
+if a.configure_only:raise SystemExit(0)
+run('cmake','--build',str(build),'--target','duckdb_static','--parallel',str(a.jobs))
+archives=[build/'src/libduckdb_static.a']+sorted((build/'third_party').glob('*/libduckdb_*.a'))+sorted((build/'extension').glob('*/lib*_extension.a'))
+if not all(x.is_file() for x in archives) or len(archives)<3:raise SystemExit('Incomplete static build')
+run('xcrun','libtool','-static','-o',str(out/'libduckdb.a'),*[str(x) for x in archives])
+sha=hashlib.sha256((out/'libduckdb.a').read_bytes()).hexdigest()
+(out/'provenance.json').write_text(json.dumps({'source_commit':commit,'architecture':a.arch,'sdk':sdk,'clean_source_build':True,'disable_extension_load':True,'extensions':['json','parquet'],'sha256':sha},indent=2)+'\n')

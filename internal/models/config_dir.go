@@ -16,6 +16,13 @@ import (
 //   - Windows: %AppData%/Bufflehead
 //   - Linux:   $XDG_CONFIG_HOME/bufflehead or ~/.config/bufflehead
 func ConfigDir() string {
+	// Spike-only isolation: never read or write the normal app configuration.
+	if path := os.Getenv("BUFFLEHEAD_SPIKE_CONFIG_DIR"); path != "" {
+		return path
+	}
+	if path := nativeStoreConfigDir(); path != "" {
+		return path
+	}
 	name := "Bufflehead"
 	if runtime.GOOS == "linux" {
 		name = "bufflehead"
