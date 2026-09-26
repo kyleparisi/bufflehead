@@ -207,6 +207,9 @@ if [ -f "$MAIN_BIN" ]; then
     esac
 fi
 
+# Include notices and corresponding source before signing.
+"$ROOT/bin/bundle-licenses" "$APP"
+
 # --- 2. Sign every nested Mach-O binary, deepest-first ----------------------
 # Hardened runtime + secure timestamp + our entitlements. Signing inside-out is
 # required: an outer signature is invalidated if you later re-sign something
