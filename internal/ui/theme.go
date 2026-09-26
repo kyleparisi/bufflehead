@@ -446,7 +446,7 @@ func applyTitleBarTheme(c Control.Instance) {
 	applyPanelBg(c, colorTitleBar)
 }
 
-// applyMenuBarRowTheme styles the strip behind the in-window (Windows)
+// applyMenuBarRowTheme styles the strip behind the in-window (Windows/Linux)
 // menu bar: the title bar's surface, with a little inset so the menu titles
 // line up with the title bar content below.
 func applyMenuBarRowTheme(c Control.Instance) {

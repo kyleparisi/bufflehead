@@ -2894,7 +2894,8 @@ func (a *App) quit() {
 }
 
 // attachMenuBar gives w its own menu bar row above the title bar on platforms
-// without a global menu. No-op on macOS, which uses the native menu bar.
+// without a global menu (Windows, Linux). No-op on macOS, which uses the
+// native menu bar.
 func (a *App) attachMenuBar(w *AppWindow) {
 	if w == nil || a.appMenu == nil || !useInWindowMenu() {
 		return

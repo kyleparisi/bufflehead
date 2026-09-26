@@ -22,8 +22,8 @@ const maxRecentFiles = 10
 // rendered two ways:
 //
 //   - macOS: into the native global menu bar (NativeMenu), once per app.
-//   - Windows: there is no global menu, so each AppWindow gets an in-window
-//     MenuBar row above its title bar (like Sublime Text on Windows).
+//   - Windows and Linux: there is no global menu, so each AppWindow gets an
+//     in-window MenuBar row above its title bar (like Sublime Text).
 //
 // Actions receive the window the menu was used from. The native menu has no
 // owning window, so it targets ActiveWindow().
@@ -103,11 +103,12 @@ func (m *AppMenu) spec() []menuDef {
 	}
 }
 
-// useInWindowMenu reports whether windows should draw their own menu bar: on
-// Windows, or when BUFFLEHEAD_INWINDOW_MENU=1 forces it (to develop and test
-// the Windows menu on macOS).
+// useInWindowMenu reports whether windows should draw their own menu bar.
+// NativeMenu only renders a global menu bar on macOS, so every other platform
+// (Windows, Linux) needs the in-window one. BUFFLEHEAD_INWINDOW_MENU=1 forces
+// it on macOS, to develop and test that renderer there.
 func useInWindowMenu() bool {
-	return runtime.GOOS == "windows" || os.Getenv("BUFFLEHEAD_INWINDOW_MENU") == "1"
+	return runtime.GOOS != "darwin" || os.Getenv("BUFFLEHEAD_INWINDOW_MENU") == "1"
 }
 
 func (m *AppMenu) Setup() {
@@ -203,7 +204,7 @@ func (m *AppMenu) rebuildNativeRecent() {
 	}, nil, nil, 0)
 }
 
-// ── In-window (Windows) renderer ─────────────────────────────────────
+// ── In-window (Windows/Linux) renderer ───────────────────────────────
 
 // BuildMenuBar renders spec() into a MenuBar row whose actions target w. The
 // Open Recent submenu is re-rendered from recentPaths each time it opens, so

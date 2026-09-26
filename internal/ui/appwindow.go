@@ -139,7 +139,7 @@ type AppWindow struct {
 	titleBar  *TitleBar
 	outerVBox VBoxContainer.Instance // window chrome column: [menu bar] title bar, body, status bar
 
-	menuBar    MenuBar.Instance // in-window menu bar (Windows); valid when hasMenuBar
+	menuBar    MenuBar.Instance // in-window menu bar (Windows/Linux); valid when hasMenuBar
 	hasMenuBar bool
 	// toolbar removed
 	statusBar  *StatusBar
