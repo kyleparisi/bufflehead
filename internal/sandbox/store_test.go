@@ -16,19 +16,20 @@ func TestBookmarkStoreRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "grants.json")
 	s := NewBookmarkStoreAt(path)
 
+	grant := filepath.Join(t.TempDir(), "aws")
 	want := []byte{0x01, 0x02, 0xFF, 0x00}
-	if err := s.Put("/Users/me/.aws", want); err != nil {
+	if err := s.Put(grant, want); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 
 	// A fresh store must see it — the grant has to survive relaunch, which is
 	// the entire point of a bookmark.
 	reopened := NewBookmarkStoreAt(path)
-	dir, got, ok := reopened.Lookup("/Users/me/.aws")
+	dir, got, ok := reopened.Lookup(grant)
 	if !ok {
 		t.Fatal("Lookup after reopen = not found")
 	}
-	if dir != "/Users/me/.aws" {
+	if dir != grant {
 		t.Errorf("dir = %q", dir)
 	}
 	if string(got) != string(want) {
@@ -83,18 +84,20 @@ func TestBookmarkStoreDoesNotCoverSiblings(t *testing.T) {
 // on the most specific scope the user actually granted.
 func TestBookmarkStoreLongestMatchWins(t *testing.T) {
 	s := newTestStore(t)
-	if err := s.Put("/Users/me", []byte{0xAA}); err != nil {
+	home := t.TempDir()
+	aws := filepath.Join(home, ".aws")
+	if err := s.Put(home, []byte{0xAA}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Put("/Users/me/.aws", []byte{0xBB}); err != nil {
+	if err := s.Put(aws, []byte{0xBB}); err != nil {
 		t.Fatal(err)
 	}
 
-	dir, got, ok := s.Lookup("/Users/me/.aws/config")
+	dir, got, ok := s.Lookup(filepath.Join(aws, "config"))
 	if !ok {
 		t.Fatal("not found")
 	}
-	if dir != "/Users/me/.aws" {
+	if dir != aws {
 		t.Errorf("dir = %q, want the narrower grant", dir)
 	}
 	if got[0] != 0xBB {
@@ -102,8 +105,8 @@ func TestBookmarkStoreLongestMatchWins(t *testing.T) {
 	}
 
 	// A path only the broad grant covers still resolves to the broad one.
-	if dir, _, ok := s.Lookup("/Users/me/Documents"); !ok || dir != "/Users/me" {
-		t.Errorf("Lookup(Documents) = %q,%v; want /Users/me,true", dir, ok)
+	if dir, _, ok := s.Lookup(filepath.Join(home, "Documents")); !ok || dir != home {
+		t.Errorf("Lookup(Documents) = %q,%v; want %q,true", dir, ok, home)
 	}
 }
 
@@ -151,13 +154,14 @@ func TestBookmarkStoreRejectsEmptyBookmark(t *testing.T) {
 
 func TestBookmarkStoreDirs(t *testing.T) {
 	s := newTestStore(t)
-	for _, d := range []string{"/b", "/a", "/c"} {
+	root := t.TempDir()
+	for _, d := range []string{filepath.Join(root, "b"), filepath.Join(root, "a"), filepath.Join(root, "c")} {
 		if err := s.Put(d, []byte{0x01}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	got := s.Dirs()
-	want := []string{"/a", "/b", "/c"}
+	want := []string{filepath.Join(root, "a"), filepath.Join(root, "b"), filepath.Join(root, "c")}
 	if len(got) != len(want) {
 		t.Fatalf("Dirs() = %v, want %v", got, want)
 	}
