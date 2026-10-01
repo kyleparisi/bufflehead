@@ -40,7 +40,7 @@ type DBRequest struct {
 	Limit      int
 	TabID      uint64
 	Generation uint64
-	ConnIdx    int // connection index (for ReqRefresh)
+	Conn       *Connection // connection being refreshed (for ReqRefresh)
 	Navigating bool
 	ControlCmd *control.Command
 	SQLReply   chan SQLReply   // for ReqSQL: synchronous response channel
@@ -58,7 +58,7 @@ type DBResult struct {
 	Kind       DBRequestKind
 	TabID      uint64
 	Generation uint64
-	ConnIdx    int // connection index (for ReqRefresh)
+	Conn       *Connection // connection being refreshed (for ReqRefresh)
 	Navigating bool
 	Elapsed    time.Duration
 	Query      *db.QueryResult
@@ -89,8 +89,8 @@ type DBResult struct {
 // ReconnectOutcome carries the result of a background reconnect attempt back to
 // the main thread, where the connection's live resources are swapped in.
 type ReconnectOutcome struct {
-	ConnIdx int
-	Steps   []control.ReconnectStep
+	Conn  *Connection // resolved to an index on arrival; nil index → closed meanwhile
+	Steps []control.ReconnectStep
 
 	// Populated on success so the main thread can swap them into the Connection.
 	Querier db.Querier
@@ -269,7 +269,7 @@ func (cw *ConnWorker) handle(req DBRequest) {
 				Kind:       req.Kind,
 				TabID:      req.TabID,
 				Generation: req.Generation,
-				ConnIdx:    req.ConnIdx,
+				Conn:       req.Conn,
 				Err:        pingErr,
 				ControlCmd: req.ControlCmd,
 				FilePath:   req.FilePath,
@@ -340,9 +340,9 @@ func (cw *ConnWorker) handleRefresh(req DBRequest) {
 	tables, err := cw.db.Tables()
 	if err != nil {
 		cw.results <- DBResult{
-			Kind:    ReqRefresh,
-			ConnIdx: req.ConnIdx,
-			Err:     err,
+			Kind: ReqRefresh,
+			Conn: req.Conn,
+			Err:  err,
 		}
 		return
 	}
@@ -355,9 +355,9 @@ func (cw *ConnWorker) handleRefresh(req DBRequest) {
 		// Postgres, MySQL, and BigQuery expose a bulk schema loader.
 		if err := bulk.AllTableSchemas(tables); err != nil {
 			cw.results <- DBResult{
-				Kind:    ReqRefresh,
-				ConnIdx: req.ConnIdx,
-				Err:     fmt.Errorf("load schemas: %w", err),
+				Kind: ReqRefresh,
+				Conn: req.Conn,
+				Err:  fmt.Errorf("load schemas: %w", err),
 			}
 			return
 		}
@@ -369,9 +369,9 @@ func (cw *ConnWorker) handleRefresh(req DBRequest) {
 	}
 
 	cw.results <- DBResult{
-		Kind:    ReqRefresh,
-		ConnIdx: req.ConnIdx,
-		Tables:  tables,
+		Kind:   ReqRefresh,
+		Conn:   req.Conn,
+		Tables: tables,
 	}
 }
 
