@@ -460,7 +460,7 @@ func (w *AppWindow) buildUI() PanelContainer.Instance {
 	w.connections = append(w.connections, memConn)
 	w.connList.AsNode().AddChild(memBtn.AsNode())
 	w.activeConnIdx = 0
-	w.wireConnButton(memBtn, 0)
+	w.wireConnButton(memBtn, memConn)
 
 	// Spacer pushes the "New Connection" button to the bottom of the rail.
 	railSpacer := Control.New()
@@ -1466,7 +1466,7 @@ func (w *AppWindow) handleOpenDBResult(res DBResult) {
 	// Rail visibility is projected by render() from state (connection count +
 	// leftPaneHidden); newTabForConnection below renders.
 
-	w.wireConnButton(btn, dbIdx)
+	w.wireConnButton(btn, conn)
 
 	// Make this the active connection, then create+bind its first tab. render()
 	// (called by newTabForConnection) projects the rail highlight and filtered
@@ -1687,7 +1687,6 @@ func (w *AppWindow) handleExtAction(ts *tabState, name string, install bool) {
 	}()
 }
 
-// wireConnButton sets up left-click (select) and right-click (context menu) on a rail button.
 // connHealthColor returns the footer status-dot color for a connection: green
 // when connected (all local connections, or a gateway with a live tunnel),
 // amber while a gateway tunnel is reconnecting, red when either tunnel — SSM or
@@ -1717,12 +1716,26 @@ func connHealthColor(conn *Connection) Color.RGBA {
 	}
 }
 
-func (w *AppWindow) wireConnButton(btn Button.Instance, idx int) {
-	if idx >= 0 && idx < len(w.connections) {
-		btn.AsControl().SetTooltipText(w.connections[idx].Name)
+// connIndex returns conn's current position in w.connections, or -1 if it has
+// been closed. Positions shift when an earlier connection closes, so callbacks
+// that outlive the moment they were created must resolve the index through
+// this rather than capturing it.
+func (w *AppWindow) connIndex(conn *Connection) int {
+	for i, c := range w.connections {
+		if c == conn {
+			return i
+		}
 	}
+	return -1
+}
+
+// wireConnButton sets up left-click (select) and right-click (context menu) on
+// a rail button. The handlers hold the connection, not its index, and resolve
+// the index when they fire.
+func (w *AppWindow) wireConnButton(btn Button.Instance, conn *Connection) {
+	btn.AsControl().SetTooltipText(conn.Name)
 	btn.AsBaseButton().OnPressed(func() {
-		w.selectConnection(idx)
+		w.selectConnection(w.connIndex(conn))
 	})
 	btn.AsControl().OnGuiInput(func(event InputEvent.Instance) {
 		mb, ok := Object.As[InputEventMouseButton.Instance](event)
@@ -1730,7 +1743,7 @@ func (w *AppWindow) wireConnButton(btn Button.Instance, idx int) {
 			return
 		}
 		if mb.ButtonIndex() == Input.MouseButtonRight && mb.AsInputEvent().IsPressed() {
-			w.showConnContextMenu(idx)
+			w.showConnContextMenu(w.connIndex(conn))
 		}
 	})
 }
@@ -1746,6 +1759,8 @@ func (w *AppWindow) showConnContextMenu(idx int) {
 	popup.AddItem("Close " + conn.Name)
 
 	popup.OnIdPressed(func(id int) {
+		// Re-resolve: the index may have shifted while the menu was open.
+		idx := w.connIndex(conn)
 		switch id {
 		case 0:
 			w.refreshConnection(idx)
@@ -1766,7 +1781,7 @@ func (w *AppWindow) showConnContextMenu(idx int) {
 // dbListResult carries the outcome of a background database-list query back to
 // the main thread, where the switcher popup is built.
 type dbListResult struct {
-	connIdx   int
+	conn      *Connection
 	current   string
 	dbs       []db.DatabaseInfo
 	err       error
@@ -1797,7 +1812,7 @@ func (w *AppWindow) showDatabaseSwitcher(idx int) {
 			for i, n := range names {
 				dbs[i] = db.DatabaseInfo{Name: n}
 			}
-			w.dbListMsg = &dbListResult{connIdx: idx, current: current, dbs: dbs, err: err, isDataset: true}
+			w.dbListMsg = &dbListResult{conn: conn, current: current, dbs: dbs, err: err, isDataset: true}
 		}()
 		return
 	}
@@ -1810,7 +1825,7 @@ func (w *AppWindow) showDatabaseSwitcher(idx int) {
 	w.statusBar.SetStatus("Loading databases…")
 	go func() {
 		dbs, err := switcher.Databases()
-		w.dbListMsg = &dbListResult{connIdx: idx, current: current, dbs: dbs, err: err}
+		w.dbListMsg = &dbListResult{conn: conn, current: current, dbs: dbs, err: err}
 	}()
 }
 
@@ -1834,7 +1849,7 @@ func (w *AppWindow) presentDatabaseSwitcher(res *dbListResult) {
 		return
 	}
 
-	connIdx := res.connIdx
+	conn := res.conn
 
 	popup := PopupPanel.New()
 	// A fresh PopupPanel Window defaults to content_scale_size {0,0}, which renders
@@ -1850,12 +1865,12 @@ func (w *AppWindow) presentDatabaseSwitcher(res *dbListResult) {
 
 	content := buildDatabaseSwitcher(title, res.dbs, res.current,
 		func(name string) {
-			w.switchDatabase(connIdx, name)
+			w.switchDatabase(w.connIndex(conn), name)
 			popup.AsNode().QueueFree()
 		},
 		func() {
 			popup.AsNode().QueueFree()
-			w.showDatabaseSwitcher(connIdx)
+			w.showDatabaseSwitcher(w.connIndex(conn))
 		},
 	)
 	popup.AsNode().AddChild(content.AsNode())
@@ -2158,8 +2173,8 @@ func (w *AppWindow) refreshConnection(idx int) {
 	}
 	w.statusBar.SetStatus("Refreshing " + conn.Name + "...")
 	conn.worker.Send(DBRequest{
-		Kind:    ReqRefresh,
-		ConnIdx: idx,
+		Kind: ReqRefresh,
+		Conn: conn,
 	})
 }
 
@@ -2198,7 +2213,7 @@ func (w *AppWindow) closeConnection(idx int) {
 	if conn.DB != nil {
 		conn.DB.Close()
 	}
-	w.connRail.AsNode().RemoveChild(conn.button.AsNode())
+	w.connList.AsNode().RemoveChild(conn.button.AsNode())
 	conn.button.AsNode().QueueFree()
 
 	// Remove from connections slice and shift connIdx on remaining tabs.
@@ -2325,7 +2340,7 @@ func (w *AppWindow) handleOpenGatewayResult(res DBResult) {
 	// Rail visibility is projected by render() from state; newTabForConnection
 	// below renders.
 
-	w.wireConnButton(btn, gwIdx)
+	w.wireConnButton(btn, conn)
 
 	// Make this the active connection, then create+bind its first tab.
 	w.activeConnIdx = gwIdx
@@ -2385,11 +2400,11 @@ func statusLine(msg string) string {
 
 // handleRefreshResult updates a connection's table list and refreshes the sidebar.
 func (w *AppWindow) handleRefreshResult(res DBResult) {
-	idx := res.ConnIdx
-	if idx < 0 || idx >= len(w.connections) {
-		return
+	conn := res.Conn
+	idx := w.connIndex(conn)
+	if idx < 0 {
+		return // closed while the refresh was in flight
 	}
-	conn := w.connections[idx]
 
 	if res.Err != nil {
 		w.statusBar.SetStatus("Refresh error: " + res.Err.Error())

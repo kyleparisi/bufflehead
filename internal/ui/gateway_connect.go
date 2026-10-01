@@ -237,7 +237,7 @@ func (w *AppWindow) reconnectConnection(idx int, cmd *control.Command) {
 
 	// ── Rebuild (background goroutine) ──────────────────────────────────────
 	go func() {
-		outcome := &ReconnectOutcome{ConnIdx: idx, Steps: steps}
+		outcome := &ReconnectOutcome{Conn: conn, Steps: steps}
 		finish := func() { w.results <- DBResult{Kind: ReqReconnect, ControlCmd: cmd, Reconnect: outcome} }
 
 		// BigQuery: no tunnel or AWS auth — just reopen the client.
@@ -391,7 +391,7 @@ func (w *AppWindow) switchDatabase(idx int, dbName string) {
 	go func() {
 		// Both tunnels are deliberately kept: host:port is database-agnostic, so
 		// only the pool below them is swapped.
-		outcome := &ReconnectOutcome{ConnIdx: idx, Steps: steps, Tunnel: conn.Gateway.Tunnel, SSH: conn.Gateway.SSH}
+		outcome := &ReconnectOutcome{Conn: conn, Steps: steps, Tunnel: conn.Gateway.Tunnel, SSH: conn.Gateway.SSH}
 		finish := func() { w.results <- DBResult{Kind: ReqReconnect, Reconnect: outcome} }
 
 		if isBQ {
@@ -640,8 +640,18 @@ func (w *AppWindow) handleReconnectResult(res DBResult) {
 		return
 	}
 
-	idx := oc.ConnIdx
+	// Resolve by identity: the connection's index may have shifted, or it may
+	// have been closed, while the rebuild ran.
+	idx := w.connIndex(oc.Conn)
 	success := oc.Querier != nil
+	if idx < 0 && success {
+		// Closed mid-reconnect: nothing owns the fresh resources, so release them.
+		oc.Querier.Close()
+		if oc.Tunnel != nil {
+			oc.Tunnel.Stop()
+		}
+		oc.SSH.Stop() // nil-safe
+	}
 	// Determine overall OK: every recorded step succeeded and we have a DB.
 	overallOK := success
 	for _, s := range oc.Steps {

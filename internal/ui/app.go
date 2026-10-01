@@ -3606,7 +3606,7 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 		}
 		w.titleBar.SetConnectionInfo("PostgreSQL", "preview", "zeplo")
 		w.presentDatabaseSwitcher(&dbListResult{
-			connIdx: w.activeConnIdx,
+			conn:    w.connections[w.activeConnIdx],
 			current: "zeplo",
 			dbs: []db.DatabaseInfo{
 				{Name: "postgres", IsSystem: true},
