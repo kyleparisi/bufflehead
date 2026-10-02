@@ -17,11 +17,6 @@ name: Build Mac App Store
 #   APPLE_API_ISSUER_ID      to upload) — only needed when uploading
 
 on:
-  # TEMPORARY: workflow_dispatch only works once this file is on main, so the
-  # pre-merge dry run is triggered by pushes to this branch (inputs.upload is
-  # empty on push, so it never uploads). Remove before merging.
-  push:
-    branches: [claude/adoring-mayer-y1gkf3]
   workflow_dispatch:
     inputs:
       upload:
