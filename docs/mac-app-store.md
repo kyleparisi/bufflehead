@@ -35,6 +35,13 @@ the Developer ID setup, reuse it.
 
 ### 2. Create the two certificates
 
+> **Shortcut:** `./bin/mas-credentials csr` makes the key and CSR without
+> Keychain Assistant. After steps 2–3 in the portal, run
+> `./bin/mas-credentials secrets distribution.cer mac_installer_distribution.cer
+> <profile>.provisionprofile`. It checks everything matches, builds the
+> `.p12`, sets all three GitHub secrets (step 6) and imports the identities
+> into your login keychain.
+
 You need one Certificate Signing Request (CSR) for both. On your Mac:
 Keychain Access → menu **Keychain Access → Certificate Assistant → Request a
 Certificate From a Certificate Authority…** → your email, name "Kyle Parisi",
