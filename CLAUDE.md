@@ -153,6 +153,13 @@ is required so the hardened runtime can load DuckDB's downloaded extension dylib
 ./bin/release-dmg
 ```
 
+**Mac App Store (.pkg):** a separate sandboxed channel (`mas` build tag, locked
+DuckDB engine with extension loading compiled out). `bin/sign-mas` builds,
+signs with the Apple Distribution + Mac Installer identities and the store
+provisioning profile, and packages/uploads; CI runs it via `build-mas.yml`
+(`gh workflow run build-mas.yml -f upload=true`). Certificates, secrets and
+review notes: `docs/mac-app-store.md`.
+
 **Linux AppImage:** the Linux build must run on Linux (glibc build + AppImage
 tooling), so it goes through the `Build Linux` GitHub Actions workflow
 (`.github/workflows/build-linux.yml`, on `ubuntu-22.04` for a low glibc floor).
