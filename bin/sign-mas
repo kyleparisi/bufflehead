@@ -15,6 +15,8 @@
 #   SKIP_BUILD=1      reuse releases/darwin/universal/Bufflehead.app as already
 #                     exported (still re-runs the MAS engine/library preparation)
 #   SKIP_PREPARE=1    the .app is already prepared by bin/prepare-mas-bundle
+#   MAS_BUNDLE_ID=ID  bundle ID of the App Store Connect app record
+#                     (default app.bufflehead.bufflehead)
 #   BUILD_NUMBER=N    CFBundleVersion for this upload. App Store Connect rejects
 #                     a build number it has already seen, so every upload needs
 #                     a new one (CI uses the workflow run number). Defaults to
@@ -53,6 +55,10 @@ LIBRARY_PATH="Contents/Frameworks/darwin_universal.dylib"
 : "${SKIP_BUILD:=0}"
 : "${SKIP_PREPARE:=0}"
 : "${UPLOAD:=0}"
+# The store app record's bundle ID. It differs from the Developer ID build's
+# com.kyleparisi.bufflehead (which the self-updater pins), so it's applied to
+# the Info.plist here rather than in the shared Godot export preset.
+: "${MAS_BUNDLE_ID:=app.bufflehead.bufflehead}"
 
 # Same single-trap cleanup as bin/sign-notarize: transient keychain, decoded
 # key material and scratch files are all torn down here, preserving $?.
@@ -149,7 +155,7 @@ security cms -D -i "$MAS_PROFILE" > "$WORK/profile.plist"
 pb() { /usr/libexec/PlistBuddy -c "Print :$1" "$WORK/profile.plist"; }
 TEAM_ID="$(pb 'TeamIdentifier:0')"
 APP_IDENTIFIER="$(pb 'Entitlements:com.apple.application-identifier')"
-BUNDLE_ID="$(awk -F'"' '/^\[preset\.2\.options\]/{p=1} p&&/^application\/bundle_identifier=/{print $2; exit}' "$ROOT/graphics/export_presets.cfg")"
+BUNDLE_ID="$MAS_BUNDLE_ID"
 echo "==> Profile: $(pb Name) (team $TEAM_ID, $APP_IDENTIFIER)"
 # A profile for another bundle ID, or a Developer ID / development profile,
 # signs fine but is rejected at upload — fail now instead of after the build.
@@ -229,6 +235,7 @@ INFO="$APP/Contents/Info.plist"
 SHORT_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$INFO")"
 BUILD_NUMBER="${BUILD_NUMBER:-$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$INFO")}"
 echo "==> Version $SHORT_VERSION (build $BUILD_NUMBER)"
+plist_set "$INFO" CFBundleIdentifier string "$BUNDLE_ID"
 plist_set "$INFO" CFBundleVersion string "$BUILD_NUMBER"
 # The locked engine is built for 11.0, and the store requires 11.0 for arm64
 # anyway; Godot's preset still says 10.12 for x86_64.

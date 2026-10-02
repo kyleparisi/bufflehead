@@ -19,13 +19,16 @@ App Store Connect.
 
 ## One-time setup (≈30 minutes, all in a browser + Keychain Access)
 
-Team ID below is `63GMD6U4J2`; the bundle ID is `com.kyleparisi.bufflehead`
-(from `graphics/export_presets.cfg`, preset "macOS").
+Team ID below is `63GMD6U4J2`. The store build's bundle ID is
+**`app.bufflehead.bufflehead`**, which is the App Store Connect app record.
+`bin/sign-mas` writes it into the Info.plist (`MAS_BUNDLE_ID`). The Developer
+ID build keeps `com.kyleparisi.bufflehead`, because its self-updater pins that
+ID, so the two channels install side by side as separate apps.
 
 ### 1. Register the App ID
 
 developer.apple.com → Certificates, IDs & Profiles → **Identifiers** → `+` →
-App IDs → App → **Explicit** bundle ID `com.kyleparisi.bufflehead`,
+App IDs → App → **Explicit** bundle ID `app.bufflehead.bufflehead`,
 description "Bufflehead". No extra capabilities are needed; App Sandbox is an
 entitlement, not a portal capability. If the ID already exists, for example from
 the Developer ID setup, reuse it.
@@ -61,7 +64,7 @@ keychain than the private key. Drag it into "login".
 ### 3. Create the provisioning profile
 
 **Profiles** → `+` → Distribution → **Mac App Store Connect** → App ID
-`com.kyleparisi.bufflehead` → certificate: the Apple Distribution one →
+`app.bufflehead.bufflehead` → certificate: the Apple Distribution one →
 name it `Bufflehead Mac App Store` → download
 `Bufflehead_Mac_App_Store.provisionprofile`.
 
@@ -74,7 +77,7 @@ before building.
 appstoreconnect.apple.com → Apps → `+` → **New App** → platform macOS, name
 "Bufflehead" (it must be unique on the store; have a fallback ready, such as
 "Bufflehead – Parquet Viewer"), primary language, bundle ID
-`com.kyleparisi.bufflehead`, SKU `bufflehead`.
+`app.bufflehead.bufflehead`, SKU `bufflehead`.
 
 ### 5. Check the API key's role
 
