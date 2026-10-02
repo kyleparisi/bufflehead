@@ -24,7 +24,8 @@ is not a security boundary.
    Mac App Store Connect profile, signs with the narrow entitlements in this
    directory (never Developer ID's disable-library-validation), packages a
    signed .pkg and optionally uploads it. Certificate/profile setup and review
-   notes: `docs/mac-app-store.md`. Not yet run against real store credentials.
+   notes: `docs/mac-app-store.md`. A CI dry run has signed and packaged it
+   with the real store credentials; nothing has been uploaded yet.
 5. Rerun compile-time extension rejection AND positive Parquet/CSV/JSON,
    SQLite/Postgres, SSH, keychain, actual-app grant/relaunch and localhost API
    checks against each final signed architecture, not just the previous spike.
