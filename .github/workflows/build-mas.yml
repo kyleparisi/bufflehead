@@ -1,0 +1,104 @@
+name: Build Mac App Store
+
+# Builds the locked DuckDB engine for both architectures (cached), exports the
+# universal .app, swaps in the `mas`-tagged library, signs it with the App
+# Store identities + provisioning profile and packages a signed .pkg. With
+# `upload` checked it also validates and uploads the build to App Store
+# Connect. The logic lives in bin/sign-mas so it can run locally too; the
+# certificate walkthrough is docs/mac-app-store.md.
+#
+# Required repo secrets:
+#   MAS_CERT_P12_BASE64      ONE .p12 holding both "Apple Distribution" and
+#                            "3rd Party Mac Developer Installer" (cert + key)
+#   MAS_CERT_PASSWORD        its export password
+#   MAS_PROFILE_BASE64       "Mac App Store Connect" provisioning profile
+#   APPLE_API_KEY_P8_BASE64  App Store Connect API key (shared with the
+#   APPLE_API_KEY_ID         Developer ID workflow; needs App Manager role
+#   APPLE_API_ISSUER_ID      to upload) — only needed when uploading
+
+on:
+  workflow_dispatch:
+    inputs:
+      upload:
+        description: Upload the build to App Store Connect
+        type: boolean
+        default: false
+
+env:
+  DUCKDB_COMMIT: 19864453f7d0ed095256d848b46e7b8630989bac   # v1.1.3, see bin/build-duckdb-mas
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 180   # two from-source DuckDB builds on a cold cache
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Check signing secrets are present
+        env:
+          MAS_CERT_P12_BASE64: ${{ secrets.MAS_CERT_P12_BASE64 }}
+          MAS_CERT_PASSWORD: ${{ secrets.MAS_CERT_PASSWORD }}
+          MAS_PROFILE_BASE64: ${{ secrets.MAS_PROFILE_BASE64 }}
+          APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+          UPLOAD: ${{ inputs.upload }}
+        run: |
+          need="MAS_CERT_P12_BASE64 MAS_CERT_PASSWORD MAS_PROFILE_BASE64"
+          [ "$UPLOAD" = "true" ] && need="$need APPLE_API_KEY_P8_BASE64 APPLE_API_KEY_ID APPLE_API_ISSUER_ID"
+          missing=""
+          for v in $need; do [ -n "${!v}" ] || missing="$missing $v"; done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repo secret(s):$missing"
+            exit 1
+          fi
+          echo "All signing secrets present."
+
+      # The engine only changes with the pinned commit or the build script, so
+      # the ~1h of compiling is paid once.
+      - name: Cache locked DuckDB engines
+        id: duckdb-cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/duckdb-out
+          key: duckdb-mas-${{ env.DUCKDB_COMMIT }}-${{ hashFiles('bin/build-duckdb-mas') }}
+
+      - name: Build locked DuckDB engines
+        if: steps.duckdb-cache.outputs.cache-hit != 'true'
+        run: |
+          brew install ninja
+          git init -q "$RUNNER_TEMP/duckdb-src"
+          git -C "$RUNNER_TEMP/duckdb-src" fetch -q --depth 1 \
+            https://github.com/duckdb/duckdb "$DUCKDB_COMMIT"
+          git -C "$RUNNER_TEMP/duckdb-src" checkout -q FETCH_HEAD
+          for arch in arm64 x86_64; do
+            ./bin/build-duckdb-mas --source "$RUNNER_TEMP/duckdb-src" \
+              --output "$RUNNER_TEMP/duckdb-out/$arch" --arch "$arch" --jobs 4
+            rm -rf "$RUNNER_TEMP/duckdb-out/$arch/build"   # keep the cache small
+          done
+
+      - name: Build, sign, package${{ inputs.upload && ', upload' || '' }}
+        env:
+          GDPATH: ${{ runner.temp }}/gd
+          DUCKDB_AMD64: ${{ runner.temp }}/duckdb-out/x86_64
+          DUCKDB_ARM64: ${{ runner.temp }}/duckdb-out/arm64
+          BUILD_NUMBER: ${{ github.run_number }}
+          UPLOAD: ${{ inputs.upload && '1' || '0' }}
+          MAS_CERT_P12_BASE64: ${{ secrets.MAS_CERT_P12_BASE64 }}
+          MAS_CERT_PASSWORD: ${{ secrets.MAS_CERT_PASSWORD }}
+          MAS_PROFILE_BASE64: ${{ secrets.MAS_PROFILE_BASE64 }}
+          APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: ./bin/sign-mas
+
+      - name: Upload signed pkg
+        uses: actions/upload-artifact@v7
+        with:
+          name: Bufflehead-mas-pkg
+          path: releases/Bufflehead-mas.pkg
+          if-no-files-found: error

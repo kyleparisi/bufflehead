@@ -19,11 +19,12 @@ is not a security boundary.
    run `bin/prepare-mas-bundle --app APP --duckdb BUILD --arch amd64
    --library-path RELATIVE_GO_LIBRARY_PATH`. It verifies clean engine provenance
    and refuses the incremental feasibility artifact.
-4. Provision/sign with the appropriate Mac App Store identities and profile,
-   using the narrow entitlements in this directory, not Developer ID's
-   disable-library-validation entitlement. Verify nested libraries/architecture,
-   package and validate on the intended store distribution toolchain. Final store signing/provisioning remains unverified; the local validation
-   below used ad-hoc signing, and this script does not submit a build.
+4. Provision/sign with `bin/sign-mas` (CI: `.github/workflows/build-mas.yml`),
+   which runs steps 1-3 for both architectures (`--arch universal`), embeds the
+   Mac App Store Connect profile, signs with the narrow entitlements in this
+   directory (never Developer ID's disable-library-validation), packages a
+   signed .pkg and optionally uploads it. Certificate/profile setup and review
+   notes: `docs/mac-app-store.md`. Not yet run against real store credentials.
 5. Rerun compile-time extension rejection AND positive Parquet/CSV/JSON,
    SQLite/Postgres, SSH, keychain, actual-app grant/relaunch and localhost API
    checks against each final signed architecture, not just the previous spike.
