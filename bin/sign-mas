@@ -248,20 +248,21 @@ plist_set "$INFO" ITSAppUsesNonExemptEncryption bool false
 # this key from the preset by prefixing "public.app-category.", so pin it here.
 plist_set "$INFO" LSApplicationCategoryType string public.app-category.developer-tools
 
+# --- 4. Sign ----------------------------------------------------------------
+cp "$MAS_PROFILE" "$APP/Contents/embedded.provisionprofile"
+# Stray extended attributes (quarantine, Finder info) make codesign refuse
+# with "resource fork, Finder information, or similar detritus not allowed".
+xattr -cr "$APP"
+
 # The .pkg installs as root, so a file without world-read becomes root-only and
-# App Store validation rejects the package.
+# App Store validation rejects the package. Runs after every copy into the
+# bundle: the profile above arrives 0600 from the CI's decoded secret.
 unreadable="$(find "$APP" ! -perm -o=r -print)"
 if [ -n "$unreadable" ]; then
     echo "==> Making bundle files world-readable:"
     sed "s|^$APP/|    |" <<<"$unreadable"
 fi
 chmod -R u+rwX,go+rX,go-w "$APP"
-
-# --- 4. Sign ----------------------------------------------------------------
-cp "$MAS_PROFILE" "$APP/Contents/embedded.provisionprofile"
-# Stray extended attributes (quarantine, Finder info) make codesign refuse
-# with "resource fork, Finder information, or similar detritus not allowed".
-xattr -cr "$APP"
 
 echo "==> Signing nested Mach-O binaries..."
 # Libraries take no entitlements; only the app's main executable carries the
