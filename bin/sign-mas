@@ -244,6 +244,18 @@ plist_set "$INFO" LSMinimumSystemVersion string 11.0
 # Only standard TLS/SSH encryption, which is exempt — answers App Store
 # Connect's export-compliance question for every build up front.
 plist_set "$INFO" ITSAppUsesNonExemptEncryption bool false
+# App Store validation rejects anything but an exact category UTI. Godot builds
+# this key from the preset by prefixing "public.app-category.", so pin it here.
+plist_set "$INFO" LSApplicationCategoryType string public.app-category.developer-tools
+
+# The .pkg installs as root, so a file without world-read becomes root-only and
+# App Store validation rejects the package.
+unreadable="$(find "$APP" ! -perm -o=r -print)"
+if [ -n "$unreadable" ]; then
+    echo "==> Making bundle files world-readable:"
+    sed "s|^$APP/|    |" <<<"$unreadable"
+fi
+chmod -R u+rwX,go+rX,go-w "$APP"
 
 # --- 4. Sign ----------------------------------------------------------------
 cp "$MAS_PROFILE" "$APP/Contents/embedded.provisionprofile"
