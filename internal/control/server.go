@@ -76,6 +76,13 @@ type MenuData struct {
 	Item string `json:"item"`
 }
 
+// MCPSetupData is the payload for "mcp_setup": a step of the "Connect an AI
+// Assistant…" dialog — "open", "review", "apply", "back", "copy_code",
+// "copy_json" or "close".
+type MCPSetupData struct {
+	Action string `json:"action"`
+}
+
 // OpenGatewayData is the optional payload for "open_gateway": a connection
 // kind ("postgres", "mysql", "bigquery", or "" for the AWS gateway) to
 // preselect, so a caller lands on that form instead of the default. SSH
@@ -468,6 +475,13 @@ func buildMux(s *Server) *http.ServeMux {
 	// payload: {"db":"...","detail":"..."} to preview specific text.
 	mux.HandleFunc("POST /show-relogin", func(w http.ResponseWriter, r *http.Request) {
 		s.handleCommand(w, r, "show_relogin")
+	})
+
+	// Drive the "Connect an AI Assistant…" dialog: {"action": "open"|"review"|
+	// "apply"|"back"|"copy_code"|"copy_json"|"close"}. /state reports it under
+	// "mcpSetup".
+	mux.HandleFunc("POST /mcp-setup", func(w http.ResponseWriter, r *http.Request) {
+		s.handleCommand(w, r, "mcp_setup")
 	})
 
 	// Drive the self-update flow as the menu item and modal buttons would.

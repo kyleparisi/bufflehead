@@ -40,6 +40,7 @@ type AppMenu struct {
 	OnNewWindow    func()                          // creates new window (⌘N)
 	OnOpenGateway  func()                          // shows gateway connection screen
 	OnLicenses     func()
+	OnMCPSetup     func() // "Connect an AI Assistant…"
 	OnCheckUpdates func() // manual "Check for Updates…"
 	OnQuit         func() // quits the app (⌘Q)
 }
@@ -99,6 +100,7 @@ func (m *AppMenu) spec() []menuDef {
 			{label: "Exit", key: Input.KeyQ, action: global(m.OnQuit), role: roleQuit},
 		}},
 		{title: "Help", items: []menuItem{
+			{label: "Connect an AI Assistant…", action: global(m.OnMCPSetup)},
 			{label: "Third-Party Licenses…", action: global(m.OnLicenses)},
 		}},
 	}

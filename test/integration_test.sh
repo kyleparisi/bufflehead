@@ -44,6 +44,11 @@ echo "Build OK"
 # startup; the harness sends it as the Authorization header).
 export BUFFLEHEAD_CONTROL_KEY="integration-test-key"
 
+# "Connect an AI Assistant…" writes Claude Desktop's config; aim it at a
+# scratch file so tests never touch the real one.
+SCRATCH_DIR=$(mktemp -d)
+export BUFFLEHEAD_CLAUDE_DESKTOP_CONFIG="$SCRATCH_DIR/claude_desktop_config.json"
+
 # Start headless and capture stdout to parse the dynamic port
 LOGFILE=$(mktemp)
 cd "$ROOT/graphics"
@@ -54,6 +59,7 @@ cleanup() {
     kill $PID 2>/dev/null || true
     wait $PID 2>/dev/null || true
     rm -f "$LOGFILE"
+    rm -rf "$SCRATCH_DIR"
 }
 trap cleanup EXIT
 
