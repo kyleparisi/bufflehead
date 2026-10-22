@@ -172,14 +172,30 @@ else
     GD_VERSION="$(awk '$1=="graphics.gd"{print $2; exit}' go.mod)"
     echo "==> Installing gd CLI $GD_VERSION..."
     go install "graphics.gd/cmd/gd@$GD_VERSION"
-    export PATH="$(go env GOPATH)/bin:$PATH"
+    PATH="$(go env GOPATH)/bin:$PATH"
+    export PATH
 
     # gd refuses to auto-download Godot when it sees GOTOOLCHAIN=local (which
     # actions/setup-go pins). Setting it to the exact installed version keeps
     # the toolchain pinned while re-enabling the download. GDPATH must be
     # writable.
     export GDPATH="${GDPATH:-$HOME/gd}"
-    export GOTOOLCHAIN="$(go env GOVERSION)"   # e.g. go1.26.0 (never "local")
+    GOTOOLCHAIN="$(go env GOVERSION)"   # e.g. go1.26.0 (never "local")
+    export GOTOOLCHAIN
+
+    # In a fresh checkout graphics/.godot doesn't exist yet, so gd's project
+    # setup runs `godot --import` BEFORE it compiles the Go library. The import
+    # scan loads library.gdextension, and on macOS Godot aborts on the missing
+    # darwin_universal.dylib (NSBundle initWithURL: nil URL). Build a host-arch
+    # copy of the library first so the scan has something to load; gd then
+    # rebuilds the real universal dylib (mostly from Go's build cache) and
+    # overwrites it before exporting.
+    LIB="$ROOT/graphics/darwin_universal.dylib"
+    if [ ! -f "$LIB" ]; then
+        echo "==> Pre-building $(go env GOARCH) library for Godot's first import..."
+        CGO_ENABLED=1 go build -buildmode=c-shared -o "$LIB" .
+        rm -f "${LIB%.dylib}.h"
+    fi
 
     echo "==> Building macOS app..."
     # Godot's headless export can segfault on teardown on GPU-less machines
@@ -273,11 +289,13 @@ else
     echo "==> Submitting to Apple notary service (this can take a few minutes)..."
     xcrun notarytool submit "$DMG" "${NOTARY_ARGS[@]}" --wait
     echo "==> Stapling notarization ticket..."
-    xcrun stapler staple "$DMG"
+    # stapler-retry rides out Apple's flaky ticket server (Error 68) instead of
+    # failing a build whose notarization was already accepted.
+    "$ROOT/bin/stapler-retry" staple "$DMG"
     # Staple the app too, so a copy dragged out of the DMG is self-contained.
-    xcrun stapler staple "$APP"
+    "$ROOT/bin/stapler-retry" staple "$APP"
     echo "==> Validating..."
-    xcrun stapler validate "$DMG"
+    "$ROOT/bin/stapler-retry" validate "$DMG"
     spctl --assess --type open --context context:primary-signature --verbose=4 "$DMG" || true
 fi
 
