@@ -14,6 +14,7 @@ A native cross-platform Parquet viewer built with Go + DuckDB + graphics.gd (God
 - SQL query editor — run any DuckDB SQL against your file
 - File-level Parquet metadata viewer
 - Secure gateway to AWS data (S3, RDS) via SSO/IAM — no SSH keys or database passwords
+- MCP server mode so AI assistants can query your saved connections (early; see [docs/mcp.md](docs/mcp.md))
 
 ## Prerequisites
 

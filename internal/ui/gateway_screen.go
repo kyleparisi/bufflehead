@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	bfaws "bufflehead/internal/aws"
+	"bufflehead/internal/connect"
 	"bufflehead/internal/models"
 
 	"graphics.gd/classdb/Button"
@@ -2648,7 +2649,7 @@ func (g *GatewayScreen) startGatewayConnection(card *gatewayCard) {
 			card.needsUpdate = true
 		}
 
-		tunnel, updated, err := establishTunnel(ctx, auth, entry, appendLog)
+		tunnel, updated, err := connect.SSMTunnel(ctx, auth, entry, appendLog)
 		if err != nil {
 			if ctx.Err() != nil {
 				// User hit Cancel — not an error state.
