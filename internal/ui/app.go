@@ -2210,6 +2210,10 @@ type App struct {
 	updateOverlay     Control.Instance          `gd:"-"`
 	updateRenderKey   string                    `gd:"-"`
 	quittingForUpdate bool                      `gd:"-"`
+
+	mcpSetup          mcpSetupState    `gd:"-"` // "Connect an AI Assistant…" (see mcp_setup_modal.go)
+	mcpSetupOverlay   Control.Instance `gd:"-"`
+	mcpSetupRenderKey string           `gd:"-"`
 }
 
 func (a *App) activeWindow() *AppWindow {
@@ -2289,6 +2293,7 @@ func (a *App) initMainWindow() {
 			a.renderUpdate()
 		},
 		OnLicenses: a.showLicenses,
+		OnMCPSetup: a.openMCPSetup,
 		OnQuit:     a.quit,
 	}
 	a.appMenu.Setup()
@@ -2689,6 +2694,7 @@ func (a *App) updateCachedState() {
 	state["activeConnIdx"] = w.activeConnIdx
 	state["inWindowMenu"] = useInWindowMenu()
 	state["update"] = map[string]any{"version": a.Version, "phase": a.update.Phase.String(), "open": a.update.Open}
+	state["mcpSetup"] = a.mcpSetup.snapshot()
 	connNames := make([]string, 0, len(w.connections))
 	for _, c := range w.connections {
 		connNames = append(connNames, c.Name)
@@ -3543,6 +3549,36 @@ func (a *App) handleControlCommand(cmd *control.Command) {
 			pd.Detail = "Error: Status 401 - Unauthorized (Session Token Revoked)"
 		}
 		w.promptReLogin(pd.DB, pd.Detail)
+		cmd.Respond(control.Result{OK: true})
+
+	case "mcp_setup":
+		// Drive "Connect an AI Assistant…" as the menu item and dialog buttons
+		// would. Set BUFFLEHEAD_CLAUDE_DESKTOP_CONFIG to aim the Claude Desktop
+		// merge at a scratch file.
+		var d control.MCPSetupData
+		if err := json.Unmarshal(cmd.Data, &d); err != nil {
+			cmd.Respond(control.Result{Error: err.Error()})
+			return
+		}
+		switch d.Action {
+		case "open":
+			a.openMCPSetup()
+		case "review":
+			a.mcpSetupReview()
+		case "apply":
+			a.mcpSetupApply()
+		case "back":
+			a.mcpSetupBack()
+		case "copy_code":
+			a.mcpSetupCopy("code")
+		case "copy_json":
+			a.mcpSetupCopy("json")
+		case "close":
+			a.closeMCPSetup()
+		default:
+			cmd.Respond(control.Result{Error: "unknown action " + d.Action})
+			return
+		}
 		cmd.Respond(control.Result{OK: true})
 
 	case "check_updates":

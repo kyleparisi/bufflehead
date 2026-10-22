@@ -40,6 +40,7 @@ type AppMenu struct {
 	OnNewWindow    func()                          // creates new window (⌘N)
 	OnOpenGateway  func()                          // shows gateway connection screen
 	OnLicenses     func()
+	OnMCPSetup     func() // "Connect an AI Assistant…"
 	OnCheckUpdates func() // manual "Check for Updates…"
 	OnQuit         func() // quits the app (⌘Q)
 }
@@ -99,6 +100,7 @@ func (m *AppMenu) spec() []menuDef {
 			{label: "Exit", key: Input.KeyQ, action: global(m.OnQuit), role: roleQuit},
 		}},
 		{title: "Help", items: []menuItem{
+			{label: "Connect an AI Assistant…", action: global(m.OnMCPSetup)},
 			{label: "Third-Party Licenses…", action: global(m.OnLicenses)},
 		}},
 	}
@@ -132,7 +134,16 @@ func (m *AppMenu) setupNative() {
 
 	appIdx := 0
 	for _, def := range m.spec() {
-		menu := NativeMenu.CreateMenu()
+		// macOS always has a Help menu (with the search field); Godot adds
+		// it to the menu bar itself. Fill that one rather than adding a
+		// second "Help".
+		system := def.title == "Help" && NativeMenu.HasSystemMenu(NativeMenu.HelpMenuId)
+		var menu RID.NativeMenu
+		if system {
+			menu = NativeMenu.GetSystemMenu(NativeMenu.HelpMenuId)
+		} else {
+			menu = NativeMenu.CreateMenu()
+		}
 		for _, it := range def.items {
 			if it.role == roleQuit {
 				continue
@@ -157,6 +168,9 @@ func (m *AppMenu) setupNative() {
 				}
 				NativeMenu.AddItem(menu, it.label, m.nativeCallback(it), nil, nil, accel)
 			}
+		}
+		if system {
+			continue
 		}
 		if NativeMenu.GetItemCount(menu) == 0 {
 			NativeMenu.FreeMenu(menu)

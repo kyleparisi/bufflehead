@@ -4,8 +4,8 @@ Bufflehead can run as an [MCP](https://modelcontextprotocol.io) server so AI
 assistants (Claude Desktop, Claude Code, and other MCP clients) can list your
 saved connections, read their schemas and run read-only SQL against them.
 
-This is an early version: setup is manual (see below). Automatic setup from a
-menu command is planned.
+This is an early version. Set it up from **Help → Connect an AI Assistant…**
+(see [Setup](#setup)).
 
 ## What it does
 
@@ -36,8 +36,30 @@ way to type a passphrase in this mode.
 
 ## Setup
 
-You need the path to the Bufflehead executable itself, not the app bundle or
-shortcut. Save at least one bookmark in the app first.
+Save at least one bookmark in the app first, then open **Help → Connect an AI
+Assistant…**. The dialog shows the exact command this copy of Bufflehead
+should be launched with, and has one row per client:
+
+- **Claude Desktop** (macOS and Windows) — **Add Automatically…** shows the
+  entry it will add under `mcpServers` in `claude_desktop_config.json` and
+  asks before writing. Every other setting in the file is kept, the old file
+  is backed up next to it (`claude_desktop_config.json.bufflehead-backup-<time>`),
+  and the new one is written atomically. Then quit Claude Desktop completely
+  and reopen it. If you move Bufflehead later, the row offers **Update…** to
+  point the entry at the new location.
+- **Claude Code** — **Copy Command** copies a `claude mcp add --scope user …`
+  line to paste in a terminal.
+- **Other MCP clients** — **Copy JSON** copies the `{"command": …, "args": […]}`
+  entry for the client's config.
+
+The Claude Desktop row is hidden on Linux (there is no official Claude
+Desktop) and in the Mac App Store build (the sandbox can't write Claude's
+config); use the manual steps below there.
+
+### Manual setup
+
+If you'd rather edit the config yourself, or the dialog can't, you need the path to the Bufflehead executable itself, not the app bundle or
+shortcut.
 
 | OS | Executable path |
 |---|---|
@@ -48,7 +70,7 @@ shortcut. Save at least one bookmark in the app first.
 On Linux, point at the AppImage file, not a binary inside it: the AppImage's
 own launcher sets up the environment the app needs.
 
-### Claude Desktop
+#### Claude Desktop
 
 Edit Claude Desktop's config file (create it if it doesn't exist):
 
@@ -74,15 +96,17 @@ On Windows, escape backslashes in the path (`"C:\\Program Files\\Bufflehead\\Buf
 Quit Claude Desktop completely and reopen it. Bufflehead should appear in the
 tools menu of a new chat. Try: "What Bufflehead bookmarks do I have?"
 
-### Claude Code
+#### Claude Code
 
 ```bash
-claude mcp add bufflehead -- /Applications/Bufflehead.app/Contents/MacOS/Bufflehead --headless -- --mcp
+claude mcp add --scope user bufflehead -- /Applications/Bufflehead.app/Contents/MacOS/Bufflehead --headless -- --mcp
 ```
 
 The first `--` separates `claude`'s own options from the command to run.
+`--scope user` makes Bufflehead available in every project, not only the
+directory you ran the command in.
 
-### Other MCP clients
+#### Other MCP clients
 
 Any client that launches stdio servers works. Use the same command and
 arguments: `<executable> --headless -- --mcp`.
@@ -137,4 +161,6 @@ discovery file; and the app's own executable already has the database code,
 the bookmarks and (on the Mac App Store) the right sandbox container.
 
 Code: `internal/mcpmode/` (server and tools), `internal/connect/` (the
-connection pipeline shared with the UI).
+connection pipeline shared with the UI), `internal/mcpsetup/` (the launch
+command and the Claude Desktop config merge) and
+`internal/ui/mcp_setup_modal.go` (the setup dialog).

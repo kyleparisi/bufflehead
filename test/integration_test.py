@@ -6,6 +6,7 @@ needs the temporary bearer key: set BUFFLEHEAD_CONTROL_KEY to the same value the
 app was launched with (integration_test.sh pins one for both sides).
 Run via: test/integration_test.sh (which builds, launches Godot, then runs pytest)
 """
+import json
 import os
 import re
 import shutil
@@ -739,7 +740,8 @@ class TestMenuBar:
         self.require_in_window()
         tree = ui_tree()
         self.assert_labels(self.menu_items(tree, "File"), self.FILE_ITEMS)
-        self.assert_labels(self.menu_items(tree, "Help"), ["Check for Updates…"])
+        self.assert_labels(self.menu_items(tree, "Help"),
+                           ["Connect an AI Assistant…", "Third-Party Licenses…", "Check for Updates…"])
 
     def test_new_tab_and_close_tab(self):
         self.require_in_window()
@@ -760,6 +762,94 @@ class TestMenuBar:
         self.require_in_window()
         r = post("menu", {"menu": "File", "item": "Nope"})
         assert not r.get("ok")
+
+
+class TestMCPSetup:
+    """Help → "Connect an AI Assistant…". The harness points
+    BUFFLEHEAD_CLAUDE_DESKTOP_CONFIG at a scratch file, so the Claude Desktop
+    merge never touches the real config."""
+
+    CONFIG = os.environ.get("BUFFLEHEAD_CLAUDE_DESKTOP_CONFIG", "")
+
+    def setup_method(self):
+        if not self.CONFIG:
+            pytest.skip("BUFFLEHEAD_CLAUDE_DESKTOP_CONFIG is not set")
+        Path(self.CONFIG).parent.mkdir(parents=True, exist_ok=True)
+
+    def teardown_method(self):
+        post("mcp-setup", {"action": "close"})
+        for f in Path(self.CONFIG).parent.glob(Path(self.CONFIG).name + "*"):
+            f.unlink()
+
+    def setup(self):
+        r = post("mcp-setup", {"action": "open"})
+        assert r.get("ok"), r
+        wait()
+        return state()["mcpSetup"]
+
+    def test_merges_into_existing_config(self):
+        Path(self.CONFIG).write_text(json.dumps({
+            "globalShortcut": "Alt+Space",
+            "mcpServers": {"other": {"command": "/bin/other", "args": ["x"]}},
+        }))
+        s = self.setup()
+        assert s["phase"] == "list"
+        if not s["desktop"]:
+            pytest.skip("no Claude Desktop row on this platform")
+        assert s["desktopStatus"] == "absent", s
+        assert s["configPath"] == self.CONFIG
+        assert has_node_named(ui_tree(), "MCPSetupModal")
+
+        post("mcp-setup", {"action": "review"})
+        wait()
+        assert state()["mcpSetup"]["phase"] == "confirm"
+        # Nothing is written before the user confirms.
+        assert "bufflehead" not in json.loads(Path(self.CONFIG).read_text())["mcpServers"]
+
+        post("mcp-setup", {"action": "apply"})
+        wait()
+        s = state()["mcpSetup"]
+        assert s["phase"] == "done", s
+        assert s["desktopStatus"] == "current"
+        cfg = json.loads(Path(self.CONFIG).read_text())
+        assert cfg["globalShortcut"] == "Alt+Space"
+        assert cfg["mcpServers"]["other"] == {"command": "/bin/other", "args": ["x"]}
+        assert cfg["mcpServers"]["bufflehead"] == {
+            "command": s["command"], "args": ["--headless", "--", "--mcp"]}
+        assert Path(s["backup"]).read_text().startswith('{"globalShortcut"')
+
+    def test_moved_app_offers_update(self):
+        Path(self.CONFIG).write_text(json.dumps({"mcpServers": {"bufflehead": {
+            "command": "/old/place/Bufflehead", "args": ["--headless", "--", "--mcp"]}}}))
+        s = self.setup()
+        if not s["desktop"]:
+            pytest.skip("no Claude Desktop row on this platform")
+        assert s["desktopStatus"] == "changed"
+        post("mcp-setup", {"action": "review"})
+        post("mcp-setup", {"action": "apply"})
+        wait()
+        cfg = json.loads(Path(self.CONFIG).read_text())
+        assert cfg["mcpServers"]["bufflehead"]["command"] == s["command"]
+
+    def test_invalid_config_is_not_rewritten(self):
+        Path(self.CONFIG).write_text('{"mcpServers": {')
+        s = self.setup()
+        if not s["desktop"]:
+            pytest.skip("no Claude Desktop row on this platform")
+        assert "planError" in s
+        post("mcp-setup", {"action": "review"})
+        wait()
+        assert state()["mcpSetup"]["phase"] == "list"
+        assert Path(self.CONFIG).read_text() == '{"mcpServers": {'
+
+    def test_copy_buttons(self):
+        self.setup()
+        post("mcp-setup", {"action": "copy_code"})
+        wait()
+        assert state()["mcpSetup"]["copied"] == "code"
+        post("mcp-setup", {"action": "copy_json"})
+        wait()
+        assert state()["mcpSetup"]["copied"] == "json"
 
 
 class TestMultiRowSelect:
