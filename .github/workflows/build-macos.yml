@@ -76,7 +76,7 @@ jobs:
       # be uploaded to a release.
       - name: Verify notarization
         run: |
-          xcrun stapler validate releases/Bufflehead.dmg
+          ./bin/stapler-retry validate releases/Bufflehead.dmg
           spctl --assess --type open \
             --context context:primary-signature --verbose=4 releases/Bufflehead.dmg
 

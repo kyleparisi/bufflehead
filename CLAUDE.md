@@ -147,6 +147,12 @@ NOTARY_PROFILE="bufflehead-notary" ./bin/sign-notarize
 cp releases/Bufflehead.dmg releases/Bufflehead-X.Y.Z-macOS.dmg
 gh release create vX.Y.Z releases/Bufflehead-X.Y.Z-macOS.dmg --title "vX.Y.Z" --notes "..."
 ```
+Stapling/validating goes through `bin/stapler-retry`, which retries Apple's flaky
+ticket server (stapler "Error 68", `NSURLErrorDomain -1005`) with backoff, so a
+blip after notarization is Accepted no longer fails the run. In a fresh checkout
+the script pre-builds the Go library before `gd build`, since gd's first Godot
+import scan aborts on macOS when `graphics/darwin_universal.dylib` is missing.
+
 Entitlements live in `packaging/macos/entitlements.plist`; `disable-library-validation`
 is required so the hardened runtime can load DuckDB's downloaded extension dylibs.
 
