@@ -52,6 +52,8 @@ Test data lives in `testdata/` (parquet, CSV, JSON, TSV, .duckdb files).
   their database through a jump host. Self-contained: `Start()` dials the host,
   listens on an ephemeral local port, and forwards. Host keys are always
   verified against `known_hosts`. See `docs/ssh-tunnel.md`.
+- `internal/connect/` — Opens saved connections: SSH/SSM tunnel, dial, load schema. `connect.Open` runs the whole pipeline for any bookmark kind. No graphics.gd import, so the UI and MCP mode share it.
+- `internal/mcpmode/` — Headless MCP server over stdio, started as `Bufflehead --headless -- --mcp` (Claude Desktop config: `{"command": ".../Contents/MacOS/Bufflehead", "args": ["--headless", "--", "--mcp"]}`). `main.go` branches into it right after `startup.LoadingScene()`: no UI, no control server. It reserves stdout for JSON-RPC and points fd 1 at stderr, reads bookmarks per call, opens them lazily per bookmark, and exits when stdin closes. Tools: `list_bookmarks`, `get_schema`, `run_sql`. On macOS it restores `SSH_AUTH_SOCK` from launchd, since Claude Desktop starts servers without it.
 - `internal/control/` — HTTP server (dynamic port, printed to stdout) exposing endpoints for programmatic control (`/open`, `/query`, `/sort`, `/page`, `/state`, `/screenshot`, `/ui-tree`, etc.). Every request is gated by a temporary bearer key minted in `control.New` (`Authorization: Bearer <key>`); `requireAuth` wraps the mux in `Start`. Primarily used by integration tests and the copy-to-clipboard AI prompt.
 
 **UI extension pattern** (graphics.gd):

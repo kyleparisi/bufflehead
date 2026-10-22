@@ -8,6 +8,7 @@ import (
 	"time"
 
 	bfaws "bufflehead/internal/aws"
+	"bufflehead/internal/connect"
 	"bufflehead/internal/control"
 	"bufflehead/internal/db"
 	"bufflehead/internal/models"
@@ -580,7 +581,7 @@ func RunOpenBigQuery(entry models.GatewayEntry, tabID, generation uint64,
 		if statusFunc != nil {
 			statusFunc("Connecting to BigQuery...")
 		}
-		bq, tables, err := openBigQueryDB(entry)
+		bq, tables, err := connect.BigQuery(entry, "ui")
 		if err != nil {
 			results <- DBResult{Kind: ReqOpenGateway, TabID: tabID, Generation: generation, Err: err}
 			return
@@ -612,14 +613,14 @@ func RunOpenDirect(entry models.GatewayEntry, tabID, generation uint64,
 			results <- DBResult{Kind: ReqOpenGateway, TabID: tabID, Generation: generation, Err: err}
 		}
 
-		tunnel, entry, err := establishSSHTunnel(context.Background(), entry, status)
+		tunnel, entry, err := connect.SSHTunnel(context.Background(), entry, status)
 		if err != nil {
 			fail(err)
 			return
 		}
 
 		status("Connecting to database...")
-		dbConn, tables, err := openDirectDB(entry)
+		dbConn, tables, err := connect.Direct(entry)
 		if err != nil {
 			tunnel.Stop()
 			fail(err)

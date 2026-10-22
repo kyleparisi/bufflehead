@@ -1,18 +1,21 @@
 package main
 
 import (
+	"context"
 	_ "embed"
 	"log"
 	"os"
 
 	"bufflehead/internal/control"
 	"bufflehead/internal/db"
+	"bufflehead/internal/mcpmode"
 	"bufflehead/internal/models"
 	"bufflehead/internal/ui"
 	"bufflehead/internal/updater"
 
 	"graphics.gd/classdb/DisplayServer"
 	"graphics.gd/classdb/Engine"
+	"graphics.gd/classdb/OS"
 	"graphics.gd/classdb/SceneTree"
 	"graphics.gd/classdb/Window"
 	"graphics.gd/startup"
@@ -28,6 +31,13 @@ var exportPresets []byte
 
 func main() {
 	startup.LoadingScene()
+
+	// Headless MCP server mode: `Bufflehead --headless -- --mcp`. Builds no
+	// UI and exits when the MCP client closes stdin.
+	if mcpmode.Requested(OS.GetCmdlineUserArgs()) {
+		runMCP()
+		return
+	}
 
 	// Mirror log output into the in-app console pane (keeps stderr too).
 	ui.InstallConsoleLog()
@@ -76,4 +86,18 @@ func main() {
 	SceneTree.Add(app.AsNode())
 
 	startup.Scene()
+}
+
+func runMCP() {
+	out, err := mcpmode.TakeStdout()
+	if err != nil {
+		log.Fatalf("mcp: reserve stdout: %v", err)
+	}
+	log.SetOutput(os.Stderr)
+	err = mcpmode.Run(context.Background(), out, updater.PresetVersion(exportPresets))
+	if err != nil {
+		log.Printf("mcp: %v", err)
+		os.Exit(1)
+	}
+	os.Exit(0)
 }
