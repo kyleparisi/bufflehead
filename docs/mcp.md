@@ -93,12 +93,16 @@ You can drive the server by hand. Each line on stdin is one JSON-RPC message;
 each response is one line on stdout. Logs go to stderr.
 
 ```bash
-printf '%s\n' \
+{ printf '%s\n' \
   '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}' \
   '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
-  '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_bookmarks","arguments":{}}}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_bookmarks","arguments":{}}}'; sleep 2; } \
   | /Applications/Bufflehead.app/Contents/MacOS/Bufflehead --headless -- --mcp
 ```
+
+The `sleep` keeps stdin open long enough to answer: the server treats a closed
+stdin as the client disconnecting and exits immediately. Increase it for
+`run_sql` against a bookmark that needs a tunnel.
 
 ## Troubleshooting
 
