@@ -134,6 +134,13 @@ stdin as the client disconnecting and exits immediately. Increase it for
   the path points at the executable. Claude Desktop logs each server's stderr
   to `~/Library/Logs/Claude/mcp-server-bufflehead.log` (macOS) or
   `%APPDATA%\Claude\logs\mcp-server-bufflehead.log` (Windows).
+- **"AWS credentials … have expired".** AWS SSO sessions last about a day.
+  When an AWS gateway bookmark needs a fresh login, Bufflehead opens the AWS
+  SSO approval page in your browser and waits up to 45 seconds. Approve it and
+  the query continues; if you take longer, the call returns this message and
+  the next call succeeds once you've approved. Repeated calls share one login,
+  so you only get one browser tab. Profiles that don't use an `sso_session`
+  need their credentials refreshed by hand (`aws sso login --profile <name>`).
 - **"no SSH agent is running".** Load the key into your agent (`ssh-add`) or set
   the bookmark to use a key file. On macOS, Bufflehead recovers the agent
   socket from launchd when the client doesn't pass it on.
