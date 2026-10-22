@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
 	"os/user"
 	"strings"
@@ -46,21 +47,17 @@ func NewMySQLDirect(host string, port int, dbName, dbUser, password, tlsMode str
 	cfg.TLSConfig = tlsMode
 	cfg.InterpolateParams = true
 	cfg.Timeout = 30 * time.Second
-	// transaction_read_only is a real MySQL session system variable; passing it
-	// as a DSN param means the driver re-applies "SET transaction_read_only=ON"
-	// on every new connection, so read-only survives a pool reconnect (unlike a
-	// one-shot SET after Open). This is the primary write guardrail.
-	cfg.Params = map[string]string{"transaction_read_only": "ON"}
 	// Identify the client to the server via a connection attribute (MySQL has no
 	// settable "application name" system variable like Postgres).
 	if u, err := user.Current(); err == nil {
 		cfg.ConnectionAttributes = "program_name:" + u.Username
 	}
 
-	conn, err := sql.Open("mysql", cfg.FormatDSN())
+	connector, err := mysql.NewConnector(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("open mysql: %w", err)
 	}
+	conn := sql.OpenDB(readOnlyConnector{connector})
 
 	// Pin to one connection to match the Postgres backend: keeps session state
 	// (read-only) consistent and avoids interleaved streams over tunnels.
@@ -74,6 +71,33 @@ func NewMySQLDirect(host string, port int, dbName, dbUser, password, tlsMode str
 	}
 
 	return &MySQLDB{conn: conn, dbName: dbName}, nil
+}
+
+// readOnlyConnector wraps the driver's connector so every new connection runs
+// "SET SESSION TRANSACTION READ ONLY" before it is handed to the pool. This is
+// the primary write guardrail: it survives a pool reconnect (unlike a one-shot
+// SET after Open), and unlike setting the transaction_read_only variable it
+// works on every server version (MySQL < 5.7.20 and MariaDB < 11.1 only know
+// the variable as tx_read_only).
+type readOnlyConnector struct {
+	driver.Connector
+}
+
+func (c readOnlyConnector) Connect(ctx context.Context) (driver.Conn, error) {
+	conn, err := c.Connector.Connect(ctx)
+	if err != nil {
+		return nil, err
+	}
+	execer, ok := conn.(driver.ExecerContext)
+	if !ok {
+		conn.Close()
+		return nil, fmt.Errorf("set read-only: mysql connection does not support Exec")
+	}
+	if _, err := execer.ExecContext(ctx, "SET SESSION TRANSACTION READ ONLY", nil); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("set read-only: %w", err)
+	}
+	return conn, nil
 }
 
 // Ping verifies the connection is alive.
