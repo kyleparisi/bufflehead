@@ -19,8 +19,9 @@ const pingTimeout = 5 * time.Second
 // process. Each bookmark has its own slot lock, so a slow tunnel to one
 // bookmark never blocks queries on another.
 type conns struct {
-	mu    sync.Mutex
-	slots map[string]*slot
+	mu     sync.Mutex
+	slots  map[string]*slot
+	logins *awsLogins
 }
 
 type slot struct {
@@ -30,7 +31,7 @@ type slot struct {
 }
 
 func newConns() *conns {
-	return &conns{slots: map[string]*slot{}}
+	return &conns{slots: map[string]*slot{}, logins: newAWSLogins()}
 }
 
 // bookmarks re-reads the store on every call: the app may add or edit
@@ -77,7 +78,17 @@ func (c *conns) get(ctx context.Context, label string) (*connect.Conn, error) {
 		s.conn = nil
 	}
 
-	conn, err := connect.Open(ctx, bm.ToGatewayEntry(0), "mcp", func(msg string) {
+	entry := bm.ToGatewayEntry(0)
+	// AWS gateways need live SSO credentials for the bastion lookup, the SSM
+	// tunnel and IAM database auth. They expire daily; log in again first
+	// rather than failing later with an error from one of those steps.
+	if !entry.IsBigQuery() && !entry.IsDirect() && !entry.IsMySQL() {
+		if err := c.logins.ensure(ctx, entry.AWSProfile, entry.AWSRegion); err != nil {
+			return nil, err
+		}
+	}
+
+	conn, err := connect.Open(ctx, entry, "mcp", func(msg string) {
 		log.Printf("%s: %s", label, msg)
 	})
 	if err != nil {
