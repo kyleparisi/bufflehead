@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -179,7 +180,9 @@ func TestPlanAndApplyMergesIntoExistingConfig(t *testing.T) {
 	if b, _ := os.ReadFile(backup); string(b) != string(plan.Original) {
 		t.Errorf("backup content differs")
 	}
-	if fi, _ := os.Stat(path); fi.Mode().Perm() != 0o600 {
+	// Windows has no Unix permission bits: Stat reports 0666 for any
+	// writable file, so only check the mode is kept elsewhere.
+	if fi, _ := os.Stat(path); runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600 {
 		t.Errorf("mode %v, want 0600 kept", fi.Mode().Perm())
 	}
 	if entries, _ := os.ReadDir(filepath.Dir(path)); len(entries) != 2 {
