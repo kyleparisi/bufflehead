@@ -199,6 +199,18 @@ else
     export GDPATH="${GDPATH:-$HOME/gd}"
     export GOTOOLCHAIN="$(go env GOVERSION)"
 
+    # A fresh checkout has no graphics/.godot, so gd runs Godot's import scan
+    # before compiling the Go library, and on macOS Godot aborts on the missing
+    # darwin_universal.dylib (NSBundle initWithURL: nil URL). Pre-build a
+    # host-arch copy for the scan; gd overwrites it with the universal dylib,
+    # and step 2 swaps in the store-channel library anyway.
+    LIB="$ROOT/graphics/darwin_universal.dylib"
+    if [ ! -f "$LIB" ]; then
+        echo "==> Pre-building $(go env GOARCH) library for Godot's first import..."
+        CGO_ENABLED=1 go build -buildmode=c-shared -o "$LIB" .
+        rm -f "${LIB%.dylib}.h"
+    fi
+
     echo "==> Building macOS app..."
     # Godot's headless export can segfault on teardown AFTER writing the .app.
     gd_rc=0
