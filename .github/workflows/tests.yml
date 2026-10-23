@@ -16,6 +16,9 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Check locked MAS packaging guards
+        run: python3 -m unittest discover -s test -p 'test_mas_packaging.py' -v
+
       - name: Run unit tests
         run: go test ./...
 

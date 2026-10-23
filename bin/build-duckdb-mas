@@ -1,18 +1,62 @@
 #!/usr/bin/env python3
-"""Clean pinned DuckDB build; never patches a prebuilt archive."""
-import argparse,hashlib,json,pathlib,subprocess,platform
-p=argparse.ArgumentParser();p.add_argument('--source',required=True);p.add_argument('--output',required=True);p.add_argument('--arch',choices=['x86_64','arm64'],default=platform.machine());p.add_argument('--jobs',type=int,default=1);p.add_argument('--configure-only',action='store_true');a=p.parse_args()
-src=pathlib.Path(a.source).resolve();out=pathlib.Path(a.output).resolve();build=out/'build'
-def run(*args):subprocess.run(args,check=True)
-commit=subprocess.check_output(['git','-C',str(src),'rev-parse','HEAD'],text=True).strip()
-if commit!='19864453f7d0ed095256d848b46e7b8630989bac':raise SystemExit('Expected DuckDB v1.1.3 pinned commit')
-if subprocess.check_output(['git','-C',str(src),'status','--porcelain','--untracked-files=no'],text=True).strip():raise SystemExit('DuckDB tracked source must be clean')
-sdk=subprocess.check_output(['xcrun','--sdk','macosx','--show-sdk-path'],text=True).strip()
-run('cmake','-S',str(src),'-B',str(build),'-G','Ninja','-DCMAKE_BUILD_TYPE=Release','-DCMAKE_OSX_SYSROOT='+sdk,'-DCMAKE_OSX_ARCHITECTURES='+a.arch,'-DCMAKE_OSX_DEPLOYMENT_TARGET=11.0','-DCMAKE_CXX_FLAGS=-isystem '+sdk+'/usr/include/c++/v1','-DDISABLE_EXTENSION_LOAD=ON','-DEXTENSION_STATIC_BUILD=ON','-DBUILD_EXTENSIONS=json;parquet','-DBUILD_UNITTESTS=OFF','-DBUILD_SHELL=OFF','-DENABLE_SANITIZER=OFF','-DENABLE_UBSAN=OFF')
-if a.configure_only:raise SystemExit(0)
-run('cmake','--build',str(build),'--target','duckdb_static','--parallel',str(a.jobs))
-archives=[build/'src/libduckdb_static.a']+sorted((build/'third_party').glob('*/libduckdb_*.a'))+sorted((build/'extension').glob('*/lib*_extension.a'))
-if not all(x.is_file() for x in archives) or len(archives)<3:raise SystemExit('Incomplete static build')
-run('xcrun','libtool','-static','-o',str(out/'libduckdb.a'),*[str(x) for x in archives])
-sha=hashlib.sha256((out/'libduckdb.a').read_bytes()).hexdigest()
-(out/'provenance.json').write_text(json.dumps({'source_commit':commit,'architecture':a.arch,'sdk':sdk,'clean_source_build':True,'disable_extension_load':True,'extensions':['json','parquet'],'sha256':sha},indent=2)+'\n')
+"""Build a pinned MAS engine with an explicit static loader and no loadable code."""
+import argparse, hashlib, json, pathlib, platform, subprocess, sys
+
+root = pathlib.Path(__file__).resolve().parent.parent
+lock = json.loads((root / 'packaging/duckdb.json').read_text())
+p = argparse.ArgumentParser()
+p.add_argument('--source', required=True)
+p.add_argument('--output', required=True)
+p.add_argument('--arch', choices=['x86_64', 'arm64'], default=platform.machine())
+p.add_argument('--jobs', type=int, default=1)
+p.add_argument('--configure-only', action='store_true')
+a = p.parse_args()
+src = pathlib.Path(a.source).resolve()
+out = pathlib.Path(a.output).resolve()
+build = out / 'build'
+def run(*args):
+    subprocess.run(args, check=True)
+commit = subprocess.check_output(['git', '-C', str(src), 'rev-parse', 'HEAD'], text=True).strip()
+if commit != lock['source_commit']:
+    sys.exit('Expected pinned DuckDB ' + lock['version'] + ' source')
+if subprocess.check_output(['git', '-C', str(src), 'status', '--porcelain'], text=True).strip():
+    sys.exit('DuckDB source must be clean')
+sdk = subprocess.check_output(['xcrun', '--sdk', 'macosx', '--show-sdk-path'], text=True).strip()
+extensions = lock['extensions']
+run('cmake', '-S', str(src), '-B', str(build), '-G', 'Ninja',
+    '-DCMAKE_BUILD_TYPE=Release', '-DCMAKE_CXX_STANDARD=17',
+    '-DDUCKDB_EXPLICIT_VERSION=v' + lock['version'], '-DDUCKDB_CAPABILITIES=none',
+    '-DCMAKE_OSX_SYSROOT=' + sdk, '-DCMAKE_OSX_ARCHITECTURES=' + a.arch,
+    '-DCMAKE_OSX_DEPLOYMENT_TARGET=11.0',
+    '-DCMAKE_CXX_FLAGS=-isystem ' + sdk + '/usr/include/c++/v1',
+    '-DENABLE_EXTENSION_LOAD=OFF', '-DENABLE_BUILTIN_HTTPLIB=OFF',
+    '-DEXTENSION_STATIC_BUILD=ON', '-DBUILD_EXTENSIONS=' + ';'.join(extensions),
+    '-DSTATICALLY_LINK_EXTENSIONS=' + ';'.join(extensions), '-DSKIP_EXTENSIONS=icu',
+    '-DBUILD_UNITTESTS=OFF', '-DBUILD_SHELL=OFF',
+    '-DENABLE_SANITIZER=OFF', '-DENABLE_UBSAN=OFF')
+if a.configure_only:
+    sys.exit(0)
+# The v2 engine target no longer implicitly includes the extension archives.
+run('cmake', '--build', str(build), '--target', 'duckdb_static',
+    *[name + '_extension' for name in extensions], '--parallel', str(a.jobs))
+loader = out / 'static_extension_loader.c'
+run(sys.executable, str(src / 'scripts/generate_static_extension_loader.py'),
+    '-o', str(loader), *extensions)
+obj = out / 'static_extension_loader.o'
+run('xcrun', '--sdk', 'macosx', 'clang', '-arch', a.arch, '-isysroot', sdk,
+    '-mmacosx-version-min=11.0', '-DDUCKDB_STATIC_BUILD', '-I' + str(src / 'src/include'),
+    '-c', str(loader), '-o', str(obj))
+archives = [build / 'extension' / name / ('lib' + name + '_extension.a') for name in extensions]
+archives += [build / 'src/libduckdb_static.a']
+# v2 libduckdb_static.a already contains the third-party objects.
+if not all(path.is_file() for path in archives):
+    sys.exit('Incomplete static build')
+# Never merge duckdb_loadable_extensions/httplib or arbitrary extension archives.
+run('xcrun', 'libtool', '-static', '-o', str(out / 'libduckdb.a'), str(obj), *map(str, archives))
+sha = hashlib.sha256((out / 'libduckdb.a').read_bytes()).hexdigest()
+(out / 'provenance.json').write_text(json.dumps({
+    'schema': 2, 'version': lock['version'], 'source_commit': commit,
+    'architecture': a.arch, 'sdk': sdk, 'clean_source_build': True,
+    'disable_extension_load': True, 'static_extension_loader': True,
+    'extensions': extensions, 'sha256': sha,
+}, indent=2) + '\n')

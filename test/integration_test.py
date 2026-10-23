@@ -412,6 +412,17 @@ class TestFileFormats:
 
 
 class TestErrorHandling:
+    def test_variant_error_and_cast_recovery(self):
+        open_file(SAMPLE)
+        result = post("query", {"sql": "SELECT 42::VARIANT AS value"})
+        assert result.get("ok") is not True
+        assert "cast VARIANT output columns to VARCHAR" in json.dumps(result)
+        result = post("query", {"sql": "SELECT (42::VARIANT)::VARCHAR AS value"})
+        assert result.get("ok") is True
+        wait()
+        assert state()["columns"] == ["value"]
+        assert state()["rowCount"] == 1
+
     def test_corrupted_parquet(self):
         result = post("query", {"sql": f"SELECT * FROM '{CORRUPT}'"})
         assert result.get("ok") is not True

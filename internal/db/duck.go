@@ -5,8 +5,9 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"strings"
 
-	"github.com/marcboeker/go-duckdb"
+	"github.com/duckdb/duckdb-go/v2"
 )
 
 // DB wraps a DuckDB in-memory connection.
@@ -201,7 +202,15 @@ func (d *DB) Query(ctx context.Context, virtualSQL string, offset, limit int) (*
 		}
 		result.Rows = append(result.Rows, row)
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		// The v2 engine can evaluate VARIANT expressions, but the Go driver
+		// cannot scan them yet. Keep query failures explicit and actionable.
+		if strings.Contains(err.Error(), "unsupported data type: VARIANT") {
+			return nil, fmt.Errorf("DuckDB's Go driver cannot return VARIANT values yet; cast VARIANT output columns to VARCHAR in your SELECT: %w", err)
+		}
+		return nil, err
+	}
+	return result, nil
 }
 
 // formatValue converts a scanned database value to its display string.
@@ -226,7 +235,7 @@ func formatValue(v any) string {
 
 // Metadata returns parquet file-level metadata.
 func (d *DB) Metadata(path string) (map[string]string, error) {
-	q := fmt.Sprintf(`SELECT * FROM parquet_metadata(%s) LIMIT 1`, QuotePathLiteral(path))
+	q := fmt.Sprintf(`SELECT COLUMNS(*)::VARCHAR FROM parquet_metadata(%s) LIMIT 1`, QuotePathLiteral(path))
 	rows, err := d.conn.Query(q)
 	if err != nil {
 		return nil, err
@@ -248,6 +257,9 @@ func (d *DB) Metadata(path string) (map[string]string, error) {
 		for i, col := range cols {
 			meta[col] = fmt.Sprintf("%v", vals[i])
 		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return meta, nil
 }
