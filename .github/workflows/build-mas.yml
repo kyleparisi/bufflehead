@@ -25,7 +25,7 @@ on:
         default: false
 
 env:
-  DUCKDB_COMMIT: 19864453f7d0ed095256d848b46e7b8630989bac   # v1.1.3, see bin/build-duckdb-mas
+  DUCKDB_COMMIT: d54cbbe3df17e8e5ce68312f483b4155836112aa   # v2.0.0; must match packaging/duckdb.json
 
 jobs:
   build:
@@ -65,21 +65,38 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/duckdb-out
-          key: duckdb-mas-${{ env.DUCKDB_COMMIT }}-${{ hashFiles('bin/build-duckdb-mas') }}
+          key: duckdb-mas-${{ env.DUCKDB_COMMIT }}-${{ hashFiles('bin/build-duckdb-mas', 'packaging/duckdb.json') }}
+
+      # License collection needs exact source even when engine archives are cached.
+      - name: Fetch pinned DuckDB source
+        run: |
+          git init -q "$RUNNER_TEMP/duckdb-src"
+          git -C "$RUNNER_TEMP/duckdb-src" fetch -q --depth 1 \
+            https://github.com/duckdb/duckdb "$DUCKDB_COMMIT"
+          git -C "$RUNNER_TEMP/duckdb-src" checkout -q FETCH_HEAD
 
       - name: Build locked DuckDB engines
         if: steps.duckdb-cache.outputs.cache-hit != 'true'
         run: |
           brew install ninja
-          git init -q "$RUNNER_TEMP/duckdb-src"
-          git -C "$RUNNER_TEMP/duckdb-src" fetch -q --depth 1 \
-            https://github.com/duckdb/duckdb "$DUCKDB_COMMIT"
-          git -C "$RUNNER_TEMP/duckdb-src" checkout -q FETCH_HEAD
           for arch in arm64 x86_64; do
             ./bin/build-duckdb-mas --source "$RUNNER_TEMP/duckdb-src" \
               --output "$RUNNER_TEMP/duckdb-out/$arch" --arch "$arch" --jobs 4
             rm -rf "$RUNNER_TEMP/duckdb-out/$arch/build"   # keep the cache small
           done
+
+      - name: Test restricted engine on the native architecture
+        run: |
+          case "$(go env GOHOSTARCH)" in
+            arm64) engine="$RUNNER_TEMP/duckdb-out/arm64" ;;
+            amd64) engine="$RUNNER_TEMP/duckdb-out/x86_64" ;;
+            *) exit 1 ;;
+          esac
+          CGO_LDFLAGS="-L$engine -lduckdb -lc++ -lm" \
+            go test -tags mas,duckdb_use_static_lib,duckdb_mas_engine ./internal/db
+
+      - name: Collect current MAS dependency notices
+        run: ./bin/collect-licenses --duckdb-source "$RUNNER_TEMP/duckdb-src" --tags mas,duckdb_use_static_lib
 
       - name: Build, sign, package${{ inputs.upload && ', upload' || '' }}
         env:

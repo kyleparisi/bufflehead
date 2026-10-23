@@ -31,11 +31,12 @@ for name,m in sorted(mods.items()):
  collect(name,m.get('Version','local'),base,paths)
 base=pathlib.Path(a.duckdb_source).resolve()
 commit=subprocess.check_output(['git','-C',str(base),'rev-parse','HEAD'],text=True).strip()
-if commit!='19864453f7d0ed095256d848b46e7b8630989bac':raise SystemExit('Expected DuckDB v1.1.3 source')
+lock=json.loads((root/'packaging/duckdb.json').read_text())
+if commit!=lock['source_commit']:raise SystemExit('Expected pinned DuckDB '+lock['version']+' source')
 paths=[base/'LICENSE']
-for sub in ['third_party','src','extension/json','extension/parquet']:
+for sub in ['third_party','src']+['extension/'+name for name in lock['extensions']]:
  paths += [f for f in (base/sub).rglob('*') if f.is_file() and pattern.match(f.name)]
-collect('DuckDB including bundled third-party sources','v1.1.3 '+commit,base,paths)
+collect('DuckDB including bundled third-party sources','v'+lock['version']+' '+commit,base,paths)
 base=root/'packaging/licenses/upstream'
 collect('Godot including bundled third-party sources','4.6.1-stable',base,list(base.glob('godot-*')))
 collect('LLVM libc++ header license','Apple SDK headers reference https://llvm.org/LICENSE.txt',base,[base/'llvm-libcxx-LICENSE.txt'])

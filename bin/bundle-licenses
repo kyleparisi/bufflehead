@@ -5,6 +5,9 @@ root=pathlib.Path(__file__).resolve().parent.parent
 src=root/'packaging/licenses/generated';app=pathlib.Path(sys.argv[1]).resolve()
 if not (app/'Contents/Info.plist').is_file():raise SystemExit('Expected a macOS app bundle')
 m=json.loads((src/'manifest.json').read_text())
+lock=json.loads((root/'packaging/duckdb.json').read_text())
+expected='v'+lock['version']+' '+lock['source_commit']
+if not any(x['component']=='DuckDB including bundled third-party sources' and x['version']==expected for x in m['components']):raise SystemExit('Collect current DuckDB notices before bundling')
 for item in m['source_archives']:
  if hashlib.sha256((src/item['path']).read_bytes()).hexdigest()!=item['sha256']:raise SystemExit('License source archive hash mismatch')
 dst=app/'Contents/Resources/Licenses';dst.mkdir(parents=True,exist_ok=True)

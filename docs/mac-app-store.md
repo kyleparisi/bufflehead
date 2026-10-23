@@ -129,9 +129,11 @@ fresh `CFBundleVersion` automatically. The signed `.pkg` is also kept as the
 
 ```bash
 # Once per engine change (needs Xcode, cmake, ninja; a DuckDB checkout at
-# 19864453f7d0ed095256d848b46e7b8630989bac):
+# d54cbbe3df17e8e5ce68312f483b4155836112aa, DuckDB 2.0.0):
 ./bin/build-duckdb-mas --source ~/src/duckdb --output ~/build/duckdb-arm64  --arch arm64  --jobs 8
 ./bin/build-duckdb-mas --source ~/src/duckdb --output ~/build/duckdb-x86_64 --arch x86_64 --jobs 8
+
+./bin/collect-licenses --duckdb-source ~/src/duckdb --tags mas,duckdb_use_static_lib
 
 MAS_APP_IDENTITY="Apple Distribution: Kyle Parisi (63GMD6U4J2)" \
 MAS_INSTALLER_IDENTITY="3rd Party Mac Developer Installer: Kyle Parisi (63GMD6U4J2)" \

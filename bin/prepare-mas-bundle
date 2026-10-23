@@ -8,7 +8,7 @@ Universal: --arch universal --duckdb-amd64 BUILD_X86 --duckdb-arm64 BUILD_ARM
 """
 import argparse,hashlib,json,os,pathlib,shutil,subprocess,tempfile
 p=argparse.ArgumentParser();p.add_argument('--app',required=True);p.add_argument('--duckdb');p.add_argument('--duckdb-amd64');p.add_argument('--duckdb-arm64');p.add_argument('--library-path',required=True,help='Existing Go library path relative to the app bundle');p.add_argument('--arch',required=True,choices=['amd64','arm64','universal']);a=p.parse_args()
-root=pathlib.Path(__file__).resolve().parent.parent;app=pathlib.Path(a.app).resolve();lib=(app/a.library_path).resolve()
+root=pathlib.Path(__file__).resolve().parent.parent;lock=json.loads((root/'packaging/duckdb.json').read_text());app=pathlib.Path(a.app).resolve();lib=(app/a.library_path).resolve()
 if not lib.is_relative_to(app) or not lib.is_file() or not (app/'Contents/Info.plist').is_file():raise SystemExit('Expected exported app and existing library within it')
 if a.arch=='universal':
  if not (a.duckdb_amd64 and a.duckdb_arm64):raise SystemExit('--arch universal needs --duckdb-amd64 and --duckdb-arm64')
@@ -21,6 +21,7 @@ def verified(arch,path):
  if not (engine/'provenance.json').is_file():raise SystemExit('Clean engine provenance is required; incremental spike libraries are rejected')
  m=json.loads((engine/'provenance.json').read_text())
  if not m.get('clean_source_build') or not m.get('disable_extension_load') or m.get('architecture')!= {'amd64':'x86_64','arm64':'arm64'}[arch]:raise SystemExit('Missing matching clean locked-engine provenance for '+arch)
+ if m.get('schema')!=2 or m.get('source_commit')!=lock['source_commit'] or m.get('version')!=lock['version'] or not m.get('static_extension_loader') or m.get('extensions')!=lock['extensions']:raise SystemExit('Engine does not match the locked static-loader build for '+arch)
  if hashlib.sha256((engine/'libduckdb.a').read_bytes()).hexdigest()!=m['sha256']:raise SystemExit('Engine checksum mismatch for '+arch)
  return engine,m
 engines={arch:verified(arch,path) for arch,path in engines.items()}

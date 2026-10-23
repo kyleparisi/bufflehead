@@ -1,13 +1,16 @@
 package db
 
 import (
+	"bytes"
 	"context"
 	"math/big"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
-	"github.com/marcboeker/go-duckdb"
+	"github.com/duckdb/duckdb-go/v2"
 )
 
 func setupTestDB(t *testing.T) *DB {
@@ -84,7 +87,7 @@ func TestQuery(t *testing.T) {
 	db := setupTestDB(t)
 	path := createTestParquet(t, db)
 
-	result, err := db.Query(context.Background(),DefaultQuery(path), 0, 100)
+	result, err := db.Query(context.Background(), DefaultQuery(path), 0, 100)
 	if err != nil {
 		t.Fatalf("Query() error: %v", err)
 	}
@@ -113,7 +116,7 @@ func TestQueryPagination(t *testing.T) {
 	path := createTestParquet(t, db)
 
 	// Page size 2, offset 0
-	result, err := db.Query(context.Background(),DefaultQuery(path), 0, 2)
+	result, err := db.Query(context.Background(), DefaultQuery(path), 0, 2)
 	if err != nil {
 		t.Fatalf("Query() error: %v", err)
 	}
@@ -125,7 +128,7 @@ func TestQueryPagination(t *testing.T) {
 	}
 
 	// Page size 2, offset 2
-	result, err = db.Query(context.Background(),DefaultQuery(path), 2, 2)
+	result, err = db.Query(context.Background(), DefaultQuery(path), 2, 2)
 	if err != nil {
 		t.Fatalf("Query() error: %v", err)
 	}
@@ -139,7 +142,7 @@ func TestQueryCustomSQL(t *testing.T) {
 	path := createTestParquet(t, db)
 
 	sql := "SELECT name, age FROM '" + path + "' WHERE age > 26"
-	result, err := db.Query(context.Background(),sql, 0, 100)
+	result, err := db.Query(context.Background(), sql, 0, 100)
 	if err != nil {
 		t.Fatalf("Query() error: %v", err)
 	}
@@ -155,7 +158,7 @@ func TestQueryCustomSQL(t *testing.T) {
 func TestQueryBadSQL(t *testing.T) {
 	db := setupTestDB(t)
 
-	_, err := db.Query(context.Background(),"SELECT * FROM nonexistent_table", 0, 100)
+	_, err := db.Query(context.Background(), "SELECT * FROM nonexistent_table", 0, 100)
 	if err == nil {
 		t.Error("expected error for bad SQL, got nil")
 	}
@@ -171,6 +174,88 @@ func TestMetadata(t *testing.T) {
 	}
 	if len(meta) == 0 {
 		t.Error("expected non-empty metadata")
+	}
+	// Exercise real Parquet metadata, including the nested metadata fields
+	// that newer engines expose, rather than accepting a partially scanned row.
+	for key, want := range map[string]string{
+		"file_name":      path,
+		"path_in_schema": "id",
+		"num_values":     "3",
+	} {
+		if got := meta[key]; got != want {
+			t.Errorf("metadata[%q] = %q, want %q", key, got, want)
+		}
+	}
+}
+
+func TestMetadataFileNotFound(t *testing.T) {
+	db := setupTestDB(t)
+	if _, err := db.Metadata(filepath.Join(t.TempDir(), "missing.parquet")); err == nil {
+		t.Fatal("expected missing Parquet file to return an error")
+	}
+}
+
+func TestVariantQueryErrorAndRecovery(t *testing.T) {
+	db := setupTestDB(t)
+	result, err := db.Query(context.Background(), `SELECT 42::VARIANT AS value`, 0, 10)
+	if err == nil || !strings.Contains(err.Error(), "cast VARIANT output columns to VARCHAR") {
+		t.Fatalf("expected actionable VARIANT error, got result=%v err=%v", result, err)
+	}
+	if result != nil {
+		t.Fatal("failed scan must not return a partial result")
+	}
+	// The failed scan must release the single connection. An explicit cast
+	// provides a usable display value without silently rewriting user SQL.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	result, err = db.Query(ctx, `SELECT (42::VARIANT)::VARCHAR AS value`, 0, 10)
+	if err != nil {
+		t.Fatalf("query after unsupported type: %v", err)
+	}
+	if result.Total != 1 || len(result.Rows) != 1 || result.Rows[0][0] != "42" {
+		t.Fatalf("unexpected cast result: %+v", result)
+	}
+}
+
+func TestLegacyDuckDBReadOnlyFileUnchanged(t *testing.T) {
+	// Copy the shipped fixture: never attempt writes against the source file.
+	original, err := os.ReadFile(filepath.Join("..", "..", "testdata", "test.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "legacy.duckdb")
+	if err := os.WriteFile(path, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	db, err := OpenDB(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	for _, query := range []string{
+		"UPDATE users SET name = 'changed'",
+		"DELETE FROM users",
+		"CREATE TABLE unexpected (id INTEGER)",
+	} {
+		// Execute directly, so pagination/parser rejection cannot mask a
+		// missing engine-level read-only constraint.
+		if _, err := db.conn.Exec(query); err == nil {
+			t.Errorf("read-only connection accepted %s", query)
+		}
+	}
+	result, err := db.Query(context.Background(), "SELECT * FROM users", 0, 10)
+	if err != nil || result == nil || result.Total != 3 {
+		t.Fatalf("legacy file read after rejected writes: result=%+v err=%v", result, err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(original, after) {
+		t.Fatal("read-only access changed the legacy database bytes")
 	}
 }
 
@@ -218,7 +303,7 @@ func TestFormatValue(t *testing.T) {
 func TestQueryUUID(t *testing.T) {
 	db := setupTestDB(t)
 
-	result, err := db.Query(context.Background(),"SELECT uuid() AS id", 0, 1)
+	result, err := db.Query(context.Background(), "SELECT uuid() AS id", 0, 1)
 	if err != nil {
 		t.Fatalf("Query() error: %v", err)
 	}
@@ -236,7 +321,7 @@ func TestQueryUUID(t *testing.T) {
 func TestQueryDecimal(t *testing.T) {
 	db := setupTestDB(t)
 
-	result, err := db.Query(context.Background(),"SELECT 123.45::DECIMAL(10,2) AS price", 0, 1)
+	result, err := db.Query(context.Background(), "SELECT 123.45::DECIMAL(10,2) AS price", 0, 1)
 	if err != nil {
 		t.Fatalf("Query() error: %v", err)
 	}
