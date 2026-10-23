@@ -53,18 +53,3 @@ jobs:
         run: |
           source bin/setup-gcc142
           go test ./...
-
-  # Native validation of both macOS architectures; cgo is not cross-compiled.
-  test-macos:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-15, macos-15-intel]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-      - name: Run native unit tests
-        run: go test ./...

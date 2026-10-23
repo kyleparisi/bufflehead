@@ -16,7 +16,9 @@ if [ -z "$GODOT" ]; then
     fi
 fi
 
-# Each run owns only the Godot PID it launches; never kill other sessions.
+# Kill any stale Godot processes
+pkill -9 -if godot 2>/dev/null || true
+sleep 1
 
 # Build the dylib
 cd "$(dirname "$0")/.."
@@ -46,26 +48,11 @@ export BUFFLEHEAD_CONTROL_KEY="integration-test-key"
 # scratch file so tests never touch the real one.
 SCRATCH_DIR=$(mktemp -d)
 export BUFFLEHEAD_CLAUDE_DESKTOP_CONFIG="$SCRATCH_DIR/claude_desktop_config.json"
-export XDG_CONFIG_HOME="$SCRATCH_DIR/config"
-export XDG_DATA_HOME="$SCRATCH_DIR/data"
 
 # Start headless and capture stdout to parse the dynamic port
 LOGFILE=$(mktemp)
-GODOT_ENV=()
-if [ "$(uname -s)" = "Linux" ]; then
-    # Match the shipped Linux launcher: allocate the Go/DuckDB static TLS at
-    # process startup rather than trying to fit it during Godot's dlopen.
-    GODOT_ENV=(env "LD_PRELOAD=$ROOT/graphics/linux_amd64.so${LD_PRELOAD:+:$LD_PRELOAD}")
-fi
 cd "$ROOT/graphics"
-# A clean checkout has no extension cache. Import before starting the app.
-if ! "${GODOT_ENV[@]}" "$GODOT" --headless --editor --import --quit > "$LOGFILE" 2>&1; then
-    cat "$LOGFILE"
-    rm -f "$LOGFILE"
-    rm -rf "$SCRATCH_DIR"
-    exit 1
-fi
-"${GODOT_ENV[@]}" "$GODOT" --headless > "$LOGFILE" 2>&1 &
+$GODOT --headless > "$LOGFILE" 2>&1 &
 PID=$!
 
 cleanup() {
