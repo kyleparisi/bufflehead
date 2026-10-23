@@ -58,19 +58,7 @@ GOOS=web gd build
 
 ## Project Structure
 
-```
-bufflehead/
-├── main.go              # Entrypoint
-├── internal/
-│   ├── db/
-│   │   └── duck.go      # DuckDB wrapper (schema, query, metadata)
-│   ├── models/
-│   │   └── state.go     # Shared app state
-│   └── ui/
-│       └── app.go       # Godot UI built in Go via graphics.gd
-├── go.mod
-└── README.md
-```
+[![Architecture diagram](https://gitdiagram.com/diagram-badge.svg)](https://gitdiagram.com/kyleparisi/bufflehead?utm_source=readme&utm_medium=badge)
 
 ## Docs
 
