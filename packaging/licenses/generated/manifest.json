@@ -1,9 +1,9 @@
 {
   "target": [
-    "linux",
-    "amd64"
+    "darwin",
+    "arm64"
   ],
-  "tags": "",
+  "tags": "mas,duckdb_use_static_lib",
   "go_modules": 103,
   "components": [
     {
@@ -475,16 +475,6 @@
       ]
     },
     {
-      "component": "github.com/godbus/dbus/v5",
-      "version": "v5.2.2",
-      "files": [
-        {
-          "path": "LICENSE",
-          "sha256": "e4646a82a976369d7ae8f6ed5c11d35dc0af18433a8ccc24c85b459ad8b95128"
-        }
-      ]
-    },
-    {
       "component": "github.com/google/flatbuffers",
       "version": "v25.12.19+incompatible",
       "files": [
@@ -661,16 +651,6 @@
       ]
     },
     {
-      "component": "github.com/klauspost/cpuid/v2",
-      "version": "v2.3.0",
-      "files": [
-        {
-          "path": "LICENSE",
-          "sha256": "5d966570d7a442d4e969892860a914e542c97f262c873baee8f0aa48e1f40212"
-        }
-      ]
-    },
-    {
       "component": "github.com/kyleparisi/session-manager-plugin",
       "version": "v0.0.0-20260430184122-898ee41db4b7",
       "files": [
@@ -685,6 +665,16 @@
       ]
     },
     {
+      "component": "github.com/mattn/go-isatty",
+      "version": "v0.0.24",
+      "files": [
+        {
+          "path": "LICENSE",
+          "sha256": "08eab1118c80885fa1fa6a6dd7303f65a379fcb3733e063d20d1bbc2c76e6fa1"
+        }
+      ]
+    },
+    {
       "component": "github.com/modelcontextprotocol/go-sdk",
       "version": "v1.8.0",
       "files": [
@@ -695,6 +685,16 @@
         {
           "path": "copyright_test.go",
           "sha256": "63fdc8779c4dbc95833261e3ed41761b80831cf64cb50e8a4aa4bf812703abcc"
+        }
+      ]
+    },
+    {
+      "component": "github.com/ncruces/go-strftime",
+      "version": "v1.0.0",
+      "files": [
+        {
+          "path": "LICENSE",
+          "sha256": "38ae43959daf953a393a585b2988672cb65a5a541aca0d0be5e72595a0a16883"
         }
       ]
     },
@@ -715,6 +715,24 @@
         {
           "path": "LICENSE",
           "sha256": "2eb550be6801c1ea434feba53bf6d12e7c71c90253e0a9de4a4f46cf88b56477"
+        }
+      ]
+    },
+    {
+      "component": "github.com/progrium/darwinkit",
+      "version": "v0.5.0",
+      "files": [
+        {
+          "path": "LICENSE",
+          "sha256": "5b0b43146e29819e9cdfda535012c5b08d7a1105c4a3f7807103885288050202"
+        },
+        {
+          "path": "macos/foundation/copying_protocol.gen.go",
+          "sha256": "d6f7297b99855ce7ae2dea340930752f845b24ed76cf7faf600ebcf39fb713e8"
+        },
+        {
+          "path": "objc/LICENSE",
+          "sha256": "e26ab3de058905c90c9173553c50b7d48e71414e8cd1845270b6cc050077917a"
         }
       ]
     },
@@ -823,16 +841,6 @@
         {
           "path": "LICENSE",
           "sha256": "f19854b341534d1f2314c0c70d9cd2bb4fa1f7c86fffdc4444ca33cccce412ba"
-        }
-      ]
-    },
-    {
-      "component": "go.duckdb.org/libduckdb/linux-amd64",
-      "version": "v0.20000.0",
-      "files": [
-        {
-          "path": "LICENSE",
-          "sha256": "075c33400ffcb0c586dd106a029d3e733e9da3693f8fcb9cebfc651c8a2f14e3"
         }
       ]
     },
@@ -1372,7 +1380,7 @@
     },
     {
       "component": "Go toolchain/runtime",
-      "version": "go1.27.1",
+      "version": "go1.26.1",
       "files": [
         {
           "path": "LICENSE",
