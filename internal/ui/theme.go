@@ -62,6 +62,11 @@ var (
 	colorBtnNormal  = Color.RGBA{R: 0.1647, G: 0.1647, B: 0.1725, A: 1}   // #2A2A2C — surface-container-high
 	colorBtnHover   = Color.RGBA{R: 0.2078, G: 0.2039, B: 0.2157, A: 1}   // #353437 — surface-container-highest
 
+	// Data grid header
+	colorHeaderBg      = Color.RGBA{R: 0.2078, G: 0.2039, B: 0.2157, A: 1}   // #353437 — surface-container-highest
+	colorHeaderBgHover = Color.RGBA{R: 0.2353, G: 0.2314, B: 0.2471, A: 1}   // #3C3B3F — one step brighter
+	colorHeaderDivider = Color.RGBA{R: 0.5686, G: 0.5608, B: 0.6314, A: 0.5} // #918FA1 at 50% — outline
+
 	// SQL syntax highlighting — green keywords, blue strings (matches the design's editor)
 	colorSQLKeyword  = Color.RGBA{R: 0.3059, G: 0.8706, B: 0.6392, A: 1} // #4EDEA3 — tertiary (green)
 	colorSQLString   = Color.RGBA{R: 0.5373, G: 0.8078, B: 1.0, A: 1}    // #89CEFF — secondary (blue)
@@ -350,21 +355,30 @@ func applyTreeTheme(c Control.Instance) {
 	c.AddThemeStyleboxOverride("selected", selected.AsStyleBox())
 	c.AddThemeStyleboxOverride("selected_focus", selected.AsStyleBox())
 
-	// Title button (column headers) — right border acts as always-visible resize separator
-	titleBtn := makeStyleBox(colorBgHeader, 0, 0, colorBorder)
-	titleBtn.SetBorderWidthBottom(1)
-	titleBtn.SetBorderWidthRight(1)
-	titleBtn.SetBorderColor(colorBorder)
-	titleBtn.AsStyleBox().SetContentMarginTop(1)
-	titleBtn.AsStyleBox().SetContentMarginBottom(1)
-	titleBtn.AsStyleBox().SetContentMarginLeft(6)
-	titleBtn.AsStyleBox().SetContentMarginRight(6)
+	// Title button (column headers) — Stitch "Workspace" grid header:
+	// surface-container-highest band, outline-variant bottom rule, mono titles.
+	// Column dividers + the resize handle are drawn by DataGrid's header overlay
+	// (a stylebox border can't be inset or highlighted per edge).
+	titleButton := func(bg Color.RGBA) StyleBoxFlat.Instance {
+		sb := makeStyleBox(bg, 0, 0, colorBorder)
+		sb.SetBorderWidthBottom(1)
+		sb.SetBorderColor(colorBorder)
+		sb.AsStyleBox().SetContentMarginTop(5)
+		sb.AsStyleBox().SetContentMarginBottom(5)
+		sb.AsStyleBox().SetContentMarginLeft(8)
+		sb.AsStyleBox().SetContentMarginRight(8)
+		return sb
+	}
+	titleBtn := titleButton(colorHeaderBg)
+	titleHover := titleButton(colorHeaderBgHover)
 	c.AddThemeStyleboxOverride("title_button_normal", titleBtn.AsStyleBox())
-	c.AddThemeStyleboxOverride("title_button_hover", titleBtn.AsStyleBox())
-	c.AddThemeStyleboxOverride("title_button_pressed", titleBtn.AsStyleBox())
+	c.AddThemeStyleboxOverride("title_button_hover", titleHover.AsStyleBox())
+	c.AddThemeStyleboxOverride("title_button_pressed", titleHover.AsStyleBox())
+	c.AddThemeFontOverride("title_button_font", monoFont())
+	c.AddThemeFontSizeOverride("title_button_font_size", fontSize(navFontBase))
 
 	c.AddThemeColorOverride("font_color", colorText)
-	c.AddThemeColorOverride("title_button_color", colorTextMuted)
+	c.AddThemeColorOverride("title_button_color", colorText)
 	c.AddThemeFontSizeOverride("font_size", fontSize(navFontBase))
 
 	// Row hover — subtle surface-bright tint

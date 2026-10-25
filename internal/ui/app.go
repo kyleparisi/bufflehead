@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"runtime"
 	"sort"
@@ -60,6 +61,7 @@ import (
 	"graphics.gd/variant/Color"
 	"graphics.gd/variant/Float"
 	"graphics.gd/variant/Object"
+	"graphics.gd/variant/Rect2"
 	"graphics.gd/variant/Transform2D"
 	"graphics.gd/variant/Vector2"
 	"graphics.gd/variant/Vector2i"
@@ -1115,6 +1117,8 @@ type DataGrid struct {
 	dragCol            int
 	dragStartX         float32
 	dragStartWidth     int
+	hoverBorder        int // column whose right edge is under the mouse in the header, or -1
+	headerOverlay      *DataGridHeaderOverlay
 	skipSort           bool               // set during resize to suppress column sort
 	selectedItem       TreeItem.Instance  // previously selected item (for clearing cell border)
 	selectedCol        int                // previously selected column
@@ -1129,9 +1133,25 @@ func (d *DataGrid) Ready() {
 	d.Super().SetColumns(1)
 	d.Super().SetColumnTitlesVisible(true)
 	d.Super().SetHideRoot(true)
+	// Flat grid: without this Tree reserves item_margin (fold-arrow space) at the
+	// start of every row, so the first column's cells sit indented from its header.
+	d.Super().SetHideFolding(true)
 	d.Super().SetSelectMode(Tree.SelectRow)
 	d.AsControl().SetSizeFlagsVertical(Control.SizeExpandFill)
 	applyTreeTheme(d.AsControl())
+
+	// The Tree paints its header on an internal child canvas item, so anything
+	// drawn in the Tree's own draw pass ends up underneath it. A mouse-transparent
+	// overlay child draws the dividers and resize handle on top instead.
+	d.hoverBorder = -1
+	d.headerOverlay = &DataGridHeaderOverlay{grid: d}
+	d.headerOverlay.AsControl().SetMouseFilter(Control.MouseFilterIgnore)
+	d.headerOverlay.AsControl().SetAnchorsAndOffsetsPreset(Control.PresetFullRect)
+	d.headerOverlay.AsCanvasItem().SetZIndex(1) // above Tree's internal header canvas item
+	d.AsNode().AddChild(d.headerOverlay.AsNode())
+	// Any Tree redraw (scroll, resize, column width change) moves the dividers.
+	d.AsCanvasItem().OnDraw(func() { d.headerOverlay.AsCanvasItem().QueueRedraw() })
+	d.AsControl().OnMouseExited(func() { d.setHoverBorder(-1) })
 
 	d.Super().OnColumnTitleClicked(func(column int, mouseButton int) {
 		if d.skipSort {
@@ -1219,6 +1239,7 @@ func (d *DataGrid) ShowError(msg string) {
 	t.Clear()
 	t.SetColumns(1)
 	t.SetColumnTitle(0, "Error")
+	t.SetColumnTitleAlignment(0, GUI.HorizontalAlignmentLeft)
 	root := t.CreateItem()
 	item := t.MoreArgs().CreateItem(root, -1)
 	item.SetText(0, msg)
@@ -1242,10 +1263,13 @@ func (d *DataGrid) SetResult(r *db.QueryResult) {
 		t.SetColumnTitle(i, col)
 		t.SetColumnClipContent(i, true)
 	}
-	// Set column title alignment for numeric types
+	// Align titles with their data: numbers right, everything else left
+	// (Tree centers titles by default, which floats them away from the values).
 	for i := range r.Columns {
 		if d.isNumericCol(i) {
-			t.SetColumnTitleAlignment(i, GUI.HorizontalAlignmentRight) // right align
+			t.SetColumnTitleAlignment(i, GUI.HorizontalAlignmentRight)
+		} else {
+			t.SetColumnTitleAlignment(i, GUI.HorizontalAlignmentLeft)
 		}
 	}
 
@@ -1353,28 +1377,117 @@ func (d *DataGrid) autoSizeColumns(r *db.QueryResult) {
 	d.colWidthCache[key] = widths
 }
 
-// headerHeight returns the height of the column title row in pixels.
-func (d *DataGrid) headerHeight() float32 {
-	// font size + stylebox padding (3 top + 3 bottom) + border (1) + internal margin
-	return float32(fontSize(13) + 12)
+// headerRect returns the column title row in Tree-local pixels, mirroring how
+// Tree lays it out: it starts at the panel stylebox's top/left margin, and each
+// title is as tall as the title font plus the title_button stylebox padding.
+func (d *DataGrid) headerRect() Rect2.PositionSize {
+	c := d.AsControl()
+	panel := c.GetThemeStylebox("panel")
+	font := c.GetThemeFont("title_button_font")
+	size := c.GetThemeFontSize("title_button_font_size")
+	h := font.MoreArgs().GetHeight(size) + c.GetThemeStylebox("title_button_normal").GetMinimumSize().Y
+	left := panel.GetMargin(Rect2.SideLeft)
+	top := panel.GetMargin(Rect2.SideTop)
+	return Rect2.New(left, top, c.Size().X-left-panel.GetMargin(Rect2.SideRight), h)
 }
 
+// columnEdges returns the x position (Tree-local) of each resizable column's
+// right edge — every column but the last, which expands to fill. Columns are
+// laid out from the panel's left margin and shifted by the horizontal scroll,
+// exactly as Tree draws its title buttons.
+func (d *DataGrid) columnEdges() []float32 {
+	if len(d.columns) < 2 {
+		return nil
+	}
+	t := d.Super()
+	x := float32(d.headerRect().Position.X) - float32(t.GetScroll().X)
+	edges := make([]float32, len(d.columns)-1)
+	for i := range edges {
+		x += float32(t.GetColumnWidth(i))
+		edges[i] = x
+	}
+	return edges
+}
+
+// colBorderHit returns the column whose right edge is under pos in the header
+// row, or -1.
 func (d *DataGrid) colBorderHit(pos Vector2.XY) int {
-	// Only activate in the header area
-	if float32(pos.Y) > d.headerHeight() {
+	hr := d.headerRect()
+	if pos.Y < hr.Position.Y || pos.Y > hr.Position.Y+hr.Size.Y {
 		return -1
 	}
-	// Check if x is near a column border (within 8px for easier targeting)
-	t := d.Super()
-	x := float32(pos.X)
-	offset := 0
-	for i := 0; i < len(d.columns)-1; i++ {
-		offset += t.GetColumnWidth(i)
-		if x >= float32(offset-8) && x <= float32(offset+8) {
-			return i
+	const grab = 5 // px either side of the edge
+	best, bestDist := -1, float32(grab+1)
+	for i, x := range d.columnEdges() {
+		if dist := float32(math.Abs(float64(float32(pos.X) - x))); dist <= grab && dist < bestDist {
+			best, bestDist = i, dist
 		}
 	}
-	return -1
+	return best
+}
+
+func (d *DataGrid) endColumnDrag(pos Vector2.XY) {
+	d.dragging = false
+	d.saveWidthsToCache()
+	d.setHoverBorder(d.colBorderHit(pos))
+	d.headerOverlay.AsCanvasItem().QueueRedraw()
+	if d.hoverBorder < 0 {
+		d.AsControl().SetMouseDefaultCursorShape(Control.CursorArrow)
+	}
+}
+
+func (d *DataGrid) setHoverBorder(col int) {
+	if d.hoverBorder == col {
+		return
+	}
+	d.hoverBorder = col
+	d.headerOverlay.AsCanvasItem().QueueRedraw()
+}
+
+// DataGridHeaderOverlay is a mouse-transparent layer over the DataGrid that
+// draws the header's column dividers and resize handle.
+type DataGridHeaderOverlay struct {
+	Control.Extension[DataGridHeaderOverlay] `gd:"DataGridHeaderOverlay"`
+
+	grid *DataGrid
+}
+
+func (o *DataGridHeaderOverlay) Draw() {
+	if o.grid != nil {
+		o.grid.drawHeaderOverlay(o.AsCanvasItem())
+	}
+}
+
+// drawHeaderOverlay paints the header's column dividers: a short muted tick at
+// rest, and a full-height accent bar on the edge being hovered or dragged, plus
+// a guide line through the rows while dragging so the new edge is easy to see.
+func (d *DataGrid) drawHeaderOverlay(ci CanvasItem.Instance) {
+	edges := d.columnEdges()
+	if len(edges) == 0 {
+		return
+	}
+	hr := d.headerRect()
+	left, right := float32(hr.Position.X), float32(hr.Position.X+hr.Size.X)
+	top, h := float32(hr.Position.Y), float32(hr.Size.Y)
+	active := d.hoverBorder
+	if d.dragging {
+		active = d.dragCol
+	}
+	for i, x := range edges {
+		if x < left || x > right {
+			continue
+		}
+		if i == active {
+			ci.DrawRect(Rect2.New(x-1, top, 2, h), colorAccent)
+			if d.dragging {
+				guide := colorAccent
+				guide.A = 0.35
+				ci.DrawRect(Rect2.New(x, top+h, 1, float32(d.AsControl().Size().Y)-top-h), guide)
+			}
+			continue
+		}
+		ci.DrawRect(Rect2.New(x, top+h*0.25, 1, h*0.5), colorHeaderDivider)
+	}
 }
 
 // autoFitColumn resizes a column to fit its content (header + all visible rows).
@@ -1499,9 +1612,7 @@ func (d *DataGrid) GuiInput(event InputEvent.Instance) {
 				}
 			} else {
 				if d.dragging {
-					d.dragging = false
-					d.saveWidthsToCache()
-					d.AsControl().SetMouseDefaultCursorShape(Control.CursorArrow)
+					d.endColumnDrag(mb.AsInputEventMouse().Position())
 				}
 			}
 		}
@@ -1554,8 +1665,9 @@ func (d *DataGrid) GuiInput(event InputEvent.Instance) {
 			}
 			d.Super().SetColumnCustomMinimumWidth(d.dragCol, newWidth)
 		} else {
-			// Show resize cursor when hovering near column borders in the header
+			// Show resize cursor + handle when hovering near column borders in the header
 			col := d.colBorderHit(mm.AsInputEventMouse().Position())
+			d.setHoverBorder(col)
 			if col >= 0 {
 				d.AsControl().SetMouseDefaultCursorShape(Control.CursorHsize)
 			} else {
@@ -3845,6 +3957,7 @@ func RegisterAll() {
 	classdb.Register[SchemaPanel]()
 	classdb.Register[SQLPanel]()
 	classdb.Register[DataGrid]()
+	classdb.Register[DataGridHeaderOverlay]()
 	classdb.Register[HistoryPanel]()
 	classdb.Register[ExtensionsPanel]()
 	classdb.Register[RowDetailPanel]()
