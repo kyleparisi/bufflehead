@@ -55,6 +55,9 @@ type GatewayScreen struct {
 	OnConnect func(entry models.GatewayEntry, auth *bfaws.AuthManager, tunnel *bfaws.TunnelManager)
 	OnCancel  func() // exit the connection screen
 
+	imapPanel  PanelContainer.Instance
+	imapButton Button.Instance
+
 	// SSO login section
 	ssoStartURL  LineEdit.Instance
 	ssoRegion    LineEdit.Instance
@@ -314,6 +317,9 @@ func (g *GatewayScreen) Ready() {
 	g.bqFormPanel = g.buildBQForm()
 	leftCol.AsNode().AddChild(g.bqFormPanel.AsNode())
 
+	g.imapPanel = g.buildIMAPForm()
+	leftCol.AsNode().AddChild(g.imapPanel.AsNode())
+
 	// Project the initial connection-type state onto the panels.
 	g.renderConnKind()
 
@@ -418,6 +424,9 @@ func (g *GatewayScreen) buildTypeSelector() VBoxContainer.Instance {
 	row.AsNode().AddChild(g.typeBQBtn.AsNode())
 
 	box.AsNode().AddChild(row.AsNode())
+	g.imapButton = g.makeTypeTile("IMAP Inbox", "Read-only mail over TLS", false)
+	g.imapButton.AsBaseButton().OnPressed(func() { g.connKind = models.KindIMAP; g.renderConnKind() })
+	box.AsNode().AddChild(g.imapButton.AsNode())
 	return box
 }
 
@@ -463,6 +472,10 @@ func (g *GatewayScreen) renderConnKind() {
 	pg := g.connKind == models.KindPostgres
 	bq := g.connKind == models.KindBigQuery
 	my := g.connKind == models.KindMySQL
+	if g.imapPanel != (PanelContainer.Instance{}) {
+		g.imapPanel.AsCanvasItem().SetVisible(g.connKind == models.KindIMAP)
+		applyTypeTileTheme(g.imapButton.AsControl(), g.connKind == models.KindIMAP)
+	}
 
 	if g.typeAWSBtn != (Button.Instance{}) {
 		applyTypeTileTheme(g.typeAWSBtn.AsControl(), aws)
@@ -2427,7 +2440,8 @@ func (g *GatewayScreen) buildBookmarkCard(bm models.Bookmark) PanelContainer.Ins
 	isBQ := bm.Kind == models.KindBigQuery
 	// noAWS connections (direct Postgres, direct MySQL, BigQuery) have no
 	// SSO/tunnel — they connect immediately without an AuthManager.
-	noAWS := isDirect || isMySQL || isBQ
+	isIMAP := bm.Kind == models.KindIMAP
+	noAWS := isDirect || isMySQL || isBQ || isIMAP
 
 	// Detail rows — wrap so a long endpoint fits the card width instead of
 	// forcing the card wider than the column (which pushed the buttons off-screen).
@@ -2435,7 +2449,7 @@ func (g *GatewayScreen) buildBookmarkCard(bm models.Bookmark) PanelContainer.Ins
 	switch {
 	case isBQ:
 		hostLabel.SetText(fmt.Sprintf("%s · dataset %s", bm.GCPProject, bm.DefaultDataset))
-	case isDirect, isMySQL:
+	case isDirect, isMySQL, isIMAP:
 		hostLabel.SetText(fmt.Sprintf("%s/%s @ %s:%d", bm.DBName, bm.DBUser, bm.RDSHost, bm.RDSPort))
 	default:
 		hostLabel.SetText(fmt.Sprintf("%s/%s @ %s", bm.DBName, bm.DBUser, bm.RDSHost))
@@ -2452,6 +2466,8 @@ func (g *GatewayScreen) buildBookmarkCard(bm models.Bookmark) PanelContainer.Ins
 		} else {
 			profileLabel.SetText("BigQuery · gcloud ADC")
 		}
+	case isIMAP:
+		profileLabel.SetText("IMAP · Inbox · TLS")
 	case isDirect:
 		profileLabel.SetText("PostgreSQL · SSL: " + bm.SSLMode + sshSuffix(bm.SSH))
 	case isMySQL:
@@ -2988,4 +3004,56 @@ func (g *GatewayScreen) Process(delta Float.X) {
 			card.actionBtn.AsBaseButton().SetDisabled(false)
 		}
 	}
+}
+
+func (g *GatewayScreen) buildIMAPForm() PanelContainer.Instance {
+	panel := PanelContainer.New()
+	panel.AsControl().AddThemeStyleboxOverride("panel", makeStyleBoxPadded(colorBgPanel, 6, 1, colorBorderDim, 16).AsStyleBox())
+	box := VBoxContainer.New()
+	box.AsControl().AddThemeConstantOverride("separation", 8)
+	panel.AsNode().AddChild(box.AsNode())
+	label := g.makeField(box, "Bookmark label", "e.g. support-inbox")
+	host, port := g.makeFieldPair(box, "IMAP host", "mail.example.com", 3, "TLS port", "993", 1)
+	port.SetText("993")
+	user := g.makeField(box, "Username", "you@example.com")
+	pass := g.makeField(box, "Password or app password", "Saved in your OS keychain")
+	pass.SetSecret(true)
+	status := Label.New()
+	status.SetAutowrapMode(3)
+	status.SetText("Opening this bookmark syncs inbox headers and message text to this computer.")
+	box.AsNode().AddChild(status.AsNode())
+	button := Button.New()
+	button.SetText("Save and open inbox")
+	applyButtonTheme(button.AsControl())
+	box.AsNode().AddChild(button.AsNode())
+	button.AsBaseButton().OnPressed(func() {
+		bm := models.Bookmark{Kind: models.KindIMAP, Label: strings.TrimSpace(label.Text()), RDSHost: strings.TrimSpace(host.Text()), DBUser: strings.TrimSpace(user.Text()), DBName: "INBOX", SecretKind: models.SecretKeychain}
+		if err := models.ValidateLabel(bm.Label); err != nil {
+			status.SetText(err.Error())
+			return
+		}
+		n, err := strconv.Atoi(port.Text())
+		if err != nil || n < 1 || n > 65535 || bm.RDSHost == "" || bm.DBUser == "" || pass.Text() == "" {
+			status.SetText("Enter a host, TLS port, username and password.")
+			return
+		}
+		bm.RDSPort = n
+		if g.bookmarks.FindByLabel(bm.Label) != nil {
+			status.SetText("Choose an unused bookmark label.")
+			return
+		}
+		if err := models.SetSecret(bm.Label, pass.Text()); err != nil {
+			status.SetText("Could not save the password to the OS keychain.")
+			return
+		}
+		if err := g.bookmarks.Add(bm); err != nil {
+			status.SetText(err.Error())
+			return
+		}
+		pass.SetText("")
+		if g.OnConnect != nil {
+			g.OnConnect(bm.ToGatewayEntry(0), nil, nil)
+		}
+	})
+	return panel
 }

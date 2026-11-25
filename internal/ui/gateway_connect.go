@@ -9,6 +9,7 @@ import (
 	bfaws "bufflehead/internal/aws"
 	"bufflehead/internal/connect"
 	"bufflehead/internal/control"
+	"bufflehead/internal/models"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 )
@@ -120,7 +121,7 @@ func (w *AppWindow) reconnectConnection(idx int, cmd *control.Command) {
 		// Direct Postgres/MySQL: no AWS auth. Rebuild the SSH tunnel first when
 		// the connection uses one — the old one was just stopped, so the local
 		// forward port is reassigned here.
-		if entry.IsDirect() || entry.IsMySQL() {
+		if entry.IsDirect() || entry.IsMySQL() || entry.Kind == models.KindIMAP {
 			tunnel, updated, err := connect.SSHTunnel(context.Background(), entry, nil)
 			if err != nil {
 				outcome.Steps = append(outcome.Steps, control.ReconnectStep{
@@ -134,7 +135,7 @@ func (w *AppWindow) reconnectConnection(idx int, cmd *control.Command) {
 				outcome.SSH = tunnel
 			}
 
-			dbConn, tables, err := connect.Direct(updated)
+			dbConn, tables, err := connect.Direct(context.Background(), updated)
 			if err != nil {
 				tunnel.Stop()
 				outcome.SSH = nil
@@ -271,7 +272,7 @@ func (w *AppWindow) switchDatabase(idx int, dbName string) {
 		if entry.IsMySQL() || entry.IsDirect() {
 			// The entry keeps its LocalPort, so a tunneled connection re-opens
 			// through the SSH forward that is still standing.
-			dbConn, tables, err := connect.Direct(entry)
+			dbConn, tables, err := connect.Direct(context.Background(), entry)
 			if err != nil {
 				outcome.Steps = append(outcome.Steps, control.ReconnectStep{Step: "connect_db", OK: false, Error: err.Error()})
 				finish()

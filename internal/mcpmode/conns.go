@@ -82,7 +82,7 @@ func (c *conns) get(ctx context.Context, label string) (*connect.Conn, error) {
 	// AWS gateways need live SSO credentials for the bastion lookup, the SSM
 	// tunnel and IAM database auth. They expire daily; log in again first
 	// rather than failing later with an error from one of those steps.
-	if !entry.IsBigQuery() && !entry.IsDirect() && !entry.IsMySQL() {
+	if !entry.IsNoAWS() {
 		if err := c.logins.ensure(ctx, entry.AWSProfile, entry.AWSRegion); err != nil {
 			return nil, err
 		}

@@ -86,6 +86,8 @@ func connDisplayKind(cfg models.GatewayEntry) string {
 	switch {
 	case cfg.IsBigQuery():
 		return "BigQuery"
+	case cfg.Kind == models.KindIMAP:
+		return "IMAP"
 	case cfg.IsMySQL():
 		return "MySQL"
 	}
@@ -108,6 +110,8 @@ func connPathFor(cfg models.GatewayEntry) string {
 	switch {
 	case cfg.IsBigQuery():
 		return fmt.Sprintf("bigquery://%s/%s", cfg.GCPProject, cfg.DefaultDataset)
+	case cfg.Kind == models.KindIMAP:
+		return fmt.Sprintf("imaps://%s:%d/INBOX", cfg.RDSHost, cfg.RDSPort)
 	case cfg.IsMySQL():
 		path = fmt.Sprintf("mysql://%s:%d/%s", cfg.RDSHost, cfg.RDSPort, cfg.DBName)
 	case cfg.IsDirect():
@@ -2345,7 +2349,11 @@ func (w *AppWindow) handleOpenGatewayResult(res DBResult) {
 	// Make this the active connection, then create+bind its first tab.
 	w.activeConnIdx = gwIdx
 	w.newTabForConnection(gwIdx)
-	w.statusBar.SetStatus(fmt.Sprintf("Connected: %s (%d tables/views)", name, len(tables)))
+	if gw.Config.Kind == models.KindIMAP {
+		w.statusBar.SetStatus(fmt.Sprintf("%s · Inbox synced %s", name, time.Now().Format("Jan 2, 15:04 MST")))
+	} else {
+		w.statusBar.SetStatus(fmt.Sprintf("Connected: %s (%d tables/views)", name, len(tables)))
+	}
 }
 
 // showConnError displays a connection/query error in the given tab's data grid
@@ -2457,6 +2465,9 @@ func buildAIPrompt(entry models.GatewayEntry, tables []db.TableInfo, controlAddr
 	connName := entry.Name
 	auth := bearerFlag(controlKey)
 
+	if entry.Kind == models.KindIMAP {
+		return fmt.Sprintf("Query my IMAP inbox with DuckDB SQL. The messages table contains uid, message_id, received_at, sender, recipients, subject and body_text. Check sync_status.last_synced_at for freshness.\n%s\n  curl -s%s -X POST http://%s/sql -d '{\"sql\":\"SELECT sender, subject FROM messages ORDER BY received_at DESC LIMIT 10\",\"connection\":\"%s\"}'\n", authNote(controlKey), auth, controlAddr, connName)
+	}
 	engine := "PostgreSQL"
 	if entry.IsMySQL() {
 		engine = "MySQL"

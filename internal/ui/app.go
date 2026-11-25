@@ -2707,7 +2707,7 @@ func (a *App) onGatewayConnected(entry models.GatewayEntry, auth *bfaws.AuthMana
 		return
 	}
 
-	if entry.IsDirect() || entry.IsMySQL() {
+	if entry.IsDirect() || entry.IsMySQL() || entry.Kind == models.KindIMAP {
 		// Direct Postgres/MySQL: no AWS auth. RunOpenDirect brings up the SSH
 		// tunnel first when the entry names a jump host.
 		RunOpenDirect(entry, nextTabID, 0, w.results, func(msg string) {

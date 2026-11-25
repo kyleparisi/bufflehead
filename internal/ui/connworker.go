@@ -619,8 +619,12 @@ func RunOpenDirect(entry models.GatewayEntry, tabID, generation uint64,
 			return
 		}
 
-		status("Connecting to database...")
-		dbConn, tables, err := connect.Direct(entry)
+		if entry.Kind == models.KindIMAP {
+			status("Syncing inbox…")
+		} else {
+			status("Connecting to database...")
+		}
+		dbConn, tables, err := connect.Direct(context.Background(), entry)
 		if err != nil {
 			tunnel.Stop()
 			fail(err)

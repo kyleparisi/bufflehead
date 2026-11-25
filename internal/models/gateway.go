@@ -26,6 +26,8 @@ const (
 	// KindMySQL connects directly to a reachable MySQL host (local, over a VPN,
 	// or a public endpoint). No AWS credentials or tunnel are used.
 	KindMySQL ConnKind = "mysql"
+	// KindIMAP syncs a read-only inbox over implicit TLS.
+	KindIMAP ConnKind = "imap"
 )
 
 // Note: an SSH tunnel is deliberately NOT a ConnKind. It is an orthogonal
@@ -108,7 +110,7 @@ func (g *GatewayEntry) IsMySQL() bool {
 // IsNoAWS reports whether this entry connects without AWS SSO/tunnel: direct
 // Postgres, direct MySQL, or BigQuery.
 func (g *GatewayEntry) IsNoAWS() bool {
-	return g.IsDirect() || g.IsMySQL() || g.IsBigQuery()
+	return g.IsDirect() || g.IsMySQL() || g.IsBigQuery() || g.Kind == KindIMAP
 }
 
 // SupportsSSHTunnel reports whether this connection kind can be reached through
@@ -216,7 +218,11 @@ func LoadGatewayConfig() (*GatewayConfig, error) {
 	// Apply defaults
 	for i := range cfg.Gateways {
 		if cfg.Gateways[i].RDSPort == 0 {
-			cfg.Gateways[i].RDSPort = 5432
+			if cfg.Gateways[i].Kind == KindIMAP {
+				cfg.Gateways[i].RDSPort = 993
+			} else {
+				cfg.Gateways[i].RDSPort = 5432
+			}
 		}
 		if cfg.Gateways[i].LocalPort == 0 {
 			cfg.Gateways[i].LocalPort = 5432

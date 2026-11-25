@@ -56,12 +56,12 @@ func Open(ctx context.Context, entry models.GatewayEntry, source string, logf fu
 		return &Conn{DB: bq, Tables: tables, Entry: entry}, nil
 	}
 
-	if entry.IsDirect() || entry.IsMySQL() {
+	if entry.IsDirect() || entry.IsMySQL() || entry.Kind == models.KindIMAP {
 		tunnel, updated, err := SSHTunnel(ctx, entry, logf)
 		if err != nil {
 			return nil, err
 		}
-		dbConn, tables, err := Direct(updated)
+		dbConn, tables, err := Direct(ctx, updated)
 		if err != nil {
 			tunnel.Stop()
 			return nil, err
@@ -136,7 +136,10 @@ func SSHTunnel(ctx context.Context, entry models.GatewayEntry, logf func(string)
 // its tables and schemas, picking the engine from the entry's Kind. The entry
 // must already carry LocalPort when an SSH tunnel is in play — DialTarget reads
 // it — so callers run SSHTunnel first.
-func Direct(entry models.GatewayEntry) (db.Querier, []db.TableInfo, error) {
+func Direct(ctx context.Context, entry models.GatewayEntry) (db.Querier, []db.TableInfo, error) {
+	if entry.Kind == models.KindIMAP {
+		return openInbox(ctx, entry)
+	}
 	if entry.IsMySQL() {
 		return DirectMySQL(entry)
 	}

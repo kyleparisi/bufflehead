@@ -171,3 +171,32 @@ Code: `internal/mcpmode/` (server and tools), `internal/connect/` (the
 connection pipeline shared with the UI), `internal/mcpsetup/` (the launch
 command and the Claude Desktop config merge) and
 `internal/ui/mcp_setup_modal.go` (the setup dialog).
+
+### IMAP inbox bookmarks
+
+In New Connection, choose **IMAP Inbox** and enter a label, host, TLS port
+(default 993), username, and password or app password. Bufflehead saves the
+password in the OS keychain. The server must support IMAP login over implicit
+TLS. Each bookmark reads INBOX. It opens the folder read-only and fetches
+inline message text with BODY.PEEK so synchronization preserves unread status.
+
+The first open downloads headers and inline text. Later opens fetch new
+messages and reconcile removals. The local DuckDB cache lives in the
+`inboxes` directory under the Bufflehead configuration directory and contains
+message text in plaintext. Removing a bookmark leaves this cache on disk.
+Each open desktop or MCP connection queries its own snapshot. Reconnect in
+the desktop app or restart the MCP session to refresh. Opening requires a
+successful sync with the mail server.
+
+Use the usual `get_schema` and `run_sql` tools. For example:
+
+```sql
+SELECT received_at, sender, subject
+FROM messages
+WHERE sender = 'priya@example.com'
+ORDER BY received_at DESC
+LIMIT 10
+```
+
+The `body_text` column is searchable with DuckDB SQL. The `sync_status`
+table reports `last_synced_at` for the snapshot, including for an empty inbox.
